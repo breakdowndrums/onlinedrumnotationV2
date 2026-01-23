@@ -50,7 +50,8 @@ export default function App() {
   const [bars, setBars] = useState(2);
   const [barsPerLine, setBarsPerLine] = useState(4);
   const [gridBarsPerLine, setGridBarsPerLine] = useState(4);
-  const [layout, setLayout] = useState("grid-top"); // grid-right | grid-top | notation-right | notation-top
+  const [layout, setLayout] = useState("grid-top");
+  const [activeTab, setActiveTab] = useState("timing"); // grid-right | grid-top | notation-right | notation-top
   const [timeSig, setTimeSig] = useState({ n: 4, d: 4 });
   const [keepTiming, setKeepTiming] = useState(true);
 
@@ -259,160 +260,257 @@ export default function App() {
         setSelection(null);
       }}
     >
-      <header className="flex flex-wrap items-center gap-3" data-loopui='1'>
-        <h1 className="text-lg font-semibold mr-4">Drum Grid → Notation</h1>
-
-        <label className="text-sm text-neutral-300 flex items-center gap-2">
-          Resolution
-          <select
-            value={resolution}
-            onChange={(e) => handleResolutionChange(Number(e.target.value))}
-            className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1"
-          >
-            <option value={4}>4th</option>
-            <option value={8}>8th</option>
-            <option value={16}>16th</option>
-          </select>
-        </label>
-
-        <label className="text-sm text-neutral-300 flex items-center gap-2">
-          <input
-            type="checkbox"
-            checked={keepTiming}
-            onChange={(e) => setKeepTiming(e.target.checked)}
-          />
-          Keep timing
-        </label>
-
-        <label className="text-sm text-neutral-300 flex items-center gap-2">
-          Time
-          <select
-            value={`${timeSig.n}/${timeSig.d}`}
-            onChange={(e) => {
-              const [n, d] = e.target.value.split("/").map(Number);
-              handleTimeSigChange({ n, d });
-            }}
-            className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1"
-          >
-            <option value="4/4">4/4</option>
-            <option value="3/4">3/4</option>
-            <option value="6/8">6/8</option>
-          </select>
-        </label>
-
-        <label className="text-sm text-neutral-300 flex items-center gap-2">
-          Bars
-          <input
-            type="number"
-            min={1}
-            max={8}
-            value={bars}
-            onChange={(e) => setBars(Number(e.target.value))}
-            className="w-20 bg-neutral-800 border border-neutral-700 rounded px-2 py-1"
-          />
-        </label>
-
-        <button
-          onClick={() => {
-            // Toggle looping
-            if (loopRule) {
-              setLoopRule(null);
-              setSelection(null);
-              return;
-            }
-            if (!selection) return;
-            const length = Math.max(1, selection.endExclusive - selection.start);
-            if (length < 2) return;
-            setLoopRule({ rowStart: selection.rowStart, rowEnd: selection.rowEnd, start: selection.start, length });
-          }}
-          disabled={(!loopRule && (!selection || (selection.endExclusive - selection.start) < 2))}
-          className={`px-3 py-2 rounded border text-sm ${
-            (!loopRule && (!selection || (selection.endExclusive - selection.start) < 2))
-              ? "bg-neutral-900 border-neutral-800 text-neutral-600"
-              : "bg-neutral-800 border-neutral-700"
-          }`}
-          title={loopRule ? "Turn looping off" : "Enable looping from the selected source region (min 2 cells wide)"}
-        >
-          Looping
-        </button>
-
-        <button
-          onMouseDown={(e) => e.stopPropagation()}
-          onClick={() => {
-            if (!loopRule) return;
-            setBaseGrid((prev) => bakeLoopInto(prev, loopRule));
-            setLoopRule(null);
-            setSelection(null);
-          }}
-          disabled={!loopRule}
-          className={`px-3 py-2 rounded border text-sm ${loopRule ? "bg-neutral-800 border-neutral-700" : "bg-neutral-900 border-neutral-800 text-neutral-600"}`}
-          title="Bake loop: commit repeated notes and remove the active loop"
-        >
-          Bake loop
-        </button>
-
-        <label className="text-sm text-neutral-300 flex items-center gap-2" data-loopui='1'>
-          Bars/line
-          <input
-            type="number"
-            min={1}
-            max={bars}
-            value={Math.min(bars, Math.max(1, barsPerLine))}
-            onChange={(e) =>
-              setBarsPerLine(Math.min(bars, Math.max(1, Number(e.target.value) || 1)))
-            }
-            className="w-20 bg-neutral-800 border border-neutral-700 rounded px-2 py-1"
-          />
-        </label>
-        <label className="text-sm text-neutral-300 flex items-center gap-2" data-loopui='1'>
-          <span className="whitespace-nowrap">Grid bars/line</span>
-          <input
-            type="number"
-            min={1}
-            max={bars}
-            value={Math.min(bars, Math.max(1, gridBarsPerLine))}
-            onChange={(e) =>
-              setGridBarsPerLine(Math.min(bars, Math.max(1, Number(e.target.value) || 1)))
-            }
-            className="w-24 bg-neutral-800 border border-neutral-700 rounded px-2 py-1"
-          />
-        </label>
-
-        <button
-          onClick={() => setMergeRests((v) => !v)}
-          className={`px-3 py-2 rounded border text-sm ${mergeRests ? "bg-neutral-800 border-neutral-700" : "bg-neutral-900 border-neutral-700"} `}
-          title="Merge consecutive rests into larger rests"
-        >
-          Merge rests: {mergeRests ? "On" : "Off"}
-        </button>
-
-        <button
-          onClick={() => setMergeNotes((v) => !v)}
-          className={`px-3 py-2 rounded border text-sm ${mergeNotes ? "bg-neutral-800 border-neutral-700" : "bg-neutral-900 border-neutral-700"} `}
-          title="Merge notes across empty subdivisions (e.g., 8ths on 1 and 2 become quarters when & is empty)"
-        >
-          Merge notes: {mergeNotes ? "On" : "Off"}
-        </button>
-
-        <div className="text-xs text-neutral-400 ml-auto">
-          Click cell: Off → 100 → Off
-        </div>
       
-        <label className="text-sm text-neutral-300 flex items-center gap-2" data-loopui='1'>
-          <span className="whitespace-nowrap">Layout</span>
-          <select
-            value={layout}
-            onChange={(e) => setLayout(e.target.value)}
-            className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1"
-          >
-            <option value="grid-right">Grid left / Notation right</option>
-            <option value="grid-top">Grid top / Notation bottom</option>
-            <option value="notation-right">Notation left / Grid right</option>
-            <option value="notation-top">Notation top / Grid bottom</option>
-          </select>
-        </label>
+      <header className="flex flex-col gap-3" data-loopui='1'>
+        <div className="flex flex-wrap items-center gap-3">
+          <h1 className="text-lg font-semibold mr-2">Drum Grid → Notation</h1>
 
+          <div className="flex items-center gap-2">
+            {["timing", "structure", "looping", "cleanup"].map((t) => (
+              <button
+                key={t}
+                onClick={() => setActiveTab(t)}
+                className={`px-3 py-[5px] rounded border text-sm capitalize ${
+                  activeTab === t
+                    ? "bg-neutral-800 border-neutral-600 text-white"
+                    : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
+                }`}
+              >
+                {t}
+              </button>
+            ))}
+          </div>
+
+          <div className="text-xs text-neutral-400 ml-auto">
+            Click cell: Off → 100 → Off
+          </div>
+        </div>
+
+        {activeTab === "timing" && (
+          <div className="flex flex-wrap items-center gap-4">
+            <label className="text-sm text-neutral-300 flex items-center gap-2">
+              Resolution
+              <select
+                value={resolution}
+                onChange={(e) => handleResolutionChange(Number(e.target.value))}
+                className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1"
+              >
+                <option value={4}>4th</option>
+                <option value={8}>8th</option>
+                <option value={16}>16th</option>
+              </select>
+            </label>
+
+            <button
+              type="button"
+              onClick={() => setKeepTiming((v) => !v)}
+              className={`px-3 py-[5px] rounded border text-sm ${
+                keepTiming
+                  ? "bg-neutral-800 border-neutral-700 text-white"
+                  : "bg-neutral-900 border-neutral-800 text-neutral-600"
+              }`}
+              title="Keep timing when changing resolution (remap steps)"
+            >
+              Keep timing
+            </button>
+
+
+            
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-neutral-300">Bars</span>
+              <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
+                <button
+                  type="button"
+                  onClick={() => setBars((b) => Math.max(1, b - 1))}
+                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                  aria-label="Decrease bars"
+                >
+                  −
+                </button>
+                <div className="min-w-[44px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700">
+                  {bars}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setBars((b) => Math.min(8, b + 1))}
+                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                  aria-label="Increase bars"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+
+
+
+            <label className="text-sm text-neutral-300 flex items-center gap-2">
+              Time
+              <select
+                value={`${timeSig.n}/${timeSig.d}`}
+                onChange={(e) => {
+                  const [n, d] = e.target.value.split("/").map(Number);
+                  handleTimeSigChange({ n, d });
+                }}
+                className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1"
+              >
+                <option value="4/4">4/4</option>
+                <option value="3/4">3/4</option>
+                <option value="6/8">6/8</option>
+              </select>
+            </label>
+</div>
+        )}
+
+        {activeTab === "structure" && (
+          <div className="flex flex-wrap items-center gap-4">
+
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-neutral-300 whitespace-nowrap">Bars/line</span>
+              <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
+                <button
+                  type="button"
+                  onClick={() => setBarsPerLine((v) => Math.max(1, v - 1))}
+                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                >
+                  −
+                </button>
+                <div className="min-w-[44px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700">
+                  {barsPerLine}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setBarsPerLine((v) => Math.min(bars, v + 1))}
+                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-neutral-300 whitespace-nowrap">Grid bars/line</span>
+              <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
+                <button
+                  type="button"
+                  onClick={() => setGridBarsPerLine((v) => Math.max(1, v - 1))}
+                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                >
+                  −
+                </button>
+                <div className="min-w-[44px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700">
+                  {gridBarsPerLine}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setGridBarsPerLine((v) => Math.min(bars, v + 1))}
+                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+
+            <label className="text-sm text-neutral-300 flex items-center gap-2">
+              <span className="whitespace-nowrap">Layout</span>
+              <select
+                value={layout}
+                onChange={(e) => setLayout(e.target.value)}
+                className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1"
+              >
+                <option value="grid-top">Grid top / Notation bottom</option>
+                <option value="notation-top">Notation top / Grid bottom</option>
+                <option value="grid-right">Grid left / Notation right</option>
+                <option value="notation-right">Notation left / Grid right</option>
+              </select>
+            </label>
+
+
+</div>
+        )}
+
+        {activeTab === "looping" && (
+          <div className="flex flex-wrap items-center gap-4">
+            <button
+              onClick={() => {
+                if (loopRule) {
+                  setLoopRule(null);
+                  setSelection(null);
+                  return;
+                }
+                if (!selection) return;
+                const length = Math.max(1, selection.endExclusive - selection.start);
+                if (length < 2) return;
+                setLoopRule({
+                  rowStart: selection.rowStart,
+                  rowEnd: selection.rowEnd,
+                  start: selection.start,
+                  length,
+                });
+              }}
+              disabled={(!loopRule && (!selection || (selection.endExclusive - selection.start) < 2))}
+              className={`px-3 py-[5px] rounded border text-sm ${
+                (!loopRule && (!selection || (selection.endExclusive - selection.start) < 2))
+                  ? "bg-neutral-900 border-neutral-800 text-neutral-600"
+                  : "bg-neutral-800 border-neutral-700"
+              }`}
+              title={loopRule ? "Turn looping off" : "Enable looping from the selected source region (min 2 cells wide)"}
+            >
+              Looping
+            </button>
+
+            <button
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={() => {
+                if (!loopRule) return;
+                setBaseGrid((prev) => bakeLoopInto(prev, loopRule));
+                setLoopRule(null);
+                setSelection(null);
+              }}
+              disabled={!loopRule}
+              className={`px-3 py-[5px] rounded border text-sm ${
+                loopRule ? "bg-neutral-800 border-neutral-700" : "bg-neutral-900 border-neutral-800 text-neutral-600"
+              }`}
+              title="Bake loop: commit repeated notes and remove the active loop"
+            >
+              Bake loop
+            </button>
+          </div>
+        )}
+
+        {activeTab === "cleanup" && (
+          <div className="flex flex-wrap items-center gap-4">
+            <button
+              type="button"
+              onClick={() => setMergeRests((v) => !v)}
+              className={`px-3 py-[5px] rounded border text-sm ${
+                mergeRests
+                  ? "bg-neutral-800 border-neutral-700 text-white"
+                  : "bg-neutral-900 border-neutral-800 text-neutral-600"
+              }`}
+              title="Merge consecutive rests (e.g., two 8th rests → one quarter rest)"
+            >
+              Merge rests
+            </button>
+
+
+            <button
+              type="button"
+              onClick={() => setMergeNotes((v) => !v)}
+              className={`px-3 py-[5px] rounded border text-sm ${
+                mergeNotes
+                  ? "bg-neutral-800 border-neutral-700 text-white"
+                  : "bg-neutral-900 border-neutral-800 text-neutral-600"
+              }`}
+              title="Merge notes across adjacent rests (e.g., 8ths on beats → quarters)"
+            >
+              Merge notes
+            </button>
+
+
+</div>
+        )}
       </header>
+
 
       
       
