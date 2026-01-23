@@ -48,9 +48,9 @@ const NOTATION_MAP = {
 export default function App() {
   const [resolution, setResolution] = useState(8); // 4, 8, 16
   const [bars, setBars] = useState(2);
-  const [barsPerLine, setBarsPerLine] = useState(2);
-  const [gridBarsPerLine, setGridBarsPerLine] = useState(2);
-  const [layout, setLayout] = useState("grid-right"); // grid-right | grid-top | notation-right | notation-top
+  const [barsPerLine, setBarsPerLine] = useState(4);
+  const [gridBarsPerLine, setGridBarsPerLine] = useState(4);
+  const [layout, setLayout] = useState("grid-top"); // grid-right | grid-top | notation-right | notation-top
   const [timeSig, setTimeSig] = useState({ n: 4, d: 4 });
   const [keepTiming, setKeepTiming] = useState(true);
 
@@ -285,6 +285,34 @@ export default function App() {
           Keep timing
         </label>
 
+        <label className="text-sm text-neutral-300 flex items-center gap-2">
+          Time
+          <select
+            value={`${timeSig.n}/${timeSig.d}`}
+            onChange={(e) => {
+              const [n, d] = e.target.value.split("/").map(Number);
+              handleTimeSigChange({ n, d });
+            }}
+            className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1"
+          >
+            <option value="4/4">4/4</option>
+            <option value="3/4">3/4</option>
+            <option value="6/8">6/8</option>
+          </select>
+        </label>
+
+        <label className="text-sm text-neutral-300 flex items-center gap-2">
+          Bars
+          <input
+            type="number"
+            min={1}
+            max={8}
+            value={bars}
+            onChange={(e) => setBars(Number(e.target.value))}
+            className="w-20 bg-neutral-800 border border-neutral-700 rounded px-2 py-1"
+          />
+        </label>
+
         <button
           onClick={() => {
             // Toggle looping
@@ -323,36 +351,6 @@ export default function App() {
         >
           Bake loop
         </button>
-
-
-
-        <label className="text-sm text-neutral-300 flex items-center gap-2">
-          Time
-          <select
-            value={`${timeSig.n}/${timeSig.d}`}
-            onChange={(e) => {
-              const [n, d] = e.target.value.split("/").map(Number);
-              handleTimeSigChange({ n, d });
-            }}
-            className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1"
-          >
-            <option value="4/4">4/4</option>
-            <option value="3/4">3/4</option>
-            <option value="6/8">6/8</option>
-          </select>
-        </label>
-
-        <label className="text-sm text-neutral-300 flex items-center gap-2">
-          Bars
-          <input
-            type="number"
-            min={1}
-            max={8}
-            value={bars}
-            onChange={(e) => setBars(Number(e.target.value))}
-            className="w-20 bg-neutral-800 border border-neutral-700 rounded px-2 py-1"
-          />
-        </label>
 
         <label className="text-sm text-neutral-300 flex items-center gap-2" data-loopui='1'>
           Bars/line
