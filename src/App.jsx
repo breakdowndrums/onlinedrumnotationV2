@@ -154,20 +154,19 @@ export default function App() {
     INSTRUMENTS.forEach((inst) => (next[inst.id] = [...(prevGrid[inst.id] || [])]));
 
     const { rowStart, rowEnd, start, length } = rule;
-    const step = length;
     const srcByRow = {};
     for (let r = rowStart; r <= rowEnd; r++) {
       const instId = INSTRUMENTS[r].id;
       srcByRow[instId] = next[instId].slice(start, start + length);
     }
 
-    for (let pos = start + step; pos + length <= columns; pos += step) {
-      for (let i = 0; i < length; i++) {
-        const idx = pos + i;
-        for (let r = rowStart; r <= rowEnd; r++) {
-          const instId = INSTRUMENTS[r].id;
-          next[instId][idx] = (srcByRow[instId]?.[i] ?? 0);
-        }
+    // Repeat the loop pattern all the way to the end, even if the remaining
+    // cells don't fit an exact multiple of `length`.
+    for (let idx = start + length; idx < columns; idx++) {
+      const i = (idx - start) % length;
+      for (let r = rowStart; r <= rowEnd; r++) {
+        const instId = INSTRUMENTS[r].id;
+        next[instId][idx] = (srcByRow[instId]?.[i] ?? 0);
       }
     }
     return next;
@@ -180,19 +179,19 @@ export default function App() {
     if (!loopRule || loopRule.length < 2) return g;
 
     const { rowStart, rowEnd, start, length } = loopRule;
-    const step = length;
     const srcByRow = {};
     for (let r = rowStart; r <= rowEnd; r++) {
       const instId = INSTRUMENTS[r].id;
       srcByRow[instId] = (baseGrid[instId] || []).slice(start, start + length);
     }
 
-    for (let pos = start + step; pos + length <= columns; pos += step) {
-      for (let i = 0; i < length; i++) {
-        for (let r = rowStart; r <= rowEnd; r++) {
-          const instId = INSTRUMENTS[r].id;
-          g[instId][pos + i] = (srcByRow[instId]?.[i] ?? 0); // overwrite, including 0
-        }
+    // Repeat the loop pattern all the way to the end, even if the remaining
+    // cells don't fit an exact multiple of `length`.
+    for (let idx = start + length; idx < columns; idx++) {
+      const i = (idx - start) % length;
+      for (let r = rowStart; r <= rowEnd; r++) {
+        const instId = INSTRUMENTS[r].id;
+        g[instId][idx] = (srcByRow[instId]?.[i] ?? 0); // overwrite, including 0
       }
     }
     return g;
