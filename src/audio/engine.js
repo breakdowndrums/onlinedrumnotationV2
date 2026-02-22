@@ -33,21 +33,21 @@ export function makeAudioEngine() {
     if (audioCtx.state !== "running") await audioCtx.resume();
   }
 
-  // iOS Safari sometimes requires an explicit "unlock" in the same user gesture.
-  // We resume the context and play a tiny silent buffer to ensure audio output is enabled.
-  function unlock() {
+  // iOS Safari requires an explicit unlock in a user gesture.
+  // This resumes the context and plays a tiny silent buffer to enable audio output.
+  async function unlock() {
     ensureContext();
     try {
       if (audioCtx.state !== "running") {
-        // don't await; calling is enough for user-gesture association
-        audioCtx.resume();
+        await audioCtx.resume();
       }
       const buf = audioCtx.createBuffer(1, 1, audioCtx.sampleRate);
       const src = audioCtx.createBufferSource();
       src.buffer = buf;
       src.connect(master);
-      src.start();
-      src.stop(audioCtx.currentTime + 0.01);
+      const t = audioCtx.currentTime + 0.001;
+      src.start(t);
+      src.stop(t + 0.01);
     } catch (_) {
       // ignore
     }
