@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { makeAudioEngine } from "./engine";
 import { loadSamples } from "./sampleLoader";
 import { SAMPLE_MAP } from "./sampleMap";
-import { primeIOSAudio } from "./iosPrime";
+import { primeIOSAudioSync } from "./iosPrime";
 
 export function usePlayback({ instruments, grid, columns, bpm, resolution }) {
   const engine = useMemo(() => makeAudioEngine(), []);
@@ -29,7 +29,7 @@ export function usePlayback({ instruments, grid, columns, bpm, resolution }) {
     try {
       setError(null);
       // iOS: prime audio session via HTMLMediaElement
-      await primeIOSAudio();
+      primeIOSAudioSync();
       engine.unlock();
       engine.ensureContext();
       const ctx = engine.getContext();
@@ -48,7 +48,7 @@ export function usePlayback({ instruments, grid, columns, bpm, resolution }) {
     async (opts = {}) => {
       try {
         // iOS: prime audio session via HTMLMediaElement
-        await primeIOSAudio();
+        primeIOSAudioSync();
         engine.unlock();
         if (!isReady) {
           await initSamples();
