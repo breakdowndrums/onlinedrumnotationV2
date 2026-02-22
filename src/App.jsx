@@ -1078,6 +1078,30 @@ function Grid({
                       onPointerDown={(e) => {
                         // Mobile/touch-only gesture handling.
                         if (e.pointerType === "mouse") return;
+
+                        // Alternative loop/selection end: while holding a long-press selection,
+                        // tap another cell with a second finger to set the end of the region.
+                        if (press.current.active && press.current.mode === "select" && press.current.pointerId !== e.pointerId) {
+                          const el = e.target?.closest?.("[data-gridcell='1']");
+                          if (el) {
+                            const r1 = Number(el.getAttribute("data-row"));
+                            const c1 = Number(el.getAttribute("data-col"));
+                            const r0 = press.current.startRow;
+                            const c0 = press.current.startCol;
+                            const rowStart = Math.min(r0, r1);
+                            const rowEnd = Math.max(r0, r1);
+                            const start = Math.min(c0, c1);
+                            const endExclusive = Math.max(c0, c1) + 1;
+                            setSelection({ rowStart, rowEnd, start, endExclusive });
+                            setDrag(null);
+                          }
+                          // end the hold gesture
+                          press.current.active = false;
+                          press.current.pointerId = null;
+                          if (longPress.current.timer) window.clearTimeout(longPress.current.timer);
+                          longPress.current.timer = null;
+                          return;
+                        }
                         e.preventDefault();
                         e.stopPropagation();
 

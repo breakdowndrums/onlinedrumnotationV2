@@ -27,6 +27,7 @@ export function usePlayback({ instruments, grid, columns, bpm, resolution }) {
   const initSamples = useCallback(async () => {
     try {
       setError(null);
+      engine.unlock();
       engine.ensureContext();
       const ctx = engine.getContext();
       const buffers = await loadSamples(ctx, SAMPLE_MAP);
@@ -43,6 +44,7 @@ export function usePlayback({ instruments, grid, columns, bpm, resolution }) {
   const play = useCallback(
     async (opts = {}) => {
       try {
+        engine.unlock();
         if (!isReady) {
           await initSamples();
         }
