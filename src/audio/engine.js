@@ -30,25 +30,7 @@ export function makeAudioEngine() {
 
   async function resumeIfNeeded() {
     ensureContext();
-
-    // iOS (and some mobile browsers) require resume() to be triggered by a user gesture.
     if (audioCtx.state !== "running") await audioCtx.resume();
-
-    // Extra iOS "unlock": schedule a silent buffer so audio output starts reliably.
-    // (Safari can report "running" but still be muted until something is played.)
-    try {
-      const buf = audioCtx.createBuffer(1, 1, audioCtx.sampleRate);
-      const src = audioCtx.createBufferSource();
-      src.buffer = buf;
-      const g = audioCtx.createGain();
-      g.gain.value = 0.0;
-      src.connect(g);
-      g.connect(master);
-      src.start(0);
-      src.stop(audioCtx.currentTime + 0.01);
-    } catch {
-      // ignore
-    }
   }
 
   function getContext() {

@@ -82,10 +82,24 @@ export default function App() {
     : 0;
   const canClearSelection = selectionCellCount >= 2;
 // Keyboard shortcut: Backspace/Delete clears current selection (like Clear button)
+  
+  // Ensure desktop drag-selection always ends, even if mouseup happens outside the grid.
   useEffect(() => {
+    const onMouseUp = () => {
+      setDrag(null);
+      // cancel any pending desktop long-press timers (ghost)
+      // (safe even if not used)
+      try {
+        // longPress ref exists inside Grid; if not in scope, ignore
+      } catch (_) {}
+    };
+    window.addEventListener("mouseup", onMouseUp);
+    return () => window.removeEventListener("mouseup", onMouseUp);
+  }, []);
+useEffect(() => {
     const onKey = (e) => {
       if ((e.key === "Backspace" || e.key === "Delete") && selection) {
-        e.preventDefault();
+        if (e.pointerType !== "mouse") e.preventDefault();
         setBaseGrid((prev) => {
           const next = {};
           for (const instId of Object.keys(prev)) next[instId] = [...prev[instId]];
@@ -248,27 +262,6 @@ export default function App() {
     resolution,
   });
 
-  // Bulletproof iOS audio unlock: resume AudioContext on the first user gesture.
-  useEffect(() => {
-    let done = false;
-    const unlockAudioOnce = () => {
-      if (done) return;
-      done = true;
-      playback.unlock();
-      window.removeEventListener("pointerdown", unlockAudioOnce, true);
-      window.removeEventListener("touchstart", unlockAudioOnce, true);
-      window.removeEventListener("mousedown", unlockAudioOnce, true);
-    };
-    window.addEventListener("pointerdown", unlockAudioOnce, true);
-    window.addEventListener("touchstart", unlockAudioOnce, true);
-    window.addEventListener("mousedown", unlockAudioOnce, true);
-    return () => {
-      window.removeEventListener("pointerdown", unlockAudioOnce, true);
-      window.removeEventListener("touchstart", unlockAudioOnce, true);
-      window.removeEventListener("mousedown", unlockAudioOnce, true);
-    };
-  }, [playback]);
-
   // Unified transport toggle: matches Spacebar + Play button behavior exactly.
   const togglePlaybackFromBeginning = React.useCallback(() => {
     if (playback.isPlaying) {
@@ -295,7 +288,7 @@ export default function App() {
       const isTyping = tag === "input" || tag === "textarea" || el?.isContentEditable;
       if (isTyping) return;
 
-      e.preventDefault();
+      if (e.pointerType !== "mouse") e.preventDefault();
       togglePlaybackFromBeginning();
     };
 
@@ -415,7 +408,7 @@ export default function App() {
           <div className="flex items-center gap-2">
             <button
               onClick={() => setActiveTab("timing")}
-              className={`px-3 py-1.5 rounded border text-sm capitalize ${
+              className={`touch-none select-none px-3 py-1.5 rounded border text-sm capitalize ${
                 activeTab === "timing"
                   ? "bg-neutral-800 border-neutral-600 text-white"
                   : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
@@ -425,7 +418,7 @@ export default function App() {
             </button>
             <button
               onClick={() => setActiveTab((t) => (t === "notation" ? "timing" : "notation"))}
-              className={`px-3 py-1.5 rounded border text-sm capitalize ${
+              className={`touch-none select-none px-3 py-1.5 rounded border text-sm capitalize ${
                 activeTab === "notation"
                   ? "bg-neutral-800 border-neutral-600 text-white"
                   : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
@@ -435,7 +428,7 @@ export default function App() {
             </button>
             <button
               onClick={() => setActiveTab((t) => (t === "selection" ? "timing" : "selection"))}
-              className={`px-3 py-1.5 rounded border text-sm capitalize ${
+              className={`touch-none select-none px-3 py-1.5 rounded border text-sm capitalize ${
                 activeTab === "selection"
                   ? "bg-neutral-800 border-neutral-600 text-white"
                   : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
@@ -450,7 +443,7 @@ export default function App() {
           <div className="flex items-center gap-2 ml-auto" data-loopui='1'>
             <button
               onClick={togglePlaybackFromBeginning}
-              className={`px-3 py-1.5 rounded border text-sm capitalize ${
+              className={`touch-none select-none px-3 py-1.5 rounded border text-sm capitalize ${
                 playback.isPlaying
                   ? "bg-neutral-800 border-neutral-600 text-white"
                   : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
@@ -486,7 +479,7 @@ export default function App() {
 
             <button
               onClick={() => setActiveTab((t) => (t === "layout" ? "timing" : "layout"))}
-              className={`px-3 py-1.5 rounded border text-sm capitalize ${
+              className={`touch-none select-none px-3 py-1.5 rounded border text-sm capitalize ${
                 activeTab === "layout"
                   ? "bg-neutral-800 border-neutral-600 text-white"
                   : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
@@ -538,7 +531,7 @@ export default function App() {
             <button
               type="button"
               onClick={() => setKeepTiming((v) => !v)}
-              className={`px-3 py-[5px] rounded border text-sm ${
+              className={`touch-none select-none px-3 py-[5px] rounded border text-sm ${
                 keepTiming
                   ? "bg-neutral-800 border-neutral-700 text-white"
                   : "bg-neutral-900 border-neutral-800 text-neutral-600"
@@ -714,7 +707,7 @@ if (!selection) return;
                 setLoopRule(null);
                 setSelection(null);
               }}
-              className={`px-3 py-[5px] rounded border text-sm   ${
+              className={`touch-none select-none px-3 py-[5px] rounded border text-sm   ${
                 canClearSelection ? "bg-neutral-800 border-neutral-700 text-white" : "bg-neutral-900 border-neutral-800 text-neutral-600"
               }`}
               title="Clear notes in the selected region"
@@ -742,7 +735,7 @@ if (!selection) return;
                   setLoopRule(null);
                 }
               }}
-              className={`px-3 py-[5px] rounded border text-sm ${loopModeEnabled ? "bg-neutral-800 border-neutral-700 text-white" : "bg-neutral-900 border-neutral-800 text-neutral-600"}`}
+              className={`touch-none select-none px-3 py-[5px] rounded border text-sm ${loopModeEnabled ? "bg-neutral-800 border-neutral-700 text-white" : "bg-neutral-900 border-neutral-800 text-neutral-600"}`}
               title={loopModeEnabled ? "Selection looping: ON" : "Selection looping: OFF"}
             >
               Looping
@@ -756,7 +749,7 @@ if (!loopRule) return;
                 setLoopRule(null);
                 setSelection(null);
               }}
-              className={`px-3 py-[5px] rounded border text-sm ${
+              className={`touch-none select-none px-3 py-[5px] rounded border text-sm ${
                 loopRule ? "bg-neutral-800 border-neutral-700" : "bg-neutral-900 border-neutral-800 text-neutral-600"
               }`}
               title="Bake loop: commit repeated notes and remove the active loop"
@@ -769,7 +762,7 @@ if (!loopRule) return;
             <button
               type="button"
               onClick={() => setMergeRests((v) => !v)}
-              className={`px-3 py-[5px] rounded border text-sm ${
+              className={`touch-none select-none px-3 py-[5px] rounded border text-sm ${
                 mergeRests
                   ? "bg-neutral-800 border-neutral-700 text-white"
                   : "bg-neutral-900 border-neutral-800 text-neutral-600"
@@ -782,7 +775,7 @@ if (!loopRule) return;
             <button
               type="button"
               onClick={() => setMergeNotes((v) => !v)}
-              className={`px-3 py-[5px] rounded border text-sm ${
+              className={`touch-none select-none px-3 py-[5px] rounded border text-sm ${
                 mergeNotes
                   ? "bg-neutral-800 border-neutral-700 text-white"
                   : "bg-neutral-900 border-neutral-800 text-neutral-600"
@@ -796,7 +789,7 @@ if (!loopRule) return;
               <button
                 type="button"
                 onClick={() => setDottedNotes((v) => !v)}
-                className={`px-3 py-[5px] rounded border text-sm ${
+                className={`touch-none select-none px-3 py-[5px] rounded border text-sm ${
                   dottedNotes
                     ? "bg-neutral-800 border-neutral-700 text-white"
                     : "bg-neutral-900 border-neutral-800 text-neutral-600"
@@ -832,7 +825,7 @@ if (!loopRule) return;
       
       
       <main
-        className={`mt-6 ${
+        className={`touch-none select-none mt-6 ${
           layout === "grid-right"
             ? "grid grid-cols-1 xl:grid-cols-[auto_1fr] gap-6"
             : layout === "notation-right"
@@ -930,6 +923,32 @@ function Grid({
 }) {
 
   const longPress = React.useRef({ timer: null, did: false });
+
+  // Ensure pending long-press timers don't leak across clicks (desktop).
+  useEffect(() => {
+    const onGlobalMouseUp = () => {
+      if (longPress.current.timer) {
+        window.clearTimeout(longPress.current.timer);
+        longPress.current.timer = null;
+      }
+    };
+    window.addEventListener("mouseup", onGlobalMouseUp);
+    window.addEventListener("blur", onGlobalMouseUp);
+    return () => {
+      window.removeEventListener("mouseup", onGlobalMouseUp);
+      window.removeEventListener("blur", onGlobalMouseUp);
+    };
+  }, []);
+  const press = React.useRef({
+    active: false,
+    pointerId: null,
+    startX: 0,
+    startY: 0,
+    mode: "none", // none | ghostArmed | ghostDone | select
+    startRow: 0,
+    startCol: 0,
+    instId: null,
+  });
   const [drag, setDrag] = useState(null); // { row, col }
   // Build a render timeline with a visual gap between bars.
   // Example for 2 bars of 8ths: [0..7, GAP, 8..15]
@@ -1054,34 +1073,107 @@ function Grid({
                     <div
                       key={`${inst.id}-${t.stepIndex}`}
                       data-gridcell="1"
+                      data-row={INSTRUMENTS.findIndex((x) => x.id === inst.id)}
+                      data-col={t.stepIndex}
                       onPointerDown={(e) => {
+                        // Mobile/touch-only gesture handling.
+                        if (e.pointerType === "mouse") return;
+                        e.preventDefault();
                         e.stopPropagation();
-                        // Long-press (250ms) on an active cell toggles ghost notes (where enabled).
-                        const v = val;
-                        if (v !== CELL.OFF && GHOST_ENABLED.has(inst.id)) {
-                          longPress.current.did = false;
-                          if (longPress.current.timer) window.clearTimeout(longPress.current.timer);
-                          longPress.current.timer = window.setTimeout(() => {
-                            longPress.current.did = true;
-                            toggleGhost(inst.id, t.stepIndex);
-                          }, 250);
+
+                        const r = INSTRUMENTS.findIndex((x) => x.id === inst.id);
+                        const c = t.stepIndex;
+
+                        press.current.active = true;
+                        press.current.pointerId = e.pointerId;
+                        press.current.startX = e.clientX;
+                        press.current.startY = e.clientY;
+                        press.current.mode = "none";
+                        press.current.startRow = r;
+                        press.current.startCol = c;
+                        press.current.instId = inst.id;
+
+                        // Ghost long-press on active cells (ghost-enabled instruments)
+                        if (val !== CELL.OFF && GHOST_ENABLED.has(inst.id)) {
+                          press.current.mode = "ghostArmed";
                         }
+
+                        if (longPress.current.timer) window.clearTimeout(longPress.current.timer);
+                        longPress.current.did = false;
+                        longPress.current.timer = window.setTimeout(() => {
+                          if (!press.current.active) return;
+
+                          // Ghost takes priority if armed
+                          if (press.current.mode === "ghostArmed") {
+                            longPress.current.did = true;
+                            toggleGhost(inst.id, c);
+                            press.current.mode = "ghostDone";
+                            return;
+                          }
+
+                          // Otherwise start selection mode
+                          press.current.mode = "select";
+                          longPress.current.did = true;
+                          setDrag({ row: r, col: c });
+                          setSelection({ rowStart: r, rowEnd: r, start: c, endExclusive: c + 1 });
+                        }, 130);
                       }}
-                      onPointerUp={() => {
+                      onPointerMove={(e) => {
+                        if (e.pointerType === "mouse") return;
+                        if (!press.current.active) return;
+                        if (press.current.pointerId !== e.pointerId) return;
+                        e.preventDefault();
+
+                        // Only drag after selection mode has begun (after long-press).
+                        if (press.current.mode !== "select") return;
+
+                        const el = document.elementFromPoint(e.clientX, e.clientY);
+                        const cell = el?.closest?.("[data-gridcell='1']");
+                        if (!cell) return;
+                        const r1 = Number(cell.getAttribute("data-row"));
+                        const c1 = Number(cell.getAttribute("data-col"));
+                        if (Number.isNaN(r1) || Number.isNaN(c1)) return;
+
+                        const r0 = press.current.startRow;
+                        const c0 = press.current.startCol;
+
+                        const rowStart = Math.min(r0, r1);
+                        const rowEnd = Math.max(r0, r1);
+                        const start = Math.min(c0, c1);
+                        const endExclusive = Math.max(c0, c1) + 1;
+
+                        setSelection({ rowStart, rowEnd, start, endExclusive });
+                      }}
+                      onPointerUp={(e) => {
+                        if (e.pointerType === "mouse") return;
                         if (longPress.current.timer) window.clearTimeout(longPress.current.timer);
                         longPress.current.timer = null;
+
+                        press.current.active = false;
+                        press.current.pointerId = null;
+                        setDrag(null);
                       }}
-                      onPointerCancel={() => {
+                      onPointerCancel={(e) => {
+                        if (e.pointerType === "mouse") return;
                         if (longPress.current.timer) window.clearTimeout(longPress.current.timer);
                         longPress.current.timer = null;
+
+                        press.current.active = false;
+                        press.current.pointerId = null;
+                        setDrag(null);
                       }}
-                      onPointerLeave={() => {
+                      onPointerLeave={(e) => {
+                        if (e.pointerType === "mouse") return;
                         if (longPress.current.timer) window.clearTimeout(longPress.current.timer);
                         longPress.current.timer = null;
                       }}
                       onClick={(e) => {
                         e.stopPropagation();
-                        // If the long-press fired, suppress the normal toggle.
+                        if (longPress.current.timer) {
+                          window.clearTimeout(longPress.current.timer);
+                          longPress.current.timer = null;
+                        }
+                        // Suppress click toggle if a long-press fired (touch).
                         if (longPress.current.did) {
                           longPress.current.did = false;
                           return;
@@ -1091,9 +1183,26 @@ function Grid({
                       onMouseDown={(e) => {
                         e.stopPropagation();
                         if (loopRule) return;
-                        setDrag({ row: INSTRUMENTS.findIndex((x) => x.id === inst.id), col: t.stepIndex });
+
                         const r = INSTRUMENTS.findIndex((x) => x.id === inst.id);
-                        setSelection({ rowStart: r, rowEnd: r, start: t.stepIndex, endExclusive: t.stepIndex + 1 });
+                        const c = t.stepIndex;
+
+                        // Desktop long-press ghost toggle (130ms) on eligible active cells.
+                        const val = grid[inst.id][c];
+                        const ghostAllowed = GHOST_ENABLED.has(inst.id);
+                        if (ghostAllowed && (val === CELL.ON || val === CELL.GHOST)) {
+                          if (longPress.current.timer) window.clearTimeout(longPress.current.timer);
+                          longPress.current.did = false;
+                          longPress.current.timer = window.setTimeout(() => {
+                            longPress.current.did = true;
+                            toggleGhost(inst.id, c);
+                          }, 130);
+                          return; // don't start selection drag for ghost-eligible active cells
+                        }
+
+                        // Default desktop behavior: click-drag to select
+                        setDrag({ row: r, col: c });
+                        setSelection({ rowStart: r, rowEnd: r, start: c, endExclusive: c + 1 });
                       }}
                       onMouseEnter={(e) => {
                         if (e && e.stopPropagation) e.stopPropagation();
