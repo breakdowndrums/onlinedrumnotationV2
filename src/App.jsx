@@ -75,6 +75,9 @@ export default function App() {
   const [bpm, setBpm] = useState(120);
 
   const [selection, setSelection] = useState(null);
+  const [selectionFinalized, setSelectionFinalized] = useState(0);
+
+
   
   const selectionCellCount = selection
     ? (Math.max(0, (selection.endExclusive ?? 0) - (selection.start ?? 0)) *
@@ -95,6 +98,13 @@ export default function App() {
     };
     window.addEventListener("mouseup", onMouseUp);
     return () => window.removeEventListener("mouseup", onMouseUp);
+  }, []);
+
+  // Used to apply loop rules only when the user finishes a selection gesture (prevents mid-drag activation).
+  useEffect(() => {
+    const handler = () => setSelectionFinalized((x) => x + 1);
+    window.addEventListener("dg-selection-finalized", handler);
+    return () => window.removeEventListener("dg-selection-finalized", handler);
   }, []);
 useEffect(() => {
     const onKey = (e) => {
@@ -132,9 +142,35 @@ useEffect(() => {
       setLoopRule(null);
     }
   }, [selection, loopRule]);
-
-
+  // When looping is enabled, apply/refresh the loop rule ONLY after a selection gesture finishes.
+  // (Selection changes during drag shouldn't activate looping mid-drag.)
   useEffect(() => {
+    if (!loopModeEnabled) return;
+    if (!selection) return;
+
+    const width = selection.endExclusive - selection.start;
+    if (width < 2) return;
+
+    setLoopRule((prev) => {
+      const next = {
+        rowStart: selection.rowStart,
+        rowEnd: selection.rowEnd,
+        start: selection.start,
+        length: width,
+      };
+      if (
+        prev &&
+        prev.rowStart === next.rowStart &&
+        prev.rowEnd === next.rowEnd &&
+        prev.start === next.start &&
+        prev.length === next.length
+      ) {
+        return prev;
+      }
+      return next;
+    });
+  }, [loopModeEnabled, selectionFinalized]);
+useEffect(() => {
     if (loopModeEnabled) return;
     if (loopRule) setLoopRule(null);
   }, [loopModeEnabled, loopRule]);
@@ -866,7 +902,7 @@ if (!loopRule) return;
                 loopRule={loopRule}
                 setLoopRule={setLoopRule}
                 playhead={playback.playhead}
-              />
+      />
             </div>
             </div>
           </>
@@ -922,6 +958,11 @@ function Grid({
   setLoopRule, playhead
 }) {
 
+  const notifySelectionFinalized = React.useCallback(() => {
+    try {
+      window.dispatchEvent(new CustomEvent("dg-selection-finalized"));
+    } catch (_) {}
+  }, []);
   const longPress = React.useRef({ timer: null, did: false });
 
   // Ensure pending long-press timers don't leak across clicks (desktop).
@@ -1094,6 +1135,8 @@ function Grid({
                             const endExclusive = Math.max(c0, c1) + 1;
                             setSelection({ rowStart, rowEnd, start, endExclusive });
                             setDrag(null);
+                            notifySelectionFinalized();
+                            notifySelectionFinalized();
                           }
                           // end the hold gesture
                           press.current.active = false;
@@ -1176,6 +1219,7 @@ function Grid({
                         press.current.active = false;
                         press.current.pointerId = null;
                         setDrag(null);
+                        notifySelectionFinalized();
                       }}
                       onPointerCancel={(e) => {
                         if (e.pointerType === "mouse") return;
@@ -1185,6 +1229,7 @@ function Grid({
                         press.current.active = false;
                         press.current.pointerId = null;
                         setDrag(null);
+                        notifySelectionFinalized();
                       }}
                       onPointerLeave={(e) => {
                         if (e.pointerType === "mouse") return;
