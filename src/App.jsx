@@ -112,21 +112,8 @@ export default function App() {
        Math.max(1, (selection.rowEnd ?? selection.rowStart ?? 0) - (selection.rowStart ?? 0) + 1))
     : 0;
   const canClearSelection = selectionCellCount >= 2;
+  const canLoopSelection = selectionCellCount >= 2;
 // Keyboard shortcut: Backspace/Delete clears current selection (like Clear button)
-  
-  // Ensure desktop drag-selection always ends, even if mouseup happens outside the grid.
-  useEffect(() => {
-    const onMouseUp = () => {
-      setDrag(null);
-      // cancel any pending desktop long-press timers (ghost)
-      // (safe even if not used)
-      try {
-        // longPress ref exists inside Grid; if not in scope, ignore
-      } catch (_) {}
-    };
-    window.addEventListener("mouseup", onMouseUp);
-    return () => window.removeEventListener("mouseup", onMouseUp);
-  }, []);
 
   // Used to apply loop rules only when the user finishes a selection gesture (prevents mid-drag activation).
   useEffect(() => {
@@ -161,7 +148,9 @@ useEffect(() => {
 
   
   // Whether new selections should auto-generate a loop.
-  const [loopModeEnabled, setLoopModeEnabled] = useState(true);
+  const [loopRepeats, setLoopRepeats] = useState("all"); // "off" | "all" | "1".."8"
+  const loopModeEnabled = loopRepeats !== "off";
+
 // If selection collapses to a single cell while looping is active, drop the loop.
   useEffect(() => {
     if (!loopRule) return;
@@ -211,6 +200,34 @@ useEffect(() => {
 
   const stepsPerBar = Math.max(1, Math.round((timeSig.n * resolution) / timeSig.d));
   const columns = bars * stepsPerBar;
+
+  const clearAll = React.useCallback(() => {
+    setBaseGrid(() => {
+      const g = {};
+      INSTRUMENTS.forEach((i) => (g[i.id] = Array(columns).fill(CELL.OFF)));
+      return g;
+    });
+    setSelection(null);
+    setLoopRule(null);
+  }, [columns]);
+
+  const clearSelection = React.useCallback(() => {
+    if (!selection || selectionCellCount < 2) return;
+    setBaseGrid((prev) => {
+      const next = {};
+      INSTRUMENTS.forEach((i) => (next[i.id] = [...(prev[i.id] || [])]));
+      for (let r = selection.rowStart; r <= selection.rowEnd; r++) {
+        const instId = INSTRUMENTS[r].id;
+        for (let c = selection.start; c < selection.endExclusive; c++) {
+          next[instId][c] = CELL.OFF;
+        }
+      }
+      return next;
+    });
+    setSelection(null);
+  }, [selection, selectionCellCount]);
+
+
 
 
   const computeStepsPerBar = (ts, res) => Math.max(1, Math.round((ts.n * res) / ts.d));
@@ -271,7 +288,7 @@ useEffect(() => {
   });
 
 
-  const bakeLoopInto = (prevGrid, rule) => {
+  const bakeLoopInto = (prevGrid, rule, repeats = "all") => {
     const next = {};
     INSTRUMENTS.forEach((inst) => (next[inst.id] = [...(prevGrid[inst.id] || [])]));
 
@@ -282,19 +299,32 @@ useEffect(() => {
       srcByRow[instId] = next[instId].slice(start, start + length);
     }
 
-    // Repeat the loop pattern all the way to the end, even if the remaining
-    // cells don't fit an exact multiple of `length`.
-    for (let idx = start + length; idx < columns; idx++) {
+    // Repeat the loop pattern after the selected region.
+    // repeats: "all" or 1..8 (number of repeats after the original selection)
+    const maxRepeats =
+      repeats === "off"
+        ? 0
+        : repeats === "all"
+          ? Infinity
+          : Math.max(1, Math.min(8, Number(repeats) || 1));
+    const endExclusive =
+      maxRepeats === 0
+        ? Math.min(columns, start + length)
+        : maxRepeats === Infinity
+          ? columns
+          : Math.min(columns, start + length * (1 + maxRepeats));
+
+    for (let idx = start + length; idx < endExclusive; idx++) {
       const i = (idx - start) % length;
       for (let r = rowStart; r <= rowEnd; r++) {
         const instId = INSTRUMENTS[r].id;
-        next[instId][idx] = (srcByRow[instId]?.[i] ?? CELL.OFF);
+        next[instId][idx] = srcByRow[instId]?.[i] ?? CELL.OFF;
       }
     }
     return next;
   };
 
-  const computedGrid = React.useMemo(() => {
+    const computedGrid = React.useMemo(() => {
     const g = {};
     INSTRUMENTS.forEach((inst) => (g[inst.id] = [...(baseGrid[inst.id] || [])]));
 
@@ -307,17 +337,38 @@ useEffect(() => {
       srcByRow[instId] = (baseGrid[instId] || []).slice(start, start + length);
     }
 
-    // Repeat the loop pattern all the way to the end, even if the remaining
-    // cells don't fit an exact multiple of `length`.
+    const maxRepeats =
+      loopRepeats === "off"
+        ? 0
+        : loopRepeats === "all"
+          ? Infinity
+          : Math.max(1, Math.min(8, Number(loopRepeats) || 1));
+
+    // Repeat the loop pattern starting right after the selected region.
+    // If maxRepeats is finite, only apply that many repeats (1..8).
+    let repeatsApplied = 0;
+    if (maxRepeats === 0) return g;
+
     for (let idx = start + length; idx < columns; idx++) {
+      const repeatIndex = Math.floor((idx - start) / length) - 0; // 1 for first repeat
+      if (repeatIndex > 0) {
+        if (repeatIndex > maxRepeats) break;
+        // Only count when we enter a new repeat block
+        // (repeatIndex is 1..)
+      }
+
+      const currentRepeat = Math.floor((idx - start) / length);
+      if (currentRepeat >= 1 && currentRepeat > maxRepeats) break;
+
       const i = (idx - start) % length;
       for (let r = rowStart; r <= rowEnd; r++) {
         const instId = INSTRUMENTS[r].id;
-        g[instId][idx] = (srcByRow[instId]?.[i] ?? CELL.OFF); // overwrite, including 0
+        g[instId][idx] = srcByRow[instId]?.[i] ?? CELL.OFF;
       }
     }
     return g;
-  }, [baseGrid, loopRule, columns]);
+  }, [baseGrid, loopRule, columns, loopRepeats]);
+
 
   const playback = usePlayback({
     instruments: INSTRUMENTS,
@@ -396,7 +447,7 @@ useEffect(() => {
       // - Click inside source: edit source live (no bake)
       // - Click anywhere else (including generated area): bake loop and exit loop mode (NO toggle on this click)
       if (!inSource || inGenerated) {
-        setBaseGrid((prev) => bakeLoopInto(prev, loopRule));
+        setBaseGrid((prev) => bakeLoopInto(prev, loopRule, loopRepeats));
         setLoopRule(null);
         setSelection(null);
         return;
@@ -428,7 +479,7 @@ useEffect(() => {
 
       // Match click behavior: long-pressing outside the source bakes & exits without toggling.
       if (!inSource || inGenerated) {
-        setBaseGrid((prev) => bakeLoopInto(prev, loopRule));
+        setBaseGrid((prev) => bakeLoopInto(prev, loopRule, loopRepeats));
         setLoopRule(null);
         setSelection(null);
         return;
@@ -498,8 +549,21 @@ useEffect(() => {
                   ? "bg-neutral-800 border-neutral-600 text-white"
                   : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
               }`}
+            >looping</button>
+            <button
+              type="button"
+              onClick={() => {
+                if (canClearSelection) clearSelection();
+                else clearAll();
+              }}
+              className={`touch-none select-none px-3 py-1.5 rounded border text-sm capitalize ${
+                canClearSelection
+                  ? "bg-neutral-800 border-neutral-600 text-white"
+                  : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
+              }`}
+              title={canClearSelection ? "Clear selection" : "Clear all notes"}
             >
-              selection
+              {canClearSelection ? "clear" : "clear all"}
             </button>
           </div>
 
@@ -812,66 +876,99 @@ useEffect(() => {
 
         {activeTab === "selection" && (
           <div className="flex flex-wrap items-center gap-4">
-            <button
-              type="button"
-              disabled={!canClearSelection}
-              onClick={() => {
-                if (!canClearSelection) return;
-if (!selection) return;
-                // Clear base grid in selection area (ignores any active loop overlay)
-                setBaseGrid((prev) => {
-                  const next = {};
-                  for (const instId of Object.keys(prev)) next[instId] = [...prev[instId]];
-                  const start = selection.start;
-                  const end = selection.endExclusive;
-                  for (let r = selection.rowStart; r <= selection.rowEnd; r++) {
-                    const instId = INSTRUMENTS[r].id;
-                    for (let c = start; c < end; c++) next[instId][c] = CELL.OFF;
-                  }
-                  return next;
-                });
-                setLoopRule(null);
-                setSelection(null);
-              }}
-              className={`touch-none select-none px-3 py-[5px] rounded border text-sm   ${
-                canClearSelection ? "bg-neutral-800 border-neutral-700 text-white" : "bg-neutral-900 border-neutral-800 text-neutral-600"
-              }`}
-              title="Clear notes in the selected region"
-            >
-              Clear
-            </button>
+            
 
-            <button
-              onClick={() => {
-                setLoopModeEnabled((v) => !v);
+            
 
-                // If enabling looping mode and we already have a valid selection,
-                // generate the loop immediately (no need to re-select).
-                if (!loopModeEnabled) {
-                  if (selection && selection.endExclusive - selection.start >= 2) {
-                    setLoopRule({
-                      rowStart: selection.rowStart,
-                      rowEnd: selection.rowEnd,
-                      start: selection.start,
-                      length: selection.endExclusive - selection.start,
-                    });
-                  }
-                } else {
-                  // Turning looping mode off also removes any active loop.
-                  setLoopRule(null);
-                }
-              }}
-              className={`touch-none select-none px-3 py-[5px] rounded border text-sm ${loopModeEnabled ? "bg-neutral-800 border-neutral-700 text-white" : "bg-neutral-900 border-neutral-800 text-neutral-600"}`}
-              title={loopModeEnabled ? "Selection looping: ON" : "Selection looping: OFF"}
-            >
-              Looping
-            </button>
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-neutral-300">Looping</span>
 
-            <button
+              <div className={`flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800 ${!canLoopSelection ? "opacity-40" : ""}`}>
+                <button
+                  type="button"
+                  onMouseDown={(e) => {
+                    // match other steppers: single step on click, rapid after 130ms hold
+                    e.preventDefault();
+                    const order = ["all", "off", "1", "2", "3", "4", "5", "6", "7", "8"];
+                    const stepOnce = () => {
+                      setLoopRepeats((prev) => {
+                        const i = Math.max(0, order.indexOf(String(prev)));
+                        return order[(i - 1 + order.length) % order.length];
+                      });
+                    };
+                    stepOnce();
+                    let interval = null;
+                    let timeout = window.setTimeout(() => {
+                      interval = window.setInterval(stepOnce, 160);
+                    }, 130);
+                    const stop = () => {
+                      if (timeout) window.clearTimeout(timeout);
+                      timeout = null;
+                      if (interval) window.clearInterval(interval);
+                      interval = null;
+                      window.removeEventListener("mouseup", stop);
+                      window.removeEventListener("touchend", stop);
+                      window.removeEventListener("touchcancel", stop);
+                    };
+                    window.addEventListener("mouseup", stop);
+                    window.addEventListener("touchend", stop, { passive: true });
+                    window.addEventListener("touchcancel", stop, { passive: true });
+                  }}
+                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                  title="Decrease loop repeats"
+                >
+                  –
+                </button>
+
+                <div
+                  className="min-w-[44px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700 capitalize"
+                  title="How many times the selection repeats"
+                >
+                  {loopRepeats}
+                </div>
+
+                <button
+                  type="button"
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    const order = ["all", "off", "1", "2", "3", "4", "5", "6", "7", "8"];
+                    const stepOnce = () => {
+                      setLoopRepeats((prev) => {
+                        const i = Math.max(0, order.indexOf(String(prev)));
+                        return order[(i + 1) % order.length];
+                      });
+                    };
+                    stepOnce();
+                    let interval = null;
+                    let timeout = window.setTimeout(() => {
+                      interval = window.setInterval(stepOnce, 160);
+                    }, 130);
+                    const stop = () => {
+                      if (timeout) window.clearTimeout(timeout);
+                      timeout = null;
+                      if (interval) window.clearInterval(interval);
+                      interval = null;
+                      window.removeEventListener("mouseup", stop);
+                      window.removeEventListener("touchend", stop);
+                      window.removeEventListener("touchcancel", stop);
+                    };
+                    window.addEventListener("mouseup", stop);
+                    window.addEventListener("touchend", stop, { passive: true });
+                    window.addEventListener("touchcancel", stop, { passive: true });
+                  }}
+                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                  title="Increase loop repeats"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+
+<button
               onMouseDown={(e) => e.stopPropagation()}
               onClick={() => {
 if (!loopRule) return;
-                setBaseGrid((prev) => bakeLoopInto(prev, loopRule));
+                setBaseGrid((prev) => bakeLoopInto(prev, loopRule, loopRepeats));
                 setLoopRule(null);
                 setSelection(null);
               }}
@@ -990,6 +1087,7 @@ if (!loopRule) return;
                 selection={selection}
                 setSelection={setSelection}
                 loopRule={loopRule}
+                loopRepeats={loopRepeats}
                 setLoopRule={setLoopRule}
                 playhead={playback.playhead}
       />
@@ -1013,6 +1111,7 @@ if (!loopRule) return;
                 selection={selection}
                 setSelection={setSelection}
                 loopRule={loopRule}
+                loopRepeats={loopRepeats}
                 setLoopRule={setLoopRule}
                 playhead={playback.playhead}
               />
@@ -1046,6 +1145,7 @@ if (!loopRule) return;
 function Grid({
   grid, columns, bars, stepsPerBar, resolution, timeSig, gridBarsPerLine,
   cycleVelocity, toggleGhost, selection, setSelection, loopRule,
+    loopRepeats,
   setLoopRule, playhead
 }) {
 
@@ -1211,9 +1311,28 @@ function Grid({
     if (loopRule) {
       const r = INSTRUMENTS.findIndex((x) => x.id === instId);
       if (r >= loopRule.rowStart && r <= loopRule.rowEnd) {
-        const inSrc = stepIndex >= loopRule.start && stepIndex < loopRule.start + loopRule.length;
+        const inSrc =
+          stepIndex >= loopRule.start && stepIndex < loopRule.start + loopRule.length;
         if (inSrc) return "source";
-        if (stepIndex >= loopRule.start + loopRule.length) return "generated";
+
+        const maxRepeats =
+          loopRepeats === "off"
+            ? 0
+            : loopRepeats === "all"
+              ? Infinity
+              : Math.max(1, Math.min(8, Number(loopRepeats) || 1));
+        const loopEndExclusive =
+          maxRepeats === Infinity
+            ? columns
+            : Math.min(columns, loopRule.start + loopRule.length * (1 + maxRepeats));
+
+        if (maxRepeats !== 0) {
+          if (
+            stepIndex >= loopRule.start + loopRule.length &&
+            stepIndex < loopEndExclusive
+          )
+            return "generated";
+        }
       }
     }
 
