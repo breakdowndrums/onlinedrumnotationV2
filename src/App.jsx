@@ -73,6 +73,34 @@ export default function App() {
   const [keepTiming, setKeepTiming] = useState(true);
 
   const [bpm, setBpm] = useState(120);
+  const [bpmDraft, setBpmDraft] = useState("120");
+
+  useEffect(() => {
+    setBpmDraft(String(bpm));
+  }, [bpm]);
+
+  const clampBpm = (n) => Math.min(400, Math.max(20, n));
+  const stepBpm = (delta) => setBpm((v) => clampBpm(v + delta));
+
+  const bpmRepeatRef = React.useRef({ timer: null, interval: null });
+  const stopBpmRepeat = React.useCallback(() => {
+    const r = bpmRepeatRef.current;
+    if (r.timer) window.clearTimeout(r.timer);
+    if (r.interval) window.clearInterval(r.interval);
+    r.timer = null;
+    r.interval = null;
+  }, []);
+  const startBpmRepeat = React.useCallback(
+    (delta) => {
+      stopBpmRepeat();
+      stepBpm(delta); // immediate step
+      bpmRepeatRef.current.timer = window.setTimeout(() => {
+        bpmRepeatRef.current.interval = window.setInterval(() => stepBpm(delta), 50);
+      }, 130);
+    },
+    [stopBpmRepeat]
+  );
+
 
   const [selection, setSelection] = useState(null);
   const [selectionFinalized, setSelectionFinalized] = useState(0);
@@ -178,6 +206,7 @@ useEffect(() => {
   const [mergeRests, setMergeRests] = useState(true);
   const [mergeNotes, setMergeNotes] = useState(true);
   const [dottedNotes, setDottedNotes] = useState(true);
+  const [flatBeams, setFlatBeams] = useState(true);
 // "fast" (>=16ths) | "all"
 
   const stepsPerBar = Math.max(1, Math.round((timeSig.n * resolution) / timeSig.d));
@@ -478,6 +507,22 @@ useEffect(() => {
           
           <div className="flex items-center gap-2 ml-auto" data-loopui='1'>
             <button
+              type="button"
+              onClick={async () => {
+                try {
+                  await exportNotationPdf(notationExportRef.current, { title: "Drum Notation" });
+                } catch (e) {
+                  console.error(e);
+                  alert(e?.message || "Failed to export PDF");
+                }
+              }}
+              className="touch-none select-none px-3 py-1.5 rounded border text-sm bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60 capitalize"
+              title="Print the current notation"
+            >
+              print
+            </button>
+
+            <button
               onClick={togglePlaybackFromBeginning}
               className={`touch-none select-none px-3 py-1.5 rounded border text-sm capitalize ${
                 playback.isPlaying
@@ -493,18 +538,63 @@ useEffect(() => {
               <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
                 <button
                   type="button"
-                  onClick={() => setBpm((v) => Math.max(30, v - 1))}
+                  onPointerDown={() => startBpmRepeat(-1)}
+                  onPointerUp={stopBpmRepeat}
+                  onPointerCancel={stopBpmRepeat}
+                  onPointerLeave={stopBpmRepeat}
                   className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
                   aria-label="Decrease BPM"
                 >
                   −
                 </button>
-                <div className="min-w-[56px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700">
-                  {bpm}
-                </div>
+
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min={20}
+                  max={400}
+                  value={bpmDraft}
+                  onFocus={(e) => e.target.select()}
+                  onClick={(e) => e.target.select()}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setBpmDraft(v);
+                    if (v === "") return;
+                    const n = Number(v);
+                    // Allow partial typing (e.g. "3" -> "33" -> "333") without snapping to min.
+                    // Only live-update BPM when the typed number is already in-range.
+                    if (Number.isFinite(n)) {
+                      const rounded = Math.round(n);
+                      if (rounded >= 20 && rounded <= 400) setBpm(rounded);
+                    }
+                  }}
+                  onBlur={() => {
+                    if (bpmDraft === "") {
+                      setBpmDraft(String(bpm));
+                      return;
+                    }
+                    const n = Number(bpmDraft);
+                    if (!Number.isFinite(n)) {
+                      setBpmDraft(String(bpm));
+                      return;
+                    }
+                    const clamped = clampBpm(Math.round(n));
+                    setBpm(clamped);
+                    setBpmDraft(String(clamped));
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") e.currentTarget.blur();
+                  }}
+                  className="w-[70px] px-3 py-1 text-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700 outline-none appearance-none no-spinner"
+                  aria-label="BPM"
+                />
+
                 <button
                   type="button"
-                  onClick={() => setBpm((v) => Math.min(300, v + 1))}
+                  onPointerDown={() => startBpmRepeat(1)}
+                  onPointerUp={stopBpmRepeat}
+                  onPointerCancel={stopBpmRepeat}
+                  onPointerLeave={stopBpmRepeat}
                   className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
                   aria-label="Increase BPM"
                 >
@@ -836,23 +926,22 @@ if (!loopRule) return;
               </button>
             )}
 
+            <button
+              type="button"
+              onClick={() => setFlatBeams((v) => !v)}
+              className={`touch-none select-none px-3 py-[5px] rounded border text-sm ${
+                flatBeams
+                  ? "bg-neutral-800 border-neutral-700 text-white"
+                  : "bg-neutral-900 border-neutral-800 text-neutral-600"
+              }`}
+              title="Render beams horizontally (no tilt)"
+            >
+              Flat beams
+            </button>
+
+
             
 
-            <button
-              onClick={async () => {
-                try {
-                  await exportNotationPdf(notationExportRef.current, { title: "drum-notation" });
-                } catch (e) {
-                  console.error(e);
-                  alert(e?.message || "Failed to export PDF");
-                }
-              }}
-              className="px-3 py-[5px] rounded border text-sm bg-neutral-900 border-neutral-800 text-neutral-600 hover:bg-neutral-800/60"
-              title="Download the current notation as a PDF"
-              type="button"
-            >
-              Download PDF
-            </button>
           </div>
         )}
       </header>
@@ -882,6 +971,7 @@ if (!loopRule) return;
                 mergeRests={mergeRests}
                 mergeNotes={mergeNotes}
                 dottedNotes={dottedNotes}
+                flatBeams={flatBeams}
               />
             </div>
 
@@ -940,6 +1030,7 @@ if (!loopRule) return;
                 mergeRests={mergeRests}
                 mergeNotes={mergeNotes}
                 dottedNotes={dottedNotes}
+                flatBeams={flatBeams}
               />
             </div>
           </>
@@ -972,6 +1063,16 @@ function Grid({
         window.clearTimeout(longPress.current.timer);
         longPress.current.timer = null;
       }
+      // If a selection drag was in progress and the user released outside the grid,
+      // we still need to end the drag so clicks work again.
+      setDrag((d) => {
+        if (d) {
+          // finalize selection gesture
+          try { notifySelectionFinalized(); } catch (_) {}
+          return null;
+        }
+        return d;
+      });
     };
     window.addEventListener("mouseup", onGlobalMouseUp);
     window.addEventListener("blur", onGlobalMouseUp);
@@ -980,6 +1081,95 @@ function Grid({
       window.removeEventListener("blur", onGlobalMouseUp);
     };
   }, []);
+
+  // Desktop: allow long-press ghost on active cells, but if the user moves away while holding,
+  // start a selection instead and revert the ghost toggle.
+  useEffect(() => {
+    const onMove = (e) => {
+      if (!press.current.active) return;
+      if (press.current.pointerId !== "mouse") return;
+
+      // Only react while the mouse button is still held down.
+      if ((e.buttons & 1) !== 1) return;
+
+      // Require a small movement threshold to avoid accidental selection from small cursor drift.
+      const dx = e.clientX - press.current.startX;
+      const dy = e.clientY - press.current.startY;
+      if (dx * dx + dy * dy < 36) return; // < 6px
+
+      const el = document.elementFromPoint(e.clientX, e.clientY);
+      const cell = el?.closest?.("[data-gridcell='1']");
+      if (!cell) return;
+
+      const r1 = Number(cell.getAttribute("data-row"));
+      const c1 = Number(cell.getAttribute("data-col"));
+      if (Number.isNaN(r1) || Number.isNaN(c1)) return;
+
+      const r0 = press.current.startRow;
+      const c0 = press.current.startCol;
+
+      if (r1 === r0 && c1 === c0) return;
+
+      if (press.current.mode === "ghostArmed" || press.current.mode === "ghostDone") {
+        if (longPress.current.timer) {
+          window.clearTimeout(longPress.current.timer);
+          longPress.current.timer = null;
+        }
+        if (press.current.mode === "ghostDone" && press.current.ghostToggled && press.current.instId) {
+          try { toggleGhost(press.current.instId, c0); } catch (_) {}
+        }
+        longPress.current.did = false;
+        press.current.active = false;
+        press.current.pointerId = null;
+        longPress.current.did = false;
+        press.current.mode = "none";
+        setDrag({ row: r0, col: c0 });
+        press.current.didSelect = true;
+        setSelection({ rowStart: Math.min(r0, r1), rowEnd: Math.max(r0, r1), start: Math.min(c0, c1), endExclusive: Math.max(c0, c1) + 1 });
+      } else if (press.current.mode === "select") {
+        setSelection({ rowStart: Math.min(r0, r1), rowEnd: Math.max(r0, r1), start: Math.min(c0, c1), endExclusive: Math.max(c0, c1) + 1 });
+      }
+    };
+
+    const onUp = () => {
+      if (!press.current.active) return;
+      if (press.current.pointerId !== "mouse") return;
+
+      if (longPress.current.timer) {
+        window.clearTimeout(longPress.current.timer);
+        longPress.current.timer = null;
+      }
+
+      // If we switched into selection mode while holding, finalize it on release.
+      // This handler only runs for the special long-press/ghost path (active ghost-enabled cells).
+      if (press.current.mode === "select" || press.current.didSelect) {
+        setDrag(null);
+        notifySelectionFinalized();
+      }
+
+      press.current.active = false;
+      press.current.pointerId = null;
+      press.current.mode = "none";
+                        press.current.ghostToggled = false;
+                        press.current.didSelect = false;
+                        longPress.current.did = false;
+      press.current.didSelect = false;
+      press.current.instId = null;
+      press.current.ghostToggled = false;
+      press.current.didSelect = false;
+      longPress.current.did = false;
+      press.current.startX = 0;
+      press.current.startY = 0;
+      press.current.startTime = 0;
+    };
+
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [notifySelectionFinalized]);
   const press = React.useRef({
     active: false,
     pointerId: null,
@@ -989,6 +1179,8 @@ function Grid({
     startRow: 0,
     startCol: 0,
     instId: null,
+    ghostToggled: false,
+    didSelect: false,
   });
   const [drag, setDrag] = useState(null); // { row, col }
   // Build a render timeline with a visual gap between bars.
@@ -1071,17 +1263,7 @@ function Grid({
           <div key={`gridline-${lineIdx}`} className="grid gap-1" onMouseUp={(e) => {
                         if (e && e.stopPropagation) e.stopPropagation();
                         setDrag(null);
-                        // Auto-enable looping when mouse is released after selecting a valid region.
-                        if (loopRule) return;
-                        if (!selection) return;
-                        const width = selection.endExclusive - selection.start;
-                        if (width < 2) return;
-                        setLoopRule({
-                          rowStart: selection.rowStart,
-                          rowEnd: selection.rowEnd,
-                          start: selection.start,
-                          length: width,
-                        });
+                        notifySelectionFinalized();
                       }} style={{ gridTemplateColumns: `auto repeat(${timeline.length}, 28px)` }}>
             <div />
             {timeline.map((t, i) => {
@@ -1156,6 +1338,12 @@ function Grid({
                         press.current.startX = e.clientX;
                         press.current.startY = e.clientY;
                         press.current.mode = "none";
+                        press.current.ghostToggled = false;
+      press.current.didSelect = false;
+      longPress.current.did = false;
+      press.current.startX = 0;
+      press.current.startY = 0;
+      press.current.startTime = 0;
                         press.current.startRow = r;
                         press.current.startCol = c;
                         press.current.instId = inst.id;
@@ -1175,6 +1363,7 @@ function Grid({
                             longPress.current.did = true;
                             toggleGhost(inst.id, c);
                             press.current.mode = "ghostDone";
+                            press.current.ghostToggled = true;
                             return;
                           }
 
@@ -1190,6 +1379,47 @@ function Grid({
                         if (!press.current.active) return;
                         if (press.current.pointerId !== e.pointerId) return;
                         e.preventDefault();
+
+
+                        // If we long-pressed an active ghost-enabled cell and then move away,
+                        // switch into selection mode and revert the ghost toggle.
+                        const el0 = document.elementFromPoint(e.clientX, e.clientY);
+                        const cell0 = el0?.closest?.("[data-gridcell='1']");
+                        if (cell0) {
+                          const r1 = Number(cell0.getAttribute("data-row"));
+                          const c1 = Number(cell0.getAttribute("data-col"));
+                          const r0 = press.current.startRow;
+                          const c0 = press.current.startCol;
+
+                          if (!Number.isNaN(r1) && !Number.isNaN(c1) && (r1 !== r0 || c1 !== c0)) {
+                            if (press.current.mode === "ghostArmed") {
+                              if (longPress.current.timer) window.clearTimeout(longPress.current.timer);
+                              longPress.current.timer = null;
+                              longPress.current.did = false;
+                              press.current.active = false;
+                              press.current.pointerId = null;
+                              longPress.current.did = false;
+                              press.current.mode = "none";
+                              setDrag({ row: r0, col: c0 });
+        press.current.didSelect = true;
+                              setSelection({ rowStart: Math.min(r0, r1), rowEnd: Math.max(r0, r1), start: Math.min(c0, c1), endExclusive: Math.max(c0, c1) + 1 });
+                            } else if (press.current.mode === "ghostDone") {
+                              longPress.current.did = false;
+                              if (press.current.ghostToggled && press.current.instId) {
+                                try { toggleGhost(press.current.instId, c0); } catch (_) {}
+                              }
+                              press.current.active = false;
+                              press.current.pointerId = null;
+                              longPress.current.did = false;
+                              press.current.mode = "none";
+                              setDrag({ row: r0, col: c0 });
+        press.current.didSelect = true;
+                              setSelection({ rowStart: Math.min(r0, r1), rowEnd: Math.max(r0, r1), start: Math.min(c0, c1), endExclusive: Math.max(c0, c1) + 1 });
+                            } else if (press.current.mode === "select") {
+                              setSelection({ rowStart: Math.min(r0, r1), rowEnd: Math.max(r0, r1), start: Math.min(c0, c1), endExclusive: Math.max(c0, c1) + 1 });
+                            }
+                          }
+                        }
 
                         // Only drag after selection mode has begun (after long-press).
                         if (press.current.mode !== "select") return;
@@ -1257,16 +1487,37 @@ function Grid({
                         const c = t.stepIndex;
 
                         // Desktop long-press ghost toggle (130ms) on eligible active cells.
+                        // If the user moves away while holding, we switch into selection mode and revert the ghost toggle.
                         const val = grid[inst.id][c];
                         const ghostAllowed = GHOST_ENABLED.has(inst.id);
                         if (ghostAllowed && (val === CELL.ON || val === CELL.GHOST)) {
+                          press.current.active = true;
+                          press.current.pointerId = "mouse";
+                          press.current.startRow = r;
+                          press.current.startCol = c;
+                          press.current.startX = e.clientX;
+                          press.current.startY = e.clientY;
+                          press.current.startTime = Date.now();
+                          press.current.instId = inst.id;
+                          press.current.mode = "ghostArmed";
+                          press.current.ghostToggled = false;
+      press.current.didSelect = false;
+      longPress.current.did = false;
+      press.current.startX = 0;
+      press.current.startY = 0;
+      press.current.startTime = 0;
+
                           if (longPress.current.timer) window.clearTimeout(longPress.current.timer);
                           longPress.current.did = false;
                           longPress.current.timer = window.setTimeout(() => {
+                            if (!press.current.active || press.current.pointerId !== "mouse") return;
+                            if (press.current.mode !== "ghostArmed") return;
                             longPress.current.did = true;
                             toggleGhost(inst.id, c);
+                            press.current.mode = "ghostDone";
+                            press.current.ghostToggled = true;
                           }, 130);
-                          return; // don't start selection drag for ghost-eligible active cells
+                          return; // wait: either long-press becomes ghost, or movement turns into selection
                         }
 
                         // Default desktop behavior: click-drag to select
@@ -1290,17 +1541,7 @@ function Grid({
                       onMouseUp={(e) => {
                         if (e && e.stopPropagation) e.stopPropagation();
                         setDrag(null);
-                        // Auto-enable looping when mouse is released after selecting a valid region.
-                        if (loopRule) return;
-                        if (!selection) return;
-                        const width = selection.endExclusive - selection.start;
-                        if (width < 2) return;
-                        setLoopRule({
-                          rowStart: selection.rowStart,
-                          rowEnd: selection.rowEnd,
-                          start: selection.start,
-                          length: width,
-                        });
+                        notifySelectionFinalized();
                       }}
                       className={`w-7 h-7 border cursor-pointer ${CELL_COLOR[val]} ${(() => {
                         const role = getCellRole(inst.id, t.stepIndex);
@@ -1321,7 +1562,7 @@ function Grid({
   );
 }
 
-function Notation({grid, resolution, bars, barsPerLine, stepsPerBar, timeSig, mergeRests, mergeNotes, dottedNotes}) {
+function Notation({grid, resolution, bars, barsPerLine, stepsPerBar, timeSig, mergeRests, mergeNotes, dottedNotes, flatBeams}) {
   const VF = Vex.Flow;
   const ref = useRef(null);
 
@@ -1385,6 +1626,14 @@ function Notation({grid, resolution, bars, barsPerLine, stepsPerBar, timeSig, me
         // Simple meters: group by beats in the numerator (e.g., 4/4 -> 4, 3/4 -> 3)
         return timeSig.n;
       })();
+
+      // VexFlow beam grouping fraction (repeated across the bar).
+      const beamGroupsFraction = (() => {
+        if (timeSig.d === 8 && timeSig.n % 3 === 0 && timeSig.n > 3) return new Fraction(3, 8);
+        return new Fraction(1, timeSig.d);
+      })();
+      const groups = [beamGroupsFraction];
+
     
     // Compute steps per beat from the current grid resolution.
     const stepsPerBeatBase = stepsPerBar / timeSig.n;
@@ -1442,7 +1691,8 @@ function Notation({grid, resolution, bars, barsPerLine, stepsPerBar, timeSig, me
 
     const staves = [];
     const voices = [];
-    const allBeams = [];
+    const beamsByBar = Array.from({ length: bars }, () => []);
+    const beamBucketsByBar = Array.from({ length: bars }, () => []);
 
     for (let b = 0; b < bars; b++) {
       const row = Math.floor(b / perLine);
@@ -1784,13 +2034,10 @@ const isRest = keys.length === 0;
       voices.push(voice);
 
       // Beaming groups
-      let groups;
       if (timeSig.n === 6 && timeSig.d === 8) {
         // Typical 6/8: 3+3 grouping
-        groups = [new Fraction(3, 8)];
       } else {
         // Beam by beat unit
-        groups = [new Fraction(1, timeSig.d)];
       }
 
       // Safety: enforce stem up on all non-rest notes before beaming
@@ -1802,7 +2049,7 @@ const isRest = keys.length === 0;
         } catch (e) {}
       });
 
-      // Generate beams *within* each beam group division only (never across groups).
+// Generate beams *within* each beam group division only (never across groups).
       // This prevents later beats from affecting earlier beaming (e.g., dotted 8th + 16th in beat 1).
       const groupBuckets = Array.from({ length: beamGroupsPerBar }, () => []);
             const groupSizeSteps = stepsPerBar / beamGroupsPerBar;
@@ -1813,8 +2060,10 @@ for (let i = 0; i < notes.length; i++) {
       }
       groupBuckets.forEach((bucket) => {
         if (!bucket.length) return;
-        const beams = Beam.generateBeams(bucket, { groups, stem_direction: 1, beam_rests: false });
-        allBeams.push(...beams);
+        const beams = Beam.generateBeams(bucket, { groups, stem_direction: 1, beam_rests: false, flat_beams: !!flatBeams });
+        beamsByBar[b].push(...beams);
+        // Store buckets so we can regenerate beams cleanly for bar-level alignment.
+        beamBucketsByBar[b].push(bucket.slice());
       });
     }
 
@@ -1826,7 +2075,65 @@ for (let i = 0; i < notes.length; i++) {
     }
 
     // Draw beams last for clarity
-    allBeams.forEach((beam) => beam.setContext(ctx).draw());
+    for (let b = 0; b < bars; b++) {
+      let barBeams = beamsByBar[b] || [];
+      if (flatBeams && barBeams.length) {
+        // First pass: compute the highest beam Y in this bar.
+        barBeams.forEach((beam) => {
+          try { beam.postFormat?.(); } catch (_) {}
+        });
+
+        const ys = barBeams
+          .map((beam) => {
+            try { return beam.getBeamYToDraw?.(); } catch (_) { return null; }
+          })
+          .filter((y) => typeof y === "number");
+
+        if (ys.length) {
+          const targetY = Math.min(...ys);
+
+          // Second pass: regenerate beams (fresh objects) and apply flat_beam_offset BEFORE final postFormat/draw.
+          const fresh = [];
+          const buckets = beamBucketsByBar[b] || [];
+
+          buckets.forEach((bucket) => {
+            if (!bucket.length) return;
+
+            // Clear any previously associated beam metadata on notes (helps avoid drawing/geometry artifacts).
+            bucket.forEach((n) => {
+              try { n.setBeam?.(null); } catch (_) {}
+            });
+
+            const beams = Beam.generateBeams(bucket, { groups, stem_direction: 1, beam_rests: false, flat_beams: true });
+            beams.forEach((beam) => {
+              try {
+                beam.setContext(ctx);
+                // First postFormat to compute beam geometry for the current note layout.
+                beam.postFormat?.();
+                beam.applyStemExtensions?.();
+
+                const currentY = beam.getBeamYToDraw?.();
+                if (typeof currentY === "number") {
+                  const delta = targetY - currentY;
+                  beam.render_options.flat_beam_offset = (beam.render_options.flat_beam_offset ?? 0) + delta;
+                }
+
+                // Recompute after shifting the flat beam offset so stems match.
+                beam.postFormat?.();
+                beam.applyStemExtensions?.();
+              } catch (_) {}
+              fresh.push(beam);
+            });
+          });
+
+          // Use regenerated beams for drawing (gives cleaner geometry).
+          barBeams = fresh;
+        }
+      }
+
+      barBeams.forEach((beam) => beam.setContext(ctx).draw());
+    }
+
 
 
     // White notation on dark UI
@@ -1841,7 +2148,7 @@ for (let i = 0; i < notes.length; i++) {
         el.setAttribute("fill", "white");
       });
     }
-  }, [grid, resolution, bars, barsPerLine, stepsPerBar, timeSig, mergeRests, mergeNotes, dottedNotes]);
+  }, [grid, resolution, bars, barsPerLine, stepsPerBar, timeSig, mergeRests, mergeNotes, dottedNotes, flatBeams]);
 
   return <div ref={ref} />;
 
