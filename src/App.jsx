@@ -2294,11 +2294,8 @@ function Grid({
                         press.current.startY = e.clientY;
                         press.current.mode = "none";
                         press.current.ghostToggled = false;
-      press.current.didSelect = false;
-      longPress.current.did = false;
-      press.current.startX = 0;
-      press.current.startY = 0;
-      press.current.startTime = 0;
+                        press.current.didSelect = false;
+                        longPress.current.did = false;
                         press.current.startRow = r;
                         press.current.startCol = c;
                         press.current.instId = inst.id;
@@ -2456,11 +2453,8 @@ function Grid({
                           press.current.instId = inst.id;
                           press.current.mode = "ghostArmed";
                           press.current.ghostToggled = false;
-      press.current.didSelect = false;
-      longPress.current.did = false;
-      press.current.startX = 0;
-      press.current.startY = 0;
-      press.current.startTime = 0;
+                          press.current.didSelect = false;
+                          longPress.current.did = false;
 
                           if (longPress.current.timer) window.clearTimeout(longPress.current.timer);
                           longPress.current.did = false;
