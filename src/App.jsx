@@ -10,18 +10,52 @@ const { Renderer, Stave, StaveNote, Voice, Formatter, Beam, Fraction, Barline } 
 // INSTRUMENT SET (MVP+)
 // ====================
 
-const INSTRUMENTS = [
+const ALL_INSTRUMENTS = [
+  { id: "splash", label: "Splash", midi: 55 },
+  { id: "china", label: "China", midi: 52 },
   { id: "crash2", label: "Crash 2", midi: 57 },
   { id: "crash1", label: "Crash 1", midi: 49 },
   { id: "ride", label: "Ride", midi: 51 },
+  { id: "rideBell", label: "Ride Bell", midi: 53 },
+
+  { id: "hihatOpen", label: "HH Open", midi: 46 },
+  { id: "hihat", label: "Hi-Hat", midi: 42 },
   { id: "hihatFoot", label: "HH Foot", midi: 44 },
+
+  { id: "cowbell", label: "Cowbell", midi: 56 },
+
   { id: "tom1", label: "Tom 1", midi: 48 },
   { id: "tom2", label: "Tom 2", midi: 45 },
   { id: "floorTom", label: "Floor Tom", midi: 41 },
-  { id: "hihat", label: "Hi-Hat", midi: 42 },
+
+  { id: "sideStick", label: "Sidestick", midi: 37 },
   { id: "snare", label: "Snare", midi: 38 },
   { id: "kick", label: "Kick", midi: 36 }
 ];
+
+const INSTRUMENT_BY_ID = Object.fromEntries(ALL_INSTRUMENTS.map((i) => [i.id, i]));
+
+const DRUMKIT_PRESETS = {
+  standard: ["crash2", "crash1", "ride", "hihatFoot", "tom1", "tom2", "floorTom", "hihat", "snare", "kick"],
+  full: [
+    "splash",
+    "cowbell",
+    "china",
+    "crash2",
+    "crash1",
+    "rideBell",
+    "ride",
+    "hihatFoot",
+    "tom1",
+    "tom2",
+    "floorTom",
+    "hihatOpen",
+    "hihat",
+    "sideStick",
+    "snare",
+    "kick",
+  ],
+};
 
 
 const CELL = {
@@ -48,13 +82,19 @@ const GHOST_ENABLED = new Set(["snare", "tom1", "tom2", "floorTom", "hihat"]);
 const NOTATION_MAP = {
   kick: { key: "f/4" },
   snare: { key: "c/5" },
+  sideStick: { key: "c/5/x2", x: true },
 
   // Cymbals / hats use X noteheads
   hihat: { key: "g/5/x2", x: true },
+  hihatOpen: { key: "g/5/x3", x: true, open: true },
   hihatFoot: { key: "d/4/x2", x: true },
   ride: { key: "f/5/x2", x: true },
+  rideBell: { key: "f/5/d2", diamond: true },
   crash1: { key: "a/5/x2", x: true },
   crash2: { key: "b/5/x2", x: true },
+  china: { key: "a/5/x3", x: true },
+  splash: { key: "c/6/x2", x: true },
+  cowbell: { key: "e/5/t2", triangle: true },
 
   // Toms
   tom2: { key: "d/5" },
@@ -63,6 +103,23 @@ const NOTATION_MAP = {
 };
 
 export default function App() {
+  const [kitInstrumentIds, setKitInstrumentIds] = useState(DRUMKIT_PRESETS.standard);
+  const instruments = React.useMemo(
+    () => kitInstrumentIds.map((id) => INSTRUMENT_BY_ID[id]).filter(Boolean),
+    [kitInstrumentIds]
+  );
+  const [isKitEditorOpen, setIsKitEditorOpen] = useState(false);
+  const [pendingRemoval, setPendingRemoval] = useState(null); // { instId, moveTargetId }
+  const [pendingPresetChange, setPendingPresetChange] = useState(null); // { presetName, targetIds, removedWithNotes }
+  const [presetChangeWarningEnabled, setPresetChangeWarningEnabled] = useState(false);
+  const [draggingKitId, setDraggingKitId] = useState(null);
+  const transparentDragImageRef = React.useRef(null);
+  const [customPresetIds, setCustomPresetIds] = useState(null);
+  const availableInstrumentButtonWidthCh = React.useMemo(
+    () => Math.max(...ALL_INSTRUMENTS.map((inst) => inst.label.length)) + 2,
+    []
+  );
+
   const [resolution, setResolution] = useState(8); // 4, 8, 16, 32
   const [bars, setBars] = useState(2);
   const [barsPerLine, setBarsPerLine] = useState(4);
@@ -125,13 +182,14 @@ useEffect(() => {
     const onKey = (e) => {
       if ((e.key === "Backspace" || e.key === "Delete") && selection) {
         if (e.pointerType !== "mouse") e.preventDefault();
-        setBaseGrid((prev) => {
+        setBaseGridWithUndo((prev) => {
           const next = {};
           for (const instId of Object.keys(prev)) next[instId] = [...prev[instId]];
           const start = selection.start;
           const end = selection.endExclusive;
           for (let r = selection.rowStart; r <= selection.rowEnd; r++) {
-            const instId = INSTRUMENTS[r].id;
+            const instId = instruments[r]?.id;
+            if (!instId) continue;
             for (let c = start; c < end; c++) next[instId][c] = CELL.OFF;
           }
           return next;
@@ -142,13 +200,19 @@ useEffect(() => {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [selection]);
- // { rowStart, rowEnd, start, endExclusive } (row indices into INSTRUMENTS)
+  }, [selection, instruments]);
+ // { rowStart, rowEnd, start, endExclusive } (row indices into active instruments)
   const [loopRule, setLoopRule] = useState(null);
 
   
   // Whether new selections should auto-generate a loop.
   const [loopRepeats, setLoopRepeats] = useState("all"); // "off" | "all" | "1".."8"
+  const lastNonAllLoopRepeats = React.useRef("1");
+  React.useEffect(() => {
+    // Remember the last non-"all" value so clicking the center can toggle all <-> last value.
+    if (loopRepeats !== "all") lastNonAllLoopRepeats.current = loopRepeats;
+  }, [loopRepeats]);
+
   const loopModeEnabled = loopRepeats !== "off";
 
 // If selection collapses to a single cell while looping is active, drop the loop.
@@ -202,9 +266,9 @@ useEffect(() => {
   const columns = bars * stepsPerBar;
 
   const clearAll = React.useCallback(() => {
-    setBaseGrid(() => {
+    setBaseGridWithUndo(() => {
       const g = {};
-      INSTRUMENTS.forEach((i) => (g[i.id] = Array(columns).fill(CELL.OFF)));
+      ALL_INSTRUMENTS.forEach((i) => (g[i.id] = Array(columns).fill(CELL.OFF)));
       return g;
     });
     setSelection(null);
@@ -213,11 +277,12 @@ useEffect(() => {
 
   const clearSelection = React.useCallback(() => {
     if (!selection || selectionCellCount < 2) return;
-    setBaseGrid((prev) => {
+    setBaseGridWithUndo((prev) => {
       const next = {};
-      INSTRUMENTS.forEach((i) => (next[i.id] = [...(prev[i.id] || [])]));
+      ALL_INSTRUMENTS.forEach((i) => (next[i.id] = [...(prev[i.id] || [])]));
       for (let r = selection.rowStart; r <= selection.rowEnd; r++) {
-        const instId = INSTRUMENTS[r].id;
+        const instId = instruments[r]?.id;
+        if (!instId) continue;
         for (let c = selection.start; c < selection.endExclusive; c++) {
           next[instId][c] = CELL.OFF;
         }
@@ -225,7 +290,7 @@ useEffect(() => {
       return next;
     });
     setSelection(null);
-  }, [selection, selectionCellCount]);
+  }, [selection, selectionCellCount, instruments]);
 
 
 
@@ -234,7 +299,7 @@ useEffect(() => {
 
   const remapGrid = (prevGrid, oldStepsPerBar, newStepsPerBar) => {
     const next = {};
-    INSTRUMENTS.forEach((inst) => {
+    ALL_INSTRUMENTS.forEach((inst) => {
       const out = Array(bars * newStepsPerBar).fill(CELL.OFF);
       for (let b = 0; b < bars; b++) {
         for (let s = 0; s < oldStepsPerBar; s++) {
@@ -264,7 +329,7 @@ useEffect(() => {
     }
     const oldSPB = stepsPerBar;
     const newSPB = computeStepsPerBar(timeSig, newRes);
-    setBaseGrid((prev) => remapGrid(prev, oldSPB, newSPB));
+    setBaseGridWithUndo((prev) => remapGrid(prev, oldSPB, newSPB));
     setResolution(newRes);
   };
 
@@ -275,7 +340,7 @@ useEffect(() => {
     }
     const oldSPB = stepsPerBar;
     const newSPB = computeStepsPerBar(newTS, resolution);
-    setBaseGrid((prev) => remapGrid(prev, oldSPB, newSPB));
+    setBaseGridWithUndo((prev) => remapGrid(prev, oldSPB, newSPB));
     setTimeSig(newTS);
   };
 
@@ -283,19 +348,408 @@ useEffect(() => {
 
   const [baseGrid, setBaseGrid] = useState(() => {
     const g = {};
-    INSTRUMENTS.forEach((i) => (g[i.id] = Array(columns).fill(CELL.OFF)));
+    ALL_INSTRUMENTS.forEach((i) => (g[i.id] = Array(columns).fill(CELL.OFF)));
     return g;
   });
+
+  
+  // Grid-only undo/redo (minimal): tracks baseGrid snapshots only.
+  const [gridPast, setGridPast] = useState([]);
+  const [gridFuture, setGridFuture] = useState([]);
+
+  const gridPastRef = React.useRef([]);
+  const gridFutureRef = React.useRef([]);
+  const baseGridRef = React.useRef(null);
+
+  React.useEffect(() => {
+    baseGridRef.current = baseGrid;
+  }, [baseGrid]);
+
+  const snapshotGrid = React.useCallback((g) => {
+    const snap = {};
+    ALL_INSTRUMENTS.forEach((i) => {
+      snap[i.id] = [...(g?.[i.id] || [])];
+    });
+    return snap;
+  }, []);
+
+  const syncHistoryState = React.useCallback(() => {
+    setGridPast([...gridPastRef.current]);
+    setGridFuture([...gridFutureRef.current]);
+  }, []);
+
+  const pushGridHistory = React.useCallback(() => {
+    gridPastRef.current = [...gridPastRef.current, snapshotGrid(baseGridRef.current)];
+    // clear redo stack on new edit
+    gridFutureRef.current = [];
+    // optional cap to keep memory bounded
+    if (gridPastRef.current.length > 200) {
+      gridPastRef.current = gridPastRef.current.slice(gridPastRef.current.length - 200);
+    }
+    syncHistoryState();
+  }, [snapshotGrid, syncHistoryState]);
+
+  const undoGrid = React.useCallback(() => {
+    if (gridPastRef.current.length === 0) return;
+    const prev = gridPastRef.current[gridPastRef.current.length - 1];
+    gridPastRef.current = gridPastRef.current.slice(0, -1);
+    gridFutureRef.current = [snapshotGrid(baseGridRef.current), ...gridFutureRef.current];
+    setBaseGrid(prev);
+    syncHistoryState();
+  }, [snapshotGrid, syncHistoryState]);
+
+  const redoGrid = React.useCallback(() => {
+    if (gridFutureRef.current.length === 0) return;
+    const next = gridFutureRef.current[0];
+    gridFutureRef.current = gridFutureRef.current.slice(1);
+    gridPastRef.current = [...gridPastRef.current, snapshotGrid(baseGridRef.current)];
+    setBaseGrid(next);
+    syncHistoryState();
+  }, [snapshotGrid, syncHistoryState]);
+
+  const setBaseGridWithUndo = React.useCallback(
+    (updater) => {
+      pushGridHistory();
+      setBaseGrid(updater);
+    },
+    [pushGridHistory]
+  );
+
+  const arraysEqual = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
+
+  const selectedPreset =
+    arraysEqual(kitInstrumentIds, DRUMKIT_PRESETS.standard)
+      ? "standard"
+      : arraysEqual(kitInstrumentIds, DRUMKIT_PRESETS.full)
+        ? "full"
+        : "custom";
+
+  const clearSelectionAndLoop = React.useCallback(() => {
+    setSelection(null);
+    setLoopRule(null);
+  }, []);
+
+  const applyKitIds = React.useCallback(
+    (nextIds) => {
+      const deduped = [...new Set(nextIds)].filter((id) => INSTRUMENT_BY_ID[id]);
+      if (deduped.length === 0) return;
+      setKitInstrumentIds(deduped);
+      setPendingRemoval(null);
+      setPendingPresetChange(null);
+      clearSelectionAndLoop();
+    },
+    [clearSelectionAndLoop]
+  );
+
+  const applyCustomKitIds = React.useCallback(
+    (nextIds) => {
+      const deduped = [...new Set(nextIds)].filter((id) => INSTRUMENT_BY_ID[id]);
+      if (deduped.length === 0) return;
+      setCustomPresetIds(deduped);
+      applyKitIds(deduped);
+    },
+    [applyKitIds]
+  );
+
+  const hasNotesOnTrack = React.useCallback(
+    (instId) => (baseGrid[instId] || []).some((v) => v !== CELL.OFF),
+    [baseGrid]
+  );
+
+  const computePresetTransition = React.useCallback(
+    (presetName) => {
+      const targetIds = DRUMKIT_PRESETS[presetName];
+      if (!targetIds) return null;
+
+      const removedIds = kitInstrumentIds.filter((id) => !targetIds.includes(id));
+      const removedWithNotes = removedIds.filter((id) => hasNotesOnTrack(id));
+      const removedSet = new Set(
+        kitInstrumentIds.filter(
+          (id) => !targetIds.includes(id) && !removedWithNotes.includes(id)
+        )
+      );
+      const mergedKeepNoted = kitInstrumentIds.filter((id) => !removedSet.has(id));
+      targetIds.forEach((id) => {
+        if (!mergedKeepNoted.includes(id)) mergedKeepNoted.push(id);
+      });
+
+      return { targetIds, removedWithNotes, mergedKeepNoted };
+    },
+    [kitInstrumentIds, hasNotesOnTrack]
+  );
+
+  const requestPresetChange = React.useCallback(
+    (presetName) => {
+      const transition = computePresetTransition(presetName);
+      if (!transition) return;
+      const { targetIds, removedWithNotes, mergedKeepNoted } = transition;
+
+      if (removedWithNotes.length === 0) {
+        applyKitIds(targetIds);
+        return;
+      }
+
+      if (!presetChangeWarningEnabled) {
+        // Default behavior: automatically keep tracks with notes.
+        applyCustomKitIds(mergedKeepNoted);
+        return;
+      }
+
+      setPendingPresetChange({ presetName, targetIds, removedWithNotes });
+    },
+    [computePresetTransition, applyKitIds, applyCustomKitIds, presetChangeWarningEnabled]
+  );
+
+  const confirmPresetKeepNotedTracks = React.useCallback(() => {
+    if (!pendingPresetChange) return;
+    const removedSet = new Set(
+      kitInstrumentIds.filter(
+        (id) =>
+          !pendingPresetChange.targetIds.includes(id) &&
+          !pendingPresetChange.removedWithNotes.includes(id)
+      )
+    );
+
+    // Preserve current order: remove only empty tracks.
+    const merged = kitInstrumentIds.filter((id) => !removedSet.has(id));
+
+    // Add missing target preset tracks at the end (in preset order).
+    pendingPresetChange.targetIds.forEach((id) => {
+      if (!merged.includes(id)) merged.push(id);
+    });
+
+    applyCustomKitIds(merged);
+  }, [pendingPresetChange, kitInstrumentIds, applyCustomKitIds]);
+
+  const confirmPresetDeleteAnyway = React.useCallback(() => {
+    if (!pendingPresetChange) return;
+    applyKitIds(pendingPresetChange.targetIds);
+  }, [pendingPresetChange, applyKitIds]);
+
+  useEffect(() => {
+    if (!pendingPresetChange) return;
+    const onKeyDown = (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        confirmPresetKeepNotedTracks();
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setPendingPresetChange(null);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [pendingPresetChange, confirmPresetKeepNotedTracks]);
+
+  useEffect(() => {
+    if (!isKitEditorOpen) return;
+    if (pendingPresetChange) return;
+    const onKeyDown = (e) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      setIsKitEditorOpen(false);
+      setPendingRemoval(null);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [isKitEditorOpen, pendingPresetChange]);
+
+  const hasSavedCustomPreset =
+    !!customPresetIds &&
+    !arraysEqual(customPresetIds, DRUMKIT_PRESETS.standard) &&
+    !arraysEqual(customPresetIds, DRUMKIT_PRESETS.full);
+
+  const presetOrder = hasSavedCustomPreset ? ["standard", "full", "custom"] : ["standard", "full"];
+  const stepPreset = React.useCallback(
+    (delta) => {
+      const i = presetOrder.indexOf(selectedPreset);
+      if (i === -1) {
+        const fallback = delta >= 0 ? "full" : "standard";
+        requestPresetChange(fallback);
+        return;
+      }
+
+      const dir = delta >= 0 ? 1 : -1;
+      for (let step = 1; step <= presetOrder.length; step++) {
+        const next = presetOrder[(i + dir * step + presetOrder.length) % presetOrder.length];
+        if (next === "custom" && customPresetIds) {
+          if (!arraysEqual(customPresetIds, kitInstrumentIds)) {
+            applyKitIds(customPresetIds);
+            return;
+          }
+          continue;
+        }
+        if (next === "standard" || next === "full") {
+          if (!presetChangeWarningEnabled) {
+            const transition = computePresetTransition(next);
+            if (!transition) continue;
+            const preview =
+              transition.removedWithNotes.length > 0 ? transition.mergedKeepNoted : transition.targetIds;
+            if (arraysEqual(preview, kitInstrumentIds)) continue;
+          }
+          requestPresetChange(next);
+          return;
+        }
+      }
+    },
+    [
+      selectedPreset,
+      applyKitIds,
+      presetOrder,
+      customPresetIds,
+      requestPresetChange,
+      computePresetTransition,
+      presetChangeWarningEnabled,
+      kitInstrumentIds,
+    ]
+  );
+
+  const requestRemoveInstrument = React.useCallback(
+    (instId) => {
+      if (!kitInstrumentIds.includes(instId)) return;
+      if (!hasNotesOnTrack(instId)) {
+        applyCustomKitIds(kitInstrumentIds.filter((id) => id !== instId));
+        return;
+      }
+      const moveTargetId = kitInstrumentIds.find((id) => id !== instId) || null;
+      setPendingRemoval({ instId, moveTargetId });
+    },
+    [kitInstrumentIds, hasNotesOnTrack, applyCustomKitIds]
+  );
+
+  const confirmRemoveDeleteNotes = React.useCallback(() => {
+    if (!pendingRemoval?.instId) return;
+    const instId = pendingRemoval.instId;
+    setBaseGridWithUndo((prev) => ({
+      ...prev,
+      [instId]: Array(columns).fill(CELL.OFF),
+    }));
+    applyCustomKitIds(kitInstrumentIds.filter((id) => id !== instId));
+  }, [pendingRemoval, columns, setBaseGridWithUndo, applyCustomKitIds, kitInstrumentIds]);
+
+  const confirmRemoveMoveNotes = React.useCallback(() => {
+    if (!pendingRemoval?.instId || !pendingRemoval?.moveTargetId) return;
+    const srcId = pendingRemoval.instId;
+    const dstId = pendingRemoval.moveTargetId;
+    if (srcId === dstId) return;
+
+    setBaseGridWithUndo((prev) => {
+      const next = { ...prev };
+      const src = [...(prev[srcId] || Array(columns).fill(CELL.OFF))];
+      const dst = [...(prev[dstId] || Array(columns).fill(CELL.OFF))];
+      const rank = (v) => (v === CELL.ON ? 2 : v === CELL.GHOST ? 1 : 0);
+      for (let c = 0; c < columns; c++) {
+        const from = src[c] ?? CELL.OFF;
+        if (from === CELL.OFF) continue;
+        const to = dst[c] ?? CELL.OFF;
+        dst[c] = rank(from) >= rank(to) ? from : to;
+        src[c] = CELL.OFF;
+      }
+      next[srcId] = src;
+      next[dstId] = dst;
+      return next;
+    });
+
+    applyCustomKitIds(kitInstrumentIds.filter((id) => id !== srcId));
+  }, [pendingRemoval, setBaseGridWithUndo, columns, applyCustomKitIds, kitInstrumentIds]);
+
+  const toggleInstrumentInKit = React.useCallback(
+    (instId, enable) => {
+      if (enable) {
+        if (kitInstrumentIds.includes(instId)) return;
+        const fullOrder = DRUMKIT_PRESETS.full;
+        const newFullIdx = fullOrder.indexOf(instId);
+        if (newFullIdx === -1) {
+          applyCustomKitIds([...kitInstrumentIds, instId]);
+          return;
+        }
+
+        // Insert in the position implied by the full preset ordering.
+        let insertAt = kitInstrumentIds.length;
+
+        // Prefer placing above the first existing instrument below it in full-order.
+        for (let i = newFullIdx + 1; i < fullOrder.length; i++) {
+          const anchorId = fullOrder[i];
+          const idx = kitInstrumentIds.indexOf(anchorId);
+          if (idx !== -1) {
+            insertAt = idx;
+            break;
+          }
+        }
+
+        // If no lower anchor exists, place below the nearest upper anchor.
+        if (insertAt === kitInstrumentIds.length) {
+          for (let i = newFullIdx - 1; i >= 0; i--) {
+            const anchorId = fullOrder[i];
+            const idx = kitInstrumentIds.indexOf(anchorId);
+            if (idx !== -1) {
+              insertAt = idx + 1;
+              break;
+            }
+          }
+        }
+
+        const next = [...kitInstrumentIds];
+        next.splice(insertAt, 0, instId);
+        applyCustomKitIds(next);
+        return;
+      }
+      requestRemoveInstrument(instId);
+    },
+    [kitInstrumentIds, applyCustomKitIds, requestRemoveInstrument]
+  );
+
+  const moveInstrument = React.useCallback(
+    (instId, dir) => {
+      const idx = kitInstrumentIds.indexOf(instId);
+      if (idx < 0) return;
+      const to = idx + dir;
+      if (to < 0 || to >= kitInstrumentIds.length) return;
+      const next = [...kitInstrumentIds];
+      [next[idx], next[to]] = [next[to], next[idx]];
+      applyCustomKitIds(next);
+    },
+    [kitInstrumentIds, applyCustomKitIds]
+  );
+
+  const moveInstrumentBefore = React.useCallback(
+    (dragId, targetId) => {
+      if (!dragId || !targetId || dragId === targetId) return;
+      const from = kitInstrumentIds.indexOf(dragId);
+      const to = kitInstrumentIds.indexOf(targetId);
+      if (from < 0 || to < 0) return;
+      // Already immediately before target -> no-op.
+      if (from < to && from === to - 1) return;
+      const next = [...kitInstrumentIds];
+      next.splice(from, 1);
+      const insertAt = next.indexOf(targetId);
+      next.splice(insertAt, 0, dragId);
+      applyCustomKitIds(next);
+    },
+    [kitInstrumentIds, applyCustomKitIds]
+  );
+
+  const getTransparentDragImage = React.useCallback(() => {
+    if (transparentDragImageRef.current) return transparentDragImageRef.current;
+    const canvas = document.createElement("canvas");
+    canvas.width = 1;
+    canvas.height = 1;
+    transparentDragImageRef.current = canvas;
+    return canvas;
+  }, []);
 
 
   const bakeLoopInto = (prevGrid, rule, repeats = "all") => {
     const next = {};
-    INSTRUMENTS.forEach((inst) => (next[inst.id] = [...(prevGrid[inst.id] || [])]));
+    ALL_INSTRUMENTS.forEach((inst) => (next[inst.id] = [...(prevGrid[inst.id] || [])]));
 
     const { rowStart, rowEnd, start, length } = rule;
     const srcByRow = {};
     for (let r = rowStart; r <= rowEnd; r++) {
-      const instId = INSTRUMENTS[r].id;
+      const instId = instruments[r]?.id;
+      if (!instId) continue;
       srcByRow[instId] = next[instId].slice(start, start + length);
     }
 
@@ -317,7 +771,8 @@ useEffect(() => {
     for (let idx = start + length; idx < endExclusive; idx++) {
       const i = (idx - start) % length;
       for (let r = rowStart; r <= rowEnd; r++) {
-        const instId = INSTRUMENTS[r].id;
+        const instId = instruments[r]?.id;
+        if (!instId) continue;
         next[instId][idx] = srcByRow[instId]?.[i] ?? CELL.OFF;
       }
     }
@@ -326,14 +781,15 @@ useEffect(() => {
 
     const computedGrid = React.useMemo(() => {
     const g = {};
-    INSTRUMENTS.forEach((inst) => (g[inst.id] = [...(baseGrid[inst.id] || [])]));
+    instruments.forEach((inst) => (g[inst.id] = [...(baseGrid[inst.id] || [])]));
 
     if (!loopRule || loopRule.length < 2) return g;
 
     const { rowStart, rowEnd, start, length } = loopRule;
     const srcByRow = {};
     for (let r = rowStart; r <= rowEnd; r++) {
-      const instId = INSTRUMENTS[r].id;
+      const instId = instruments[r]?.id;
+      if (!instId) continue;
       srcByRow[instId] = (baseGrid[instId] || []).slice(start, start + length);
     }
 
@@ -362,16 +818,17 @@ useEffect(() => {
 
       const i = (idx - start) % length;
       for (let r = rowStart; r <= rowEnd; r++) {
-        const instId = INSTRUMENTS[r].id;
+        const instId = instruments[r]?.id;
+        if (!instId) continue;
         g[instId][idx] = srcByRow[instId]?.[i] ?? CELL.OFF;
       }
     }
     return g;
-  }, [baseGrid, loopRule, columns, loopRepeats]);
+  }, [baseGrid, loopRule, columns, loopRepeats, instruments]);
 
 
   const playback = usePlayback({
-    instruments: INSTRUMENTS,
+    instruments,
     grid: computedGrid,
     columns,
     bpm,
@@ -420,9 +877,9 @@ useEffect(() => {
 
   // Resize grid when resolution/bars change (preserve existing hits)
   useEffect(() => {
-    setBaseGrid((prev) => {
+    setBaseGridWithUndo((prev) => {
       const next = {};
-      INSTRUMENTS.forEach((i) => {
+      ALL_INSTRUMENTS.forEach((i) => {
         next[i.id] = Array(columns)
           .fill(CELL.OFF)
           .map((_, idx) => prev[i.id]?.[idx] ?? CELL.OFF);
@@ -436,7 +893,7 @@ useEffect(() => {
   
   const cycleVelocity = (inst, idx) => {
     if (loopRule) {
-      const r = INSTRUMENTS.findIndex((x) => x.id === inst);
+      const r = instruments.findIndex((x) => x.id === inst);
       const inLoopRows = r >= loopRule.rowStart && r <= loopRule.rowEnd;
       const inSourceCols = idx >= loopRule.start && idx < loopRule.start + loopRule.length;
       const inSource = inLoopRows && inSourceCols;
@@ -447,7 +904,7 @@ useEffect(() => {
       // - Click inside source: edit source live (no bake)
       // - Click anywhere else (including generated area): bake loop and exit loop mode (NO toggle on this click)
       if (!inSource || inGenerated) {
-        setBaseGrid((prev) => bakeLoopInto(prev, loopRule, loopRepeats));
+        setBaseGridWithUndo((prev) => bakeLoopInto(prev, loopRule, loopRepeats));
         setLoopRule(null);
         setSelection(null);
         return;
@@ -455,7 +912,7 @@ useEffect(() => {
     }
 
     // Normal edit (or edit within loop source)
-    setBaseGrid((prev) => {
+    setBaseGridWithUndo((prev) => {
       const next = { ...prev };
       const current = prev[inst][idx];
       // Ghost behaves like "on" for regular toggling.
@@ -471,7 +928,7 @@ useEffect(() => {
     if (!GHOST_ENABLED.has(inst)) return;
 
     if (loopRule) {
-      const r = INSTRUMENTS.findIndex((x) => x.id === inst);
+      const r = instruments.findIndex((x) => x.id === inst);
       const inLoopRows = r >= loopRule.rowStart && r <= loopRule.rowEnd;
       const inSourceCols = idx >= loopRule.start && idx < loopRule.start + loopRule.length;
       const inSource = inLoopRows && inSourceCols;
@@ -479,14 +936,14 @@ useEffect(() => {
 
       // Match click behavior: long-pressing outside the source bakes & exits without toggling.
       if (!inSource || inGenerated) {
-        setBaseGrid((prev) => bakeLoopInto(prev, loopRule, loopRepeats));
+        setBaseGridWithUndo((prev) => bakeLoopInto(prev, loopRule, loopRepeats));
         setLoopRule(null);
         setSelection(null);
         return;
       }
     }
 
-    setBaseGrid((prev) => {
+    setBaseGridWithUndo((prev) => {
       const next = { ...prev };
       const current = prev[inst][idx];
 
@@ -552,6 +1009,28 @@ useEffect(() => {
             >looping</button>
             <button
               type="button"
+              onClick={undoGrid}
+              disabled={gridPast.length === 0}
+              className={`touch-none select-none px-3 py-1.5 rounded border text-sm bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60 ${
+                gridPast.length === 0 ? "opacity-40 cursor-not-allowed" : ""
+              }`}
+              title="Undo (grid only)"
+            >
+              ←
+            </button>
+            <button
+              type="button"
+              onClick={redoGrid}
+              disabled={gridFuture.length === 0}
+              className={`touch-none select-none px-3 py-1.5 rounded border text-sm bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60 ${
+                gridFuture.length === 0 ? "opacity-40 cursor-not-allowed" : ""
+              }`}
+              title="Redo (grid only)"
+            >
+              →
+            </button>
+            <button
+              type="button"
               onClick={() => {
                 if (canClearSelection) clearSelection();
                 else clearAll();
@@ -562,8 +1041,18 @@ useEffect(() => {
                   : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
               }`}
               title={canClearSelection ? "Clear selection" : "Clear all notes"}
+              aria-label={canClearSelection ? "Clear selection" : "Clear all notes"}
             >
-              {canClearSelection ? "clear" : "clear all"}
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 16 16"
+                className="h-4 w-4 text-white"
+                fill="currentColor"
+                aria-hidden="true"
+              >
+                <path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0z" />
+                <path d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4zM2.5 3h11V2h-11z" />
+              </svg>
             </button>
           </div>
 
@@ -677,6 +1166,34 @@ useEffect(() => {
             >
               layout
             </button>
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-neutral-300">Drumkit</span>
+              <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
+                <button
+                  type="button"
+                  onClick={() => stepPreset(-1)}
+                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                  aria-label="Previous preset"
+                >
+                  −
+                </button>
+                <div
+                  onClick={() => setIsKitEditorOpen(true)}
+                  className="min-w-[88px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700 capitalize cursor-pointer hover:bg-neutral-700/60"
+                  title="Open drumkit editor"
+                >
+                  {selectedPreset}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => stepPreset(1)}
+                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                  aria-label="Next preset"
+                >
+                  +
+                </button>
+              </div>
+            </div>
           </div>
 
         </div>
@@ -921,7 +1438,15 @@ useEffect(() => {
                 </button>
 
                 <div
-                  className="min-w-[44px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700 capitalize"
+                  onClick={() => {
+                    setLoopRepeats((prev) => {
+                      if (prev === "all") {
+                        return lastNonAllLoopRepeats.current || "1";
+                      }
+                      return "all";
+                    });
+                  }}
+                  className="min-w-[44px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 cursor-pointer hover:bg-neutral-700/60 border-l border-r border-neutral-700 capitalize"
                   title="How many times the selection repeats"
                 >
                   {loopRepeats}
@@ -968,7 +1493,7 @@ useEffect(() => {
               onMouseDown={(e) => e.stopPropagation()}
               onClick={() => {
 if (!loopRule) return;
-                setBaseGrid((prev) => bakeLoopInto(prev, loopRule, loopRepeats));
+                setBaseGridWithUndo((prev) => bakeLoopInto(prev, loopRule, loopRepeats));
                 setLoopRule(null);
                 setSelection(null);
               }}
@@ -1059,6 +1584,7 @@ if (!loopRule) return;
           <>
             <div className="w-full" ref={setNotationExportEl}>
               <Notation
+                instruments={instruments}
                 grid={computedGrid}
                 resolution={resolution}
                 bars={bars}
@@ -1075,6 +1601,7 @@ if (!loopRule) return;
             <div className="w-full overflow-x-auto">
               <div className="inline-block align-top">
                 <Grid
+                instruments={instruments}
                 grid={computedGrid}
                 columns={columns}
                 bars={bars}
@@ -1099,6 +1626,7 @@ if (!loopRule) return;
             <div className="w-full overflow-x-auto">
               <div className="inline-block align-top">
                 <Grid
+                instruments={instruments}
                 grid={computedGrid}
                 columns={columns}
                 bars={bars}
@@ -1120,6 +1648,7 @@ if (!loopRule) return;
 
             <div className="w-full" ref={setNotationExportEl}>
               <Notation
+                instruments={instruments}
                 grid={computedGrid}
                 resolution={resolution}
                 bars={bars}
@@ -1136,6 +1665,290 @@ if (!loopRule) return;
         )}
       </main>
 
+      {isKitEditorOpen && (
+        <div
+          className="fixed inset-0 z-50 bg-black/60 p-4 flex items-center justify-center"
+          onMouseDown={() => {
+            setIsKitEditorOpen(false);
+            setPendingRemoval(null);
+          }}
+        >
+          <div
+            className="w-full max-w-[27rem] max-h-[90vh] overflow-auto rounded-xl border border-neutral-700 bg-neutral-900 p-4 md:p-5"
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="text-base font-semibold">Edit Drumkit</h2>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsKitEditorOpen(false);
+                  setPendingRemoval(null);
+                }}
+                className="px-3 py-1.5 rounded border border-neutral-700 text-sm text-neutral-300 hover:bg-neutral-800/60"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="mt-4 flex flex-wrap items-center gap-2">
+              <span className="text-sm text-neutral-300">Preset</span>
+              <select
+                value={selectedPreset}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  if (value === "custom" && customPresetIds) applyKitIds(customPresetIds);
+                  if (value === "standard") requestPresetChange("standard");
+                  if (value === "full") requestPresetChange("full");
+                }}
+                className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-sm"
+              >
+                {hasSavedCustomPreset && <option value="custom">Custom</option>}
+                <option value="standard">Standard</option>
+                <option value="full">Full</option>
+              </select>
+              <button
+                type="button"
+                onClick={() => setPresetChangeWarningEnabled((v) => !v)}
+                className={`ml-3 px-2.5 py-1 rounded border text-sm ${
+                  presetChangeWarningEnabled
+                    ? "border-neutral-700 text-white bg-neutral-800 hover:bg-neutral-700/60"
+                    : "border-neutral-800 text-neutral-500 bg-neutral-900/60 hover:bg-neutral-800/40"
+                }`}
+                title="Toggle preset change warning"
+              >
+                Preset Change Warning
+              </button>
+            </div>
+
+            {pendingRemoval && (
+              <div className="mt-4 rounded-lg border border-amber-700/70 bg-amber-950/30 p-3">
+                <div className="text-sm text-amber-200">
+                  {(INSTRUMENT_BY_ID[pendingRemoval.instId]?.label || pendingRemoval.instId) +
+                    " has notes. Remove it by deleting notes, or move notes to another track."}
+                </div>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={confirmRemoveDeleteNotes}
+                    className="px-3 py-1.5 rounded border border-amber-600 text-sm text-amber-100 hover:bg-amber-800/40"
+                  >
+                    Delete notes and remove
+                  </button>
+                  <select
+                    value={pendingRemoval.moveTargetId || ""}
+                    onChange={(e) =>
+                      setPendingRemoval((prev) =>
+                        prev ? { ...prev, moveTargetId: e.target.value || null } : prev
+                      )
+                    }
+                    className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-sm"
+                  >
+                    <option value="">Select destination</option>
+                    {kitInstrumentIds
+                      .filter((id) => id !== pendingRemoval.instId)
+                      .map((id) => (
+                        <option key={`move-${id}`} value={id}>
+                          {INSTRUMENT_BY_ID[id]?.label || id}
+                        </option>
+                      ))}
+                  </select>
+                  <button
+                    type="button"
+                    disabled={!pendingRemoval.moveTargetId}
+                    onClick={confirmRemoveMoveNotes}
+                    className={`px-3 py-1.5 rounded border text-sm ${
+                      pendingRemoval.moveTargetId
+                        ? "border-cyan-600 text-cyan-100 hover:bg-cyan-800/30"
+                        : "border-neutral-700 text-neutral-500 cursor-not-allowed"
+                    }`}
+                  >
+                    Move notes and remove
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPendingRemoval(null)}
+                    className="px-3 py-1.5 rounded border border-neutral-700 text-sm text-neutral-300 hover:bg-neutral-800/60"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <div className="mt-5 grid grid-cols-1 md:grid-cols-[1.35fr_0.65fr] gap-1">
+              <div>
+                <div className="text-sm font-medium mb-2">Kit Order</div>
+                <div className="text-xs text-neutral-400 mb-2">Drag rows to reorder instruments.</div>
+                <div className="space-y-2">
+                  {kitInstrumentIds.map((id, idx) => {
+                    const inst = INSTRUMENT_BY_ID[id];
+                    if (!inst) return null;
+                    return (
+                      <div
+                        key={`kit-${id}`}
+                        draggable
+                        onDragStart={(e) => {
+                          setDraggingKitId(id);
+                          e.dataTransfer.effectAllowed = "move";
+                          e.dataTransfer.setData("text/plain", id);
+                          e.dataTransfer.setDragImage(getTransparentDragImage(), 0, 0);
+                        }}
+                        onDragEnd={() => setDraggingKitId(null)}
+                        onDragOver={(e) => {
+                          e.preventDefault();
+                          e.dataTransfer.dropEffect = "move";
+                          const dragId = e.dataTransfer.getData("text/plain") || draggingKitId;
+                          if (dragId && dragId !== id) moveInstrumentBefore(dragId, id);
+                        }}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          const dragId = e.dataTransfer.getData("text/plain") || draggingKitId;
+                          moveInstrumentBefore(dragId, id);
+                          setDraggingKitId(null);
+                        }}
+                        className={`flex items-center gap-1 rounded border px-1.5 py-1 ${
+                          draggingKitId === id
+                            ? "border-cyan-700/70 bg-cyan-950/20"
+                            : "border-neutral-800"
+                        }`}
+                      >
+                        <div className="w-3.5 text-[11px] text-neutral-400">{idx + 1}</div>
+                        <div className="text-neutral-500 text-[9px]">⋮⋮</div>
+                        <div className="flex-1 text-sm leading-tight pr-1">
+                          {inst.label}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => moveInstrument(id, -1)}
+                          disabled={idx === 0}
+                          className={`h-6 w-6 shrink-0 rounded border text-[11px] leading-none ${
+                            idx === 0
+                              ? "border-neutral-800 text-neutral-600 cursor-not-allowed"
+                              : "border-neutral-700 text-neutral-200 hover:bg-neutral-800/60"
+                          }`}
+                        >
+                          ↑
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => moveInstrument(id, 1)}
+                          disabled={idx === kitInstrumentIds.length - 1}
+                          className={`h-6 w-6 shrink-0 rounded border text-[11px] leading-none ${
+                            idx === kitInstrumentIds.length - 1
+                              ? "border-neutral-800 text-neutral-600 cursor-not-allowed"
+                              : "border-neutral-700 text-neutral-200 hover:bg-neutral-800/60"
+                          }`}
+                        >
+                          ↓
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => requestRemoveInstrument(id)}
+                          className="h-6 px-2 shrink-0 rounded border border-red-900 text-[10px] leading-none text-red-200 hover:bg-red-900/30"
+                        >
+                          remove
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div>
+                <div
+                  className="text-sm font-medium mb-2 ml-auto text-left"
+                  style={{ width: `${availableInstrumentButtonWidthCh}ch` }}
+                >
+                  Available Instruments
+                </div>
+                <div className="space-y-2 flex flex-col items-end ml-auto">
+                  {ALL_INSTRUMENTS.map((inst) => {
+                    const enabled = kitInstrumentIds.includes(inst.id);
+                    return (
+                      <button
+                        type="button"
+                        onClick={() => toggleInstrumentInKit(inst.id, !enabled)}
+                        key={`avail-${inst.id}`}
+                        className={`w-full text-left inline-flex items-center gap-2 rounded border px-2 py-1 text-sm ${
+                          enabled
+                            ? "border-neutral-800 text-white hover:bg-neutral-800/40"
+                            : "border-neutral-800 text-neutral-500 bg-neutral-900/40 hover:bg-neutral-800/50"
+                        }`}
+                        style={{ width: `${availableInstrumentButtonWidthCh}ch` }}
+                      >
+                        <span>{inst.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-5 pt-4 border-t border-neutral-800 flex justify-end">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsKitEditorOpen(false);
+                  setPendingRemoval(null);
+                }}
+                className="px-4 py-2 rounded border border-neutral-700 text-sm text-neutral-300 hover:bg-neutral-800/60"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {pendingPresetChange && (
+        <div
+          className="fixed inset-0 z-[80] bg-black/60 p-4 flex items-center justify-center"
+          onMouseDown={() => setPendingPresetChange(null)}
+        >
+          <div
+            className="w-full max-w-xl rounded-xl border border-neutral-700 bg-neutral-900 p-4 md:p-5"
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-base font-semibold">Preset Change Warning</h3>
+            <p className="mt-2 text-sm text-neutral-300">
+              Switching to <span className="capitalize">{pendingPresetChange.presetName}</span> would remove tracks that contain notes:
+            </p>
+            <div className="mt-2 text-sm text-amber-200">
+              {pendingPresetChange.removedWithNotes
+                .map((id) => INSTRUMENT_BY_ID[id]?.label || id)
+                .join(", ")}
+            </div>
+            <p className="mt-3 text-xs text-neutral-400">
+              Default action keeps tracks that have notes and removes only empty tracks.
+            </p>
+
+            <div className="mt-4 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={confirmPresetKeepNotedTracks}
+                className="px-3 py-1.5 rounded border border-cyan-600 text-sm text-cyan-100 hover:bg-cyan-800/30"
+              >
+                Keep tracks with notes (Default)
+              </button>
+              <button
+                type="button"
+                onClick={confirmPresetDeleteAnyway}
+                className="px-3 py-1.5 rounded border border-red-700 text-sm text-red-100 hover:bg-red-900/30"
+              >
+                Delete anyway
+              </button>
+              <button
+                type="button"
+                onClick={() => setPendingPresetChange(null)}
+                className="px-3 py-1.5 rounded border border-neutral-700 text-sm text-neutral-300 hover:bg-neutral-800/60"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );
@@ -1143,6 +1956,7 @@ if (!loopRule) return;
 
 
 function Grid({
+  instruments,
   grid, columns, bars, stepsPerBar, resolution, timeSig, gridBarsPerLine,
   cycleVelocity, toggleGhost, selection, setSelection, loopRule,
     loopRepeats,
@@ -1309,7 +2123,7 @@ function Grid({
   
   const getCellRole = (instId, stepIndex) => {
     if (loopRule) {
-      const r = INSTRUMENTS.findIndex((x) => x.id === instId);
+      const r = instruments.findIndex((x) => x.id === instId);
       if (r >= loopRule.rowStart && r <= loopRule.rowEnd) {
         const inSrc =
           stepIndex >= loopRule.start && stepIndex < loopRule.start + loopRule.length;
@@ -1340,7 +2154,7 @@ function Grid({
     if (selection) {
       const width = selection.endExclusive - selection.start;
       if (width >= 2) {
-        const r = INSTRUMENTS.findIndex((x) => x.id === instId);
+        const r = instruments.findIndex((x) => x.id === instId);
         if (
           r >= selection.rowStart &&
           r <= selection.rowEnd &&
@@ -1405,7 +2219,7 @@ function Grid({
               );
             })}
 
-            {INSTRUMENTS.map((inst) => (
+            {instruments.map((inst) => (
               <React.Fragment key={`${inst.id}-${lineIdx}`}>
                 <div className="pr-2 text-xs text-right whitespace-nowrap select-none">{inst.label}</div>
                 {timeline.map((t, i) => {
@@ -1415,7 +2229,7 @@ function Grid({
                     <div
                       key={`${inst.id}-${t.stepIndex}`}
                       data-gridcell="1"
-                      data-row={INSTRUMENTS.findIndex((x) => x.id === inst.id)}
+                      data-row={instruments.findIndex((x) => x.id === inst.id)}
                       data-col={t.stepIndex}
                       onPointerDown={(e) => {
                         // Mobile/touch-only gesture handling.
@@ -1471,7 +2285,7 @@ function Grid({
                         e.preventDefault();
                         e.stopPropagation();
 
-                        const r = INSTRUMENTS.findIndex((x) => x.id === inst.id);
+                        const r = instruments.findIndex((x) => x.id === inst.id);
                         const c = t.stepIndex;
 
                         press.current.active = true;
@@ -1624,7 +2438,7 @@ function Grid({
                         e.stopPropagation();
                         if (loopRule) return;
 
-                        const r = INSTRUMENTS.findIndex((x) => x.id === inst.id);
+                        const r = instruments.findIndex((x) => x.id === inst.id);
                         const c = t.stepIndex;
 
                         // Desktop long-press ghost toggle (130ms) on eligible active cells.
@@ -1671,7 +2485,7 @@ function Grid({
                         if (!drag) return;
                         const r0 = drag.row;
                         const c0 = drag.col;
-                        const r1 = INSTRUMENTS.findIndex((x) => x.id === inst.id);
+                        const r1 = instruments.findIndex((x) => x.id === inst.id);
                         const c1 = t.stepIndex;
                         const rowStart = Math.min(r0, r1);
                         const rowEnd = Math.max(r0, r1);
@@ -1703,7 +2517,7 @@ function Grid({
   );
 }
 
-function Notation({grid, resolution, bars, barsPerLine, stepsPerBar, timeSig, mergeRests, mergeNotes, dottedNotes, flatBeams}) {
+function Notation({instruments, grid, resolution, bars, barsPerLine, stepsPerBar, timeSig, mergeRests, mergeNotes, dottedNotes, flatBeams}) {
   const VF = Vex.Flow;
   const ref = useRef(null);
 
@@ -1855,7 +2669,23 @@ function Notation({grid, resolution, bars, barsPerLine, stepsPerBar, timeSig, me
 
       const notes = [];
       const noteStarts = [];
-      const pushNote = (n, ghostKeyIndices) => { applyGhostStyling(n, ghostKeyIndices); notes.push(n); noteStarts.push(s); };
+      const pushNote = (n, ghostKeyIndices, openHatKeyIndices) => {
+        applyGhostStyling(n, ghostKeyIndices);
+        // Hi-hat open: add open-circle articulation above the notehead.
+        try {
+          if (openHatKeyIndices && openHatKeyIndices.length) {
+            const Articulation = Vex.Flow.Articulation;
+            const ModifierPosition = Vex.Flow.Modifier.Position || Vex.Flow.ModifierPosition || Vex.Flow.Modifier?.Position;
+            for (const idx of openHatKeyIndices) {
+              const a = new Articulation("ah");
+              if (ModifierPosition && typeof a.setPosition === "function") a.setPosition(ModifierPosition.ABOVE);
+              if (typeof n.addModifier === "function") n.addModifier(a, idx);
+            }
+          }
+        } catch (e) {}
+        notes.push(n);
+        noteStarts.push(s);
+      };
 
       let s = 0;
       while (s < stepsPerBar) {
@@ -1863,13 +2693,18 @@ function Notation({grid, resolution, bars, barsPerLine, stepsPerBar, timeSig, me
 
         const keys = [];
         const ghostKeyIndices = [];
+        const openHatKeyIndices = [];
 
-        INSTRUMENTS.forEach((inst) => {
+        instruments.forEach((inst) => {
           const val = grid[inst.id][globalIdx];
           if (val !== CELL.OFF) {
             keys.push(NOTATION_MAP[inst.id].key);
+            const keyIndex = keys.length - 1;
+            if (NOTATION_MAP[inst.id]?.openCircle) {
+              openHatKeyIndices.push(keyIndex);
+            }
             if (val === CELL.GHOST && GHOST_NOTATION_ENABLED.has(inst.id)) {
-              ghostKeyIndices.push(keys.length - 1);
+              ghostKeyIndices.push(keyIndex);
             }
           }
         });
@@ -1880,7 +2715,7 @@ const isRest = keys.length === 0;
         const subInBeat = stepsPerBeatN === 0 ? 0 : (s % stepsPerBeatN);
 
         const hasAnyHitAt = (absIdx) => {
-      for (const inst of INSTRUMENTS) {
+      for (const inst of instruments) {
         if ((notationGrid[inst.id]?.[absIdx] ?? CELL.OFF) !== CELL.OFF) return true;
       }
       return false;
@@ -1911,7 +2746,7 @@ const isRest = keys.length === 0;
             if (isStepEmpty(b * stepsPerBar + (s + 1))) {
               const noteQ = new StaveNote({ keys, duration: "q", clef: "percussion" });
               noteQ.setStemDirection(1);
-              pushNote(noteQ, ghostKeyIndices);
+              pushNote(noteQ, ghostKeyIndices, openHatKeyIndices);
                 if (allowDotted && mergeNotes) {
                   const after = b * stepsPerBarN + (s + 2);
                   if (s + 2 < stepsPerBar && isStepEmpty(after) && inSameBeamGroup(s, s + 3)) {
@@ -1937,7 +2772,7 @@ const isRest = keys.length === 0;
               if (isStepEmpty(a) && isStepEmpty(b2) && isStepEmpty(c)) {
                 const noteQ = new StaveNote({ keys, duration: "q", clef: "percussion" });
                 noteQ.setStemDirection(1);
-                pushNote(noteQ, ghostKeyIndices);
+                pushNote(noteQ, ghostKeyIndices, openHatKeyIndices);
                 s += 4;
                 continue;
               }
@@ -1947,7 +2782,7 @@ const isRest = keys.length === 0;
               if (isStepEmpty(next)) {
                 const note8 = new StaveNote({ keys, duration: "8", clef: "percussion" });
                 note8.setStemDirection(1);
-                pushNote(note8, ghostKeyIndices);
+                pushNote(note8, ghostKeyIndices, openHatKeyIndices);
                 if (allowDotted && mergeNotes) {
                   const after = b * stepsPerBarN + (s + 2);
                   if (s + 2 < stepsPerBar && isStepEmpty(after) && inSameBeamGroup(s, s + 3)) {
@@ -2015,7 +2850,7 @@ const isRest = keys.length === 0;
             const note = new StaveNote({ keys, duration: dur, clef: "percussion" });
             note.setStemDirection(1);
             if (dotted) attachDot(note);
-            pushNote(note, ghostKeyIndices);
+            pushNote(note, ghostKeyIndices, openHatKeyIndices);
 
             s += dotted ? (len + len / 2) : len;
             continue;
@@ -2033,7 +2868,7 @@ const isRest = keys.length === 0;
             if (isStepEmpty(b * stepsPerBar + (s + 1))) {
               const note8 = new StaveNote({ keys, duration: "8", clef: "percussion" });
               note8.setStemDirection(1);
-              pushNote(note8, ghostKeyIndices);
+              pushNote(note8, ghostKeyIndices, openHatKeyIndices);
                 if (allowDotted && mergeNotes) {
                   const after = b * stepsPerBarN + (s + 2);
                   if (s + 2 < stepsPerBar && isStepEmpty(after) && inSameBeamGroup(s, s + 3)) {
@@ -2165,7 +3000,7 @@ const isRest = keys.length === 0;
         // MVP: if any cymbal is present in this slice, use X noteheads for the chord.
         // Next upgrade: per-key notehead types.
 
-        pushNote(note, ghostKeyIndices);
+        pushNote(note, ghostKeyIndices, openHatKeyIndices);
         s += 1;
       }
 
@@ -2289,7 +3124,7 @@ for (let i = 0; i < notes.length; i++) {
         el.setAttribute("fill", "white");
       });
     }
-  }, [grid, resolution, bars, barsPerLine, stepsPerBar, timeSig, mergeRests, mergeNotes, dottedNotes, flatBeams]);
+  }, [instruments, grid, resolution, bars, barsPerLine, stepsPerBar, timeSig, mergeRests, mergeNotes, dottedNotes, flatBeams]);
 
   return <div ref={ref} />;
 

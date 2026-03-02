@@ -12,6 +12,7 @@ export function makeAudioEngine() {
   let nextNoteTime = 0;
   let timerId = null;
   let activeSources = new Set();
+  let openHats = [];
 
   // Lookahead
   const lookaheadMs = 25;
@@ -72,15 +73,19 @@ export function makeAudioEngine() {
     return (60 / bpm) * (4 / resolution);
   }
 
-  function trigger(instId, time, gainValue = 1) {
-    if (!audioCtx || !master) return;
+  
+  function triggerWithGain(instId, time, gainValue = 1) {
+    if (!audioCtx || !master) return null;
     const buf = buffers[instId];
-    if (!buf) return;
+    if (!buf) return null;
 
     const src = audioCtx.createBufferSource();
     src.buffer = buf;
     activeSources.add(src);
-    src.onended = () => activeSources.delete(src);
+    src.onended = () => {
+      activeSources.delete(src);
+      openHats = openHats.filter((h) => h?.src !== src);
+    };
 
     const gain = audioCtx.createGain();
     gain.gain.value = Math.max(0, Math.min(1, gainValue));
@@ -89,6 +94,46 @@ export function makeAudioEngine() {
     gain.connect(master);
 
     src.start(time);
+    return { src, gain };
+  }
+
+
+  function chokeOpenHats(time) {
+    if (!openHats.length) return;
+    const hats = openHats;
+    openHats = [];
+    hats.forEach((h) => {
+      if (!h?.src || !h?.gain) return;
+      try {
+        const g = h.gain.gain;
+        g.setValueAtTime(g.value, time);
+        g.linearRampToValueAtTime(0.0001, time + 0.01);
+        h.src.stop(time + 0.012);
+      } catch (e) {}
+    });
+  }
+
+function trigger(instId, time, gainValue = 1) {
+    if (!audioCtx || !master) return;
+    const buf = buffers[instId];
+    if (!buf) return;
+
+    const src = audioCtx.createBufferSource();
+    src.buffer = buf;
+    activeSources.add(src);
+    src.onended = () => {
+      activeSources.delete(src);
+      openHats = openHats.filter((h) => h?.src !== src);
+    };
+
+    const gain = audioCtx.createGain();
+    gain.gain.value = Math.max(0, Math.min(1, gainValue));
+
+    src.connect(gain);
+    gain.connect(master);
+
+    src.start(time);
+    return src;
   }
 
   function scheduleStep(grid, instruments, stepIndex, time) {
@@ -101,6 +146,7 @@ export function makeAudioEngine() {
         if (inst.id === "snare" && buffers["snare_ghost"]) {
           trigger("snare_ghost", time, 0.6);
         } else if (inst.id === "hihat") {
+          chokeOpenHats(time);
           trigger(inst.id, time, 0.3);
         } else if (inst.id === "tom1" || inst.id === "tom2" || inst.id === "floorTom") {
           trigger(inst.id, time, 0.15);
@@ -112,7 +158,17 @@ export function makeAudioEngine() {
       }
 
       // Normal hit
-      trigger(inst.id, time, 0.9);
+      if (inst.id === "hihat" || inst.id === "hihatFoot") {
+        chokeOpenHats(time);
+      }
+      if (inst.id === "hihatOpen") {
+        {
+          const h = triggerWithGain(inst.id, time, 0.9);
+          if (h) openHats.push(h);
+        }
+      } else {
+        trigger(inst.id, time, 0.9);
+      }
     }
     if (onStep) onStep(stepIndex);
   }
@@ -159,6 +215,7 @@ export function makeAudioEngine() {
       try { src.stop(0); } catch (e) {}
     });
     activeSources.clear();
+    openHats = [];
 
     // Reset transport so next play always starts from beginning
     currentStep = 0;
