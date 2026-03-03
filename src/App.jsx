@@ -1,7 +1,16 @@
 import React, { useEffect, useRef, useState } from "react";
 import { exportNotationPdf } from "./utils/exportNotationPdf";
+import { exportDrumMidi } from "./utils/exportMidi";
 import { usePlayback } from "./audio/usePlayback";
 import * as Vex from "vexflow";
+import { DndContext, PointerSensor, closestCenter, useSensor, useSensors } from "@dnd-kit/core";
+import {
+  SortableContext,
+  arrayMove,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 
 // VexFlow API
 const { Renderer, Stave, StaveNote, Voice, Formatter, Beam, Fraction, Barline } = Vex.Flow;
@@ -55,7 +64,18 @@ const DRUMKIT_PRESETS = {
     "snare",
     "kick",
   ],
+  ksh: ["hihat", "snare", "kick"],
+  minimal: ["crash1", "ride", "tom1", "tom2", "floorTom", "hihat", "snare", "kick"],
 };
+
+const BUILTIN_PRESET_ORDER = ["standard", "full", "ksh", "minimal"];
+const PRESET_LABELS = {
+  standard: "Standard",
+  full: "Full",
+  ksh: "KSH",
+  minimal: "Minimal",
+};
+const USER_PRESETS_STORAGE_KEY = "drum-grid-user-presets-v1";
 
 
 const CELL = {
@@ -67,6 +87,11 @@ const CELL = {
 const GHOST_NOTATION_ENABLED = new Set(["snare", "tom1", "tom2", "floorTom", "hihat"]);
 
 const CELL_CYCLE = [CELL.OFF, CELL.ON];
+const MOVE_OVERLAP_MODES = [
+  { id: "all-to-all", label: "All overwrites" },
+  { id: "active-to-all", label: "Hits ovewrite" },
+  { id: "active-to-empty", label: "Fill in gaps" },
+];
 
 // Visuals
 const CELL_COLOR = {
@@ -111,10 +136,30 @@ export default function App() {
   const [isKitEditorOpen, setIsKitEditorOpen] = useState(false);
   const [pendingRemoval, setPendingRemoval] = useState(null); // { instId, moveTargetId }
   const [pendingPresetChange, setPendingPresetChange] = useState(null); // { presetName, targetIds, removedWithNotes }
-  const [presetChangeWarningEnabled, setPresetChangeWarningEnabled] = useState(false);
-  const [draggingKitId, setDraggingKitId] = useState(null);
-  const transparentDragImageRef = React.useRef(null);
-  const [customPresetIds, setCustomPresetIds] = useState(null);
+  const [keepTracksWithNotesEnabled, setKeepTracksWithNotesEnabled] = useState(true);
+  const [showPresetChangeWarningEnabled, setShowPresetChangeWarningEnabled] = useState(false);
+  const [isPrintDialogOpen, setIsPrintDialogOpen] = useState(false);
+  const [isMidiDialogOpen, setIsMidiDialogOpen] = useState(false);
+  const [savedPresets, setSavedPresets] = useState(() => {
+    try {
+      const raw = window.localStorage.getItem(USER_PRESETS_STORAGE_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      if (!Array.isArray(parsed)) return [];
+      return parsed
+        .map((p) => ({
+          id: String(p?.id || ""),
+          label: String(p?.label || ""),
+          ids: Array.isArray(p?.ids) ? p.ids.filter((id) => INSTRUMENT_BY_ID[id]) : [],
+        }))
+        .filter((p) => p.id && p.label && p.ids.length > 0 && !DRUMKIT_PRESETS[p.id]);
+    } catch (_) {
+      return [];
+    }
+  });
+  const [modifiedPresetBase, setModifiedPresetBase] = useState(null); // built-in/user preset name for "preset*" variants
+  const [isSaveAsDialogOpen, setIsSaveAsDialogOpen] = useState(false);
+  const [saveAsName, setSaveAsName] = useState("");
+  const [presetNameInlineDraft, setPresetNameInlineDraft] = useState("");
   const availableInstrumentButtonWidthCh = React.useMemo(
     () => Math.max(...ALL_INSTRUMENTS.map((inst) => inst.label.length)) + 2,
     []
@@ -125,16 +170,70 @@ export default function App() {
   const [barsPerLine, setBarsPerLine] = useState(4);
   const [gridBarsPerLine, setGridBarsPerLine] = useState(4);
   const [layout, setLayout] = useState("grid-top");
-  const [activeTab, setActiveTab] = useState("timing"); // grid-right | grid-top | notation-right | notation-top
+  const [activeTab, setActiveTab] = useState("none"); // none | timing | notation | selection | layout
   const [timeSig, setTimeSig] = useState({ n: 4, d: 4 });
   const [keepTiming, setKeepTiming] = useState(true);
 
   const [bpm, setBpm] = useState(120);
   const [bpmDraft, setBpmDraft] = useState("120");
+  const [menuViewportTick, setMenuViewportTick] = useState(0);
+  const activeTabRef = React.useRef(activeTab);
+  const gridMenuRowPrimaryRef = React.useRef(null);
+  const gridMenuRowSecondaryRef = React.useRef(null);
+  const notationMenuRowRef = React.useRef(null);
+  const layoutMenuRowRef = React.useRef(null);
+  const selectionMenuRowRef = React.useRef(null);
 
   useEffect(() => {
     setBpmDraft(String(bpm));
   }, [bpm]);
+
+  useEffect(() => {
+    activeTabRef.current = activeTab;
+  }, [activeTab]);
+
+  useEffect(() => {
+    const onViewportChange = () => setMenuViewportTick((t) => t + 1);
+    // Run once on mount so small screens can auto-collapse immediately.
+    onViewportChange();
+    window.addEventListener("resize", onViewportChange);
+    window.addEventListener("orientationchange", onViewportChange);
+    return () => {
+      window.removeEventListener("resize", onViewportChange);
+      window.removeEventListener("orientationchange", onViewportChange);
+    };
+  }, []);
+
+  const rowHasWrapped = React.useCallback((rowEl) => {
+    if (!rowEl) return false;
+    const children = Array.from(rowEl.children || []).filter(
+      (el) => el instanceof HTMLElement && el.offsetParent !== null
+    );
+    if (children.length <= 1) return false;
+    const tops = children.map((child) => child.getBoundingClientRect().top);
+    const minTop = Math.min(...tops);
+    const maxTop = Math.max(...tops);
+    // Allow tiny layout jitter; only treat as wrapped when there's a clear second row.
+    return maxTop - minTop > 6;
+  }, []);
+
+  useEffect(() => {
+    const currentTab = activeTabRef.current;
+    if (currentTab === "none") return;
+    const rows =
+      currentTab === "timing"
+        ? [gridMenuRowPrimaryRef.current, gridMenuRowSecondaryRef.current]
+        : currentTab === "notation"
+          ? [notationMenuRowRef.current]
+          : currentTab === "layout"
+            ? [layoutMenuRowRef.current]
+            : currentTab === "selection"
+              ? [selectionMenuRowRef.current]
+              : [];
+    if (rows.some((row) => rowHasWrapped(row))) {
+      setActiveTab("none");
+    }
+  }, [menuViewportTick, rowHasWrapped]);
 
   const clampBpm = (n) => Math.min(400, Math.max(20, n));
   const stepBpm = (delta) => setBpm((v) => clampBpm(v + delta));
@@ -161,6 +260,12 @@ export default function App() {
 
   const [selection, setSelection] = useState(null);
   const [selectionFinalized, setSelectionFinalized] = useState(0);
+  const skipSelectionResetRef = React.useRef(0);
+  const wrappedMoveCellsRef = React.useRef(null);
+  const movePayloadRef = React.useRef(null);
+  const moveInitialPayloadRef = React.useRef(null);
+  const moveBaseGridRef = React.useRef(null);
+  const [wrappedSelectionCells, setWrappedSelectionCells] = useState(null);
 
 
   
@@ -180,6 +285,16 @@ export default function App() {
   }, []);
 useEffect(() => {
     const onKey = (e) => {
+      if (e.key === "Enter" && selection) {
+        const el = e.target;
+        const tag = (el?.tagName || "").toLowerCase();
+        const isTyping = tag === "input" || tag === "textarea" || el?.isContentEditable;
+        if (isTyping) return;
+        e.preventDefault();
+        setLoopRule(null);
+        setSelection(null);
+        return;
+      }
       if ((e.key === "Backspace" || e.key === "Delete") && selection) {
         if (e.pointerType !== "mouse") e.preventDefault();
         setBaseGridWithUndo((prev) => {
@@ -201,12 +316,55 @@ useEffect(() => {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [selection, instruments]);
+
  // { rowStart, rowEnd, start, endExclusive } (row indices into active instruments)
   const [loopRule, setLoopRule] = useState(null);
+  useEffect(() => {
+    if (!selection && !loopRule) return;
+    const onKey = (e) => {
+      if (e.key !== "Escape") return;
+      if (pendingPresetChange || isKitEditorOpen || isPrintDialogOpen || isMidiDialogOpen) return;
+      const el = e.target;
+      const tag = (el?.tagName || "").toLowerCase();
+      const isTyping = tag === "input" || tag === "textarea" || el?.isContentEditable;
+      if (isTyping) return;
+      e.preventDefault();
+      setLoopRule(null);
+      setSelection(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selection, loopRule, pendingPresetChange, isKitEditorOpen, isPrintDialogOpen, isMidiDialogOpen]);
+
+  useEffect(() => {
+    if (!isPrintDialogOpen) return;
+    const onKeyDown = (e) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      setIsPrintDialogOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [isPrintDialogOpen]);
+
+  useEffect(() => {
+    if (!isMidiDialogOpen) return;
+    const onKeyDown = (e) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      setIsMidiDialogOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [isMidiDialogOpen]);
 
   
   // Whether new selections should auto-generate a loop.
   const [loopRepeats, setLoopRepeats] = useState("all"); // "off" | "all" | "1".."8"
+  const [wrapSelectionMoveEnabled, setWrapSelectionMoveEnabled] = useState(true);
+  const [moveOverlapMode, setMoveOverlapMode] = useState("active-to-empty");
+  const [loopOverlapMode, setLoopOverlapMode] = useState("active-to-empty");
+  const [moveOverrideBehavior, setMoveOverrideBehavior] = useState("temporary");
   const lastNonAllLoopRepeats = React.useRef("1");
   React.useEffect(() => {
     // Remember the last non-"all" value so clicking the center can toggle all <-> last value.
@@ -260,10 +418,165 @@ useEffect(() => {
   const [mergeNotes, setMergeNotes] = useState(true);
   const [dottedNotes, setDottedNotes] = useState(true);
   const [flatBeams, setFlatBeams] = useState(true);
+  const [printTitle, setPrintTitle] = useState("");
+  const [printComposer, setPrintComposer] = useState("");
+  const [printWatermarkEnabled, setPrintWatermarkEnabled] = useState(true);
 // "fast" (>=16ths) | "all"
 
   const stepsPerBar = Math.max(1, Math.round((timeSig.n * resolution) / timeSig.d));
   const columns = bars * stepsPerBar;
+
+  useEffect(() => {
+    if (skipSelectionResetRef.current > 0) {
+      skipSelectionResetRef.current -= 1;
+      return;
+    }
+    wrappedMoveCellsRef.current = null;
+    movePayloadRef.current = null;
+    moveInitialPayloadRef.current = null;
+    moveBaseGridRef.current = null;
+    setWrappedSelectionCells(null);
+  }, [selection]);
+
+  useEffect(() => {
+    wrappedMoveCellsRef.current = null;
+    movePayloadRef.current = null;
+    moveInitialPayloadRef.current = null;
+    moveBaseGridRef.current = null;
+    setWrappedSelectionCells(null);
+  }, [moveOverlapMode, moveOverrideBehavior]);
+
+  useEffect(() => {
+    if (!selection) return;
+    const onKey = (e) => {
+      const deltaByKey = {
+        ArrowUp: [-1, 0],
+        ArrowDown: [1, 0],
+        ArrowLeft: [0, -1],
+        ArrowRight: [0, 1],
+      };
+      const delta = deltaByKey[e.key];
+      if (!delta) return;
+
+      const el = e.target;
+      const tag = (el?.tagName || "").toLowerCase();
+      const isTyping = tag === "input" || tag === "textarea" || el?.isContentEditable;
+      if (isTyping) return;
+
+      e.preventDefault();
+      setLoopRule(null);
+
+      const [dr, dc] = delta;
+      const width = selection.endExclusive - selection.start;
+      const height = selection.rowEnd - selection.rowStart + 1;
+      const rowCount = instruments.length;
+      if (rowCount < 1 || columns < 1) return;
+      const sourceRectCoords = Array.from({ length: height }, (_, rOff) =>
+        Array.from({ length: width }, (_, cOff) => ({
+          row: selection.rowStart + rOff,
+          col: selection.start + cOff,
+        }))
+      ).flat();
+      const sourceCoords = wrappedMoveCellsRef.current || sourceRectCoords;
+      const outOfBounds = sourceCoords.some(({ row, col }) => {
+        const nextRow = row + dr;
+        const nextCol = col + dc;
+        return nextRow < 0 || nextRow >= rowCount || nextCol < 0 || nextCol >= columns;
+      });
+      if (outOfBounds && !wrapSelectionMoveEnabled) return;
+      const targetCoords = wrapSelectionMoveEnabled
+        ? sourceCoords.map(({ row, col }) => ({
+            row: (row + dr + rowCount) % rowCount,
+            col: (col + dc + columns) % columns,
+          }))
+        : sourceCoords.map(({ row, col }) => ({
+            row: row + dr,
+            col: col + dc,
+          }));
+
+      setBaseGridWithUndo((prev) => {
+        const cloneGrid = (g) => {
+          const out = {};
+          for (const instId of Object.keys(g)) out[instId] = [...g[instId]];
+          return out;
+        };
+        const isTemporaryOverride = moveOverrideBehavior === "temporary";
+        if (isTemporaryOverride && !moveBaseGridRef.current) {
+          const base = cloneGrid(prev);
+          // Remove the original selected cells from the temporary base layer.
+          // The moving payload is drawn on top, so this avoids a first-step tail.
+          for (const { row, col } of sourceCoords) {
+            const instId = instruments[row]?.id;
+            if (!instId) continue;
+            base[instId][col] = CELL.OFF;
+          }
+          moveBaseGridRef.current = base;
+        }
+        const baseGridForMove = isTemporaryOverride && moveBaseGridRef.current ? moveBaseGridRef.current : prev;
+        const next = cloneGrid(baseGridForMove);
+
+        if (!Array.isArray(moveInitialPayloadRef.current) || moveInitialPayloadRef.current.length !== sourceCoords.length) {
+          moveInitialPayloadRef.current = sourceCoords.map(({ row, col }) => {
+              const instId = instruments[row]?.id;
+              if (!instId) return CELL.OFF;
+              return prev[instId]?.[col] ?? CELL.OFF;
+            });
+        }
+        const payload = moveInitialPayloadRef.current;
+
+        const ops = targetCoords.map((target, i) => {
+          const source = sourceCoords[i];
+          const movedVal = payload[i];
+          const targetInstId = instruments[target.row]?.id;
+          const targetVal = targetInstId ? (baseGridForMove[targetInstId]?.[target.col] ?? CELL.OFF) : CELL.OFF;
+          let shouldWrite = true;
+          let shouldClearSource = true;
+
+          if (moveOverlapMode === "all-to-all") {
+            shouldWrite = true;
+            shouldClearSource = true;
+          } else if (moveOverlapMode === "active-to-all") {
+            // "Empty won't override" => move only active payload cells.
+            shouldWrite = movedVal !== CELL.OFF;
+            shouldClearSource = movedVal !== CELL.OFF;
+          } else if (moveOverlapMode === "active-to-empty") {
+            // "Fill in gaps" => move active payload cells only into empty targets.
+            shouldWrite = movedVal !== CELL.OFF && targetVal === CELL.OFF;
+            // Keep payload composition strict across steps:
+            // active payload cells move every step even if this target is blocked now.
+            shouldClearSource = movedVal !== CELL.OFF;
+          }
+
+          return { source, target, movedVal, shouldWrite, shouldClearSource };
+        });
+
+        if (!isTemporaryOverride) {
+          for (const op of ops) {
+            if (!op.shouldClearSource) continue;
+            const instId = instruments[op.source.row]?.id;
+            if (!instId) continue;
+            next[instId][op.source.col] = CELL.OFF;
+          }
+        }
+
+        for (const op of ops) {
+          const targetInstId = instruments[op.target.row]?.id;
+          if (!targetInstId) continue;
+          if (!op.shouldWrite) continue;
+          next[targetInstId][op.target.col] = op.movedVal;
+        }
+
+        return next;
+      });
+      movePayloadRef.current = moveInitialPayloadRef.current;
+      if (moveOverrideBehavior !== "temporary") moveBaseGridRef.current = null;
+      wrappedMoveCellsRef.current = targetCoords;
+      setWrappedSelectionCells(targetCoords);
+    };
+
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selection, instruments, columns, wrapSelectionMoveEnabled, moveOverlapMode, moveOverrideBehavior]);
 
   const clearAll = React.useCallback(() => {
     setBaseGridWithUndo(() => {
@@ -416,13 +729,96 @@ useEffect(() => {
   );
 
   const arraysEqual = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(USER_PRESETS_STORAGE_KEY, JSON.stringify(savedPresets));
+    } catch (_) {}
+  }, [savedPresets]);
 
+  const getPresetIds = React.useCallback(
+    (presetName) => {
+      if (DRUMKIT_PRESETS[presetName]) return DRUMKIT_PRESETS[presetName];
+      const saved = savedPresets.find((p) => p.id === presetName);
+      return saved?.ids || null;
+    },
+    [savedPresets]
+  );
+  const getPresetLabel = React.useCallback(
+    (presetName) => {
+      if (PRESET_LABELS[presetName]) return PRESET_LABELS[presetName];
+      const saved = savedPresets.find((p) => p.id === presetName);
+      return saved?.label || presetName;
+    },
+    [savedPresets]
+  );
+  const makeUniquePresetId = React.useCallback(
+    (label) => {
+      const slug = String(label)
+        .toLowerCase()
+        .trim()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "");
+      let base = slug || "preset";
+      if (DRUMKIT_PRESETS[base]) base = `user-${base}`;
+      const exists = (id) => !!DRUMKIT_PRESETS[id] || savedPresets.some((p) => p.id === id);
+      let id = base;
+      let n = 2;
+      while (exists(id)) {
+        id = `${base}-${n}`;
+        n += 1;
+      }
+      return id;
+    },
+    [savedPresets]
+  );
+
+  const mergeMissingPresetTracks = React.useCallback((keptIds, targetIds) => {
+    const next = [...keptIds];
+
+    targetIds.forEach((targetId, targetIdx) => {
+      if (next.includes(targetId)) return;
+
+      let insertAt = -1;
+
+      // Prefer inserting after the nearest previous preset track that already exists.
+      for (let i = targetIdx - 1; i >= 0; i--) {
+        const prevId = targetIds[i];
+        const idx = next.indexOf(prevId);
+        if (idx !== -1) {
+          insertAt = idx + 1;
+          break;
+        }
+      }
+
+      // Otherwise insert before the nearest next preset track that already exists.
+      if (insertAt === -1) {
+        for (let i = targetIdx + 1; i < targetIds.length; i++) {
+          const nextId = targetIds[i];
+          const idx = next.indexOf(nextId);
+          if (idx !== -1) {
+            insertAt = idx;
+            break;
+          }
+        }
+      }
+
+      // If no anchors exist yet, append (preserves non-preset kept tracks).
+      if (insertAt === -1) insertAt = next.length;
+      next.splice(insertAt, 0, targetId);
+    });
+
+    return next;
+  }, []);
+
+  const allPresetIds = React.useMemo(
+    () => [...BUILTIN_PRESET_ORDER, ...savedPresets.map((p) => p.id)],
+    [savedPresets]
+  );
   const selectedPreset =
-    arraysEqual(kitInstrumentIds, DRUMKIT_PRESETS.standard)
-      ? "standard"
-      : arraysEqual(kitInstrumentIds, DRUMKIT_PRESETS.full)
-        ? "full"
-        : "custom";
+    allPresetIds.find((presetName) => {
+      const ids = getPresetIds(presetName);
+      return ids && arraysEqual(kitInstrumentIds, ids);
+    }) || null;
 
   const clearSelectionAndLoop = React.useCallback(() => {
     setSelection(null);
@@ -441,14 +837,12 @@ useEffect(() => {
     [clearSelectionAndLoop]
   );
 
-  const applyCustomKitIds = React.useCallback(
+  const applyManualKitIds = React.useCallback(
     (nextIds) => {
-      const deduped = [...new Set(nextIds)].filter((id) => INSTRUMENT_BY_ID[id]);
-      if (deduped.length === 0) return;
-      setCustomPresetIds(deduped);
-      applyKitIds(deduped);
+      setModifiedPresetBase(selectedPreset || modifiedPresetBase || null);
+      applyKitIds(nextIds);
     },
-    [applyKitIds]
+    [applyKitIds, selectedPreset, modifiedPresetBase]
   );
 
   const hasNotesOnTrack = React.useCallback(
@@ -458,7 +852,7 @@ useEffect(() => {
 
   const computePresetTransition = React.useCallback(
     (presetName) => {
-      const targetIds = DRUMKIT_PRESETS[presetName];
+      const targetIds = getPresetIds(presetName);
       if (!targetIds) return null;
 
       const removedIds = kitInstrumentIds.filter((id) => !targetIds.includes(id));
@@ -468,14 +862,12 @@ useEffect(() => {
           (id) => !targetIds.includes(id) && !removedWithNotes.includes(id)
         )
       );
-      const mergedKeepNoted = kitInstrumentIds.filter((id) => !removedSet.has(id));
-      targetIds.forEach((id) => {
-        if (!mergedKeepNoted.includes(id)) mergedKeepNoted.push(id);
-      });
+      const keptIds = kitInstrumentIds.filter((id) => !removedSet.has(id));
+      const mergedKeepNoted = mergeMissingPresetTracks(keptIds, targetIds);
 
       return { targetIds, removedWithNotes, mergedKeepNoted };
     },
-    [kitInstrumentIds, hasNotesOnTrack]
+    [kitInstrumentIds, hasNotesOnTrack, mergeMissingPresetTracks, getPresetIds]
   );
 
   const requestPresetChange = React.useCallback(
@@ -485,19 +877,28 @@ useEffect(() => {
       const { targetIds, removedWithNotes, mergedKeepNoted } = transition;
 
       if (removedWithNotes.length === 0) {
+        setModifiedPresetBase(null);
         applyKitIds(targetIds);
         return;
       }
 
-      if (!presetChangeWarningEnabled) {
-        // Default behavior: automatically keep tracks with notes.
-        applyCustomKitIds(mergedKeepNoted);
+      if (showPresetChangeWarningEnabled) {
+        setPendingPresetChange({ presetName, targetIds, removedWithNotes });
         return;
       }
 
-      setPendingPresetChange({ presetName, targetIds, removedWithNotes });
+      if (keepTracksWithNotesEnabled) {
+        // Keep noted tracks automatically.
+        setModifiedPresetBase(presetName);
+        applyKitIds(mergedKeepNoted);
+        return;
+      }
+
+      // Both toggles off: remove noted tracks immediately.
+      setModifiedPresetBase(null);
+      applyKitIds(targetIds);
     },
-    [computePresetTransition, applyKitIds, applyCustomKitIds, presetChangeWarningEnabled]
+    [computePresetTransition, applyKitIds, showPresetChangeWarningEnabled, keepTracksWithNotesEnabled]
   );
 
   const confirmPresetKeepNotedTracks = React.useCallback(() => {
@@ -510,19 +911,17 @@ useEffect(() => {
       )
     );
 
-    // Preserve current order: remove only empty tracks.
-    const merged = kitInstrumentIds.filter((id) => !removedSet.has(id));
+    // Preserve kept tracks, then place missing preset tracks by preset order anchors.
+    const keptIds = kitInstrumentIds.filter((id) => !removedSet.has(id));
+    const merged = mergeMissingPresetTracks(keptIds, pendingPresetChange.targetIds);
 
-    // Add missing target preset tracks at the end (in preset order).
-    pendingPresetChange.targetIds.forEach((id) => {
-      if (!merged.includes(id)) merged.push(id);
-    });
-
-    applyCustomKitIds(merged);
-  }, [pendingPresetChange, kitInstrumentIds, applyCustomKitIds]);
+    setModifiedPresetBase(pendingPresetChange.presetName);
+    applyKitIds(merged);
+  }, [pendingPresetChange, kitInstrumentIds, applyKitIds, mergeMissingPresetTracks]);
 
   const confirmPresetDeleteAnyway = React.useCallback(() => {
     if (!pendingPresetChange) return;
+    setModifiedPresetBase(null);
     applyKitIds(pendingPresetChange.targetIds);
   }, [pendingPresetChange, applyKitIds]);
 
@@ -531,7 +930,8 @@ useEffect(() => {
     const onKeyDown = (e) => {
       if (e.key === "Enter") {
         e.preventDefault();
-        confirmPresetKeepNotedTracks();
+        if (keepTracksWithNotesEnabled) confirmPresetKeepNotedTracks();
+        else confirmPresetDeleteAnyway();
         return;
       }
       if (e.key === "Escape") {
@@ -541,7 +941,7 @@ useEffect(() => {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [pendingPresetChange, confirmPresetKeepNotedTracks]);
+  }, [pendingPresetChange, confirmPresetKeepNotedTracks, confirmPresetDeleteAnyway, keepTracksWithNotesEnabled]);
 
   useEffect(() => {
     if (!isKitEditorOpen) return;
@@ -549,24 +949,27 @@ useEffect(() => {
     const onKeyDown = (e) => {
       if (e.key !== "Escape") return;
       e.preventDefault();
+      if (isSaveAsDialogOpen) {
+        setIsSaveAsDialogOpen(false);
+        setSaveAsName("");
+        return;
+      }
       setIsKitEditorOpen(false);
       setPendingRemoval(null);
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [isKitEditorOpen, pendingPresetChange]);
+  }, [isKitEditorOpen, pendingPresetChange, isSaveAsDialogOpen]);
 
-  const hasSavedCustomPreset =
-    !!customPresetIds &&
-    !arraysEqual(customPresetIds, DRUMKIT_PRESETS.standard) &&
-    !arraysEqual(customPresetIds, DRUMKIT_PRESETS.full);
-
-  const presetOrder = hasSavedCustomPreset ? ["standard", "full", "custom"] : ["standard", "full"];
+  const presetOrder = allPresetIds;
+  const stepperPresetAnchor =
+    selectedPreset ||
+    (modifiedPresetBase && presetOrder.includes(modifiedPresetBase) ? modifiedPresetBase : presetOrder[0]);
   const stepPreset = React.useCallback(
     (delta) => {
-      const i = presetOrder.indexOf(selectedPreset);
+      const i = presetOrder.indexOf(stepperPresetAnchor);
       if (i === -1) {
-        const fallback = delta >= 0 ? "full" : "standard";
+        const fallback = delta >= 0 ? BUILTIN_PRESET_ORDER[0] : BUILTIN_PRESET_ORDER[BUILTIN_PRESET_ORDER.length - 1];
         requestPresetChange(fallback);
         return;
       }
@@ -574,49 +977,75 @@ useEffect(() => {
       const dir = delta >= 0 ? 1 : -1;
       for (let step = 1; step <= presetOrder.length; step++) {
         const next = presetOrder[(i + dir * step + presetOrder.length) % presetOrder.length];
-        if (next === "custom" && customPresetIds) {
-          if (!arraysEqual(customPresetIds, kitInstrumentIds)) {
-            applyKitIds(customPresetIds);
-            return;
-          }
-          continue;
+        if (!showPresetChangeWarningEnabled) {
+          const transition = computePresetTransition(next);
+          if (!transition) continue;
+          const preview = transition.removedWithNotes.length > 0
+            ? (keepTracksWithNotesEnabled ? transition.mergedKeepNoted : transition.targetIds)
+            : transition.targetIds;
+          if (arraysEqual(preview, kitInstrumentIds)) continue;
         }
-        if (next === "standard" || next === "full") {
-          if (!presetChangeWarningEnabled) {
-            const transition = computePresetTransition(next);
-            if (!transition) continue;
-            const preview =
-              transition.removedWithNotes.length > 0 ? transition.mergedKeepNoted : transition.targetIds;
-            if (arraysEqual(preview, kitInstrumentIds)) continue;
-          }
-          requestPresetChange(next);
-          return;
-        }
+        requestPresetChange(next);
+        return;
       }
     },
     [
-      selectedPreset,
-      applyKitIds,
+      stepperPresetAnchor,
       presetOrder,
-      customPresetIds,
       requestPresetChange,
       computePresetTransition,
-      presetChangeWarningEnabled,
+      showPresetChangeWarningEnabled,
+      keepTracksWithNotesEnabled,
       kitInstrumentIds,
     ]
   );
+
+  const selectedPresetLabel =
+    selectedPreset
+      ? getPresetLabel(selectedPreset)
+      : modifiedPresetBase
+        ? `${getPresetLabel(modifiedPresetBase)}*`
+        : "Modified";
+  const selectedSavedPreset =
+    selectedPreset ? savedPresets.find((p) => p.id === selectedPreset) || null : null;
+  useEffect(() => {
+    setPresetNameInlineDraft(selectedSavedPreset ? selectedSavedPreset.label : selectedPresetLabel);
+  }, [selectedSavedPreset, selectedPresetLabel]);
+  const savePresetAsNew = React.useCallback(() => {
+    const label = saveAsName.trim();
+    if (!label) return;
+    const id = makeUniquePresetId(label);
+    setSavedPresets((prev) => [...prev, { id, label, ids: [...kitInstrumentIds] }]);
+    setModifiedPresetBase(null);
+    setSaveAsName("");
+    setIsSaveAsDialogOpen(false);
+  }, [saveAsName, makeUniquePresetId, kitInstrumentIds]);
+  const renameSelectedPresetInline = React.useCallback(() => {
+    if (!selectedSavedPreset) return;
+    const label = presetNameInlineDraft.trim();
+    if (!label) return;
+    setSavedPresets((prev) =>
+      prev.map((p) => (p.id === selectedSavedPreset.id ? { ...p, label } : p))
+    );
+  }, [selectedSavedPreset, presetNameInlineDraft]);
+  const deleteSelectedPreset = React.useCallback(() => {
+    if (!selectedSavedPreset) return;
+    const deletingId = selectedSavedPreset.id;
+    setSavedPresets((prev) => prev.filter((p) => p.id !== deletingId));
+    if (modifiedPresetBase === deletingId) setModifiedPresetBase(null);
+  }, [selectedSavedPreset, modifiedPresetBase]);
 
   const requestRemoveInstrument = React.useCallback(
     (instId) => {
       if (!kitInstrumentIds.includes(instId)) return;
       if (!hasNotesOnTrack(instId)) {
-        applyCustomKitIds(kitInstrumentIds.filter((id) => id !== instId));
+        applyManualKitIds(kitInstrumentIds.filter((id) => id !== instId));
         return;
       }
       const moveTargetId = kitInstrumentIds.find((id) => id !== instId) || null;
       setPendingRemoval({ instId, moveTargetId });
     },
-    [kitInstrumentIds, hasNotesOnTrack, applyCustomKitIds]
+    [kitInstrumentIds, hasNotesOnTrack, applyManualKitIds]
   );
 
   const confirmRemoveDeleteNotes = React.useCallback(() => {
@@ -626,8 +1055,8 @@ useEffect(() => {
       ...prev,
       [instId]: Array(columns).fill(CELL.OFF),
     }));
-    applyCustomKitIds(kitInstrumentIds.filter((id) => id !== instId));
-  }, [pendingRemoval, columns, setBaseGridWithUndo, applyCustomKitIds, kitInstrumentIds]);
+    applyManualKitIds(kitInstrumentIds.filter((id) => id !== instId));
+  }, [pendingRemoval, columns, setBaseGridWithUndo, applyManualKitIds, kitInstrumentIds]);
 
   const confirmRemoveMoveNotes = React.useCallback(() => {
     if (!pendingRemoval?.instId || !pendingRemoval?.moveTargetId) return;
@@ -652,8 +1081,8 @@ useEffect(() => {
       return next;
     });
 
-    applyCustomKitIds(kitInstrumentIds.filter((id) => id !== srcId));
-  }, [pendingRemoval, setBaseGridWithUndo, columns, applyCustomKitIds, kitInstrumentIds]);
+    applyManualKitIds(kitInstrumentIds.filter((id) => id !== srcId));
+  }, [pendingRemoval, setBaseGridWithUndo, columns, applyManualKitIds, kitInstrumentIds]);
 
   const toggleInstrumentInKit = React.useCallback(
     (instId, enable) => {
@@ -662,7 +1091,7 @@ useEffect(() => {
         const fullOrder = DRUMKIT_PRESETS.full;
         const newFullIdx = fullOrder.indexOf(instId);
         if (newFullIdx === -1) {
-          applyCustomKitIds([...kitInstrumentIds, instId]);
+          applyManualKitIds([...kitInstrumentIds, instId]);
           return;
         }
 
@@ -693,12 +1122,12 @@ useEffect(() => {
 
         const next = [...kitInstrumentIds];
         next.splice(insertAt, 0, instId);
-        applyCustomKitIds(next);
+        applyManualKitIds(next);
         return;
       }
       requestRemoveInstrument(instId);
     },
-    [kitInstrumentIds, applyCustomKitIds, requestRemoveInstrument]
+    [kitInstrumentIds, applyManualKitIds, requestRemoveInstrument]
   );
 
   const moveInstrument = React.useCallback(
@@ -709,39 +1138,29 @@ useEffect(() => {
       if (to < 0 || to >= kitInstrumentIds.length) return;
       const next = [...kitInstrumentIds];
       [next[idx], next[to]] = [next[to], next[idx]];
-      applyCustomKitIds(next);
+      applyManualKitIds(next);
     },
-    [kitInstrumentIds, applyCustomKitIds]
+    [kitInstrumentIds, applyManualKitIds]
+  );
+  const kitOrderSensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: { distance: 6 },
+    })
+  );
+  const onKitOrderDragEnd = React.useCallback(
+    (event) => {
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
+      const oldIndex = kitInstrumentIds.indexOf(String(active.id));
+      const newIndex = kitInstrumentIds.indexOf(String(over.id));
+      if (oldIndex < 0 || newIndex < 0) return;
+      applyManualKitIds(arrayMove(kitInstrumentIds, oldIndex, newIndex));
+    },
+    [kitInstrumentIds, applyManualKitIds]
   );
 
-  const moveInstrumentBefore = React.useCallback(
-    (dragId, targetId) => {
-      if (!dragId || !targetId || dragId === targetId) return;
-      const from = kitInstrumentIds.indexOf(dragId);
-      const to = kitInstrumentIds.indexOf(targetId);
-      if (from < 0 || to < 0) return;
-      // Already immediately before target -> no-op.
-      if (from < to && from === to - 1) return;
-      const next = [...kitInstrumentIds];
-      next.splice(from, 1);
-      const insertAt = next.indexOf(targetId);
-      next.splice(insertAt, 0, dragId);
-      applyCustomKitIds(next);
-    },
-    [kitInstrumentIds, applyCustomKitIds]
-  );
 
-  const getTransparentDragImage = React.useCallback(() => {
-    if (transparentDragImageRef.current) return transparentDragImageRef.current;
-    const canvas = document.createElement("canvas");
-    canvas.width = 1;
-    canvas.height = 1;
-    transparentDragImageRef.current = canvas;
-    return canvas;
-  }, []);
-
-
-  const bakeLoopInto = (prevGrid, rule, repeats = "all") => {
+  const bakeLoopInto = (prevGrid, rule, repeats = "all", overlapMode = "all-to-all") => {
     const next = {};
     ALL_INSTRUMENTS.forEach((inst) => (next[inst.id] = [...(prevGrid[inst.id] || [])]));
 
@@ -773,7 +1192,20 @@ useEffect(() => {
       for (let r = rowStart; r <= rowEnd; r++) {
         const instId = instruments[r]?.id;
         if (!instId) continue;
-        next[instId][idx] = srcByRow[instId]?.[i] ?? CELL.OFF;
+        const movedVal = srcByRow[instId]?.[i] ?? CELL.OFF;
+        const targetVal = next[instId]?.[idx] ?? CELL.OFF;
+        if (overlapMode === "all-to-all") {
+          next[instId][idx] = movedVal;
+          continue;
+        }
+        if (overlapMode === "active-to-all") {
+          if (movedVal !== CELL.OFF) next[instId][idx] = movedVal;
+          continue;
+        }
+        if (overlapMode === "active-to-empty") {
+          if (movedVal !== CELL.OFF && targetVal === CELL.OFF) next[instId][idx] = movedVal;
+          continue;
+        }
       }
     }
     return next;
@@ -820,11 +1252,24 @@ useEffect(() => {
       for (let r = rowStart; r <= rowEnd; r++) {
         const instId = instruments[r]?.id;
         if (!instId) continue;
-        g[instId][idx] = srcByRow[instId]?.[i] ?? CELL.OFF;
+        const movedVal = srcByRow[instId]?.[i] ?? CELL.OFF;
+        const targetVal = g[instId]?.[idx] ?? CELL.OFF;
+        if (loopOverlapMode === "all-to-all") {
+          g[instId][idx] = movedVal;
+          continue;
+        }
+        if (loopOverlapMode === "active-to-all") {
+          if (movedVal !== CELL.OFF) g[instId][idx] = movedVal;
+          continue;
+        }
+        if (loopOverlapMode === "active-to-empty") {
+          if (movedVal !== CELL.OFF && targetVal === CELL.OFF) g[instId][idx] = movedVal;
+          continue;
+        }
       }
     }
     return g;
-  }, [baseGrid, loopRule, columns, loopRepeats, instruments]);
+  }, [baseGrid, loopRule, columns, loopRepeats, loopOverlapMode, instruments]);
 
 
   const playback = usePlayback({
@@ -904,7 +1349,7 @@ useEffect(() => {
       // - Click inside source: edit source live (no bake)
       // - Click anywhere else (including generated area): bake loop and exit loop mode (NO toggle on this click)
       if (!inSource || inGenerated) {
-        setBaseGridWithUndo((prev) => bakeLoopInto(prev, loopRule, loopRepeats));
+        setBaseGridWithUndo((prev) => bakeLoopInto(prev, loopRule, loopRepeats, loopOverlapMode));
         setLoopRule(null);
         setSelection(null);
         return;
@@ -936,7 +1381,7 @@ useEffect(() => {
 
       // Match click behavior: long-pressing outside the source bakes & exits without toggling.
       if (!inSource || inGenerated) {
-        setBaseGridWithUndo((prev) => bakeLoopInto(prev, loopRule, loopRepeats));
+        setBaseGridWithUndo((prev) => bakeLoopInto(prev, loopRule, loopRepeats, loopOverlapMode));
         setLoopRule(null);
         setSelection(null);
         return;
@@ -978,35 +1423,48 @@ useEffect(() => {
           <h1 className="text-lg font-semibold mr-2">Drum Grid → Notation</h1>
 
           
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 order-1" data-loopui='1'>
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-neutral-300">Drumkit</span>
+              <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
+                <button
+                  type="button"
+                  onClick={() => stepPreset(-1)}
+                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                  aria-label="Previous preset"
+                >
+                  −
+                </button>
+                <div
+                  onClick={() => setIsKitEditorOpen(true)}
+                  className="min-w-[88px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700 cursor-pointer hover:bg-neutral-700/60"
+                  title="Open drumkit editor"
+                >
+                  {selectedPresetLabel}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => stepPreset(1)}
+                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                  aria-label="Next preset"
+                >
+                  +
+                </button>
+              </div>
+            </div>
             <button
-              onClick={() => setActiveTab("timing")}
+              onClick={togglePlaybackFromBeginning}
               className={`touch-none select-none px-3 py-1.5 rounded border text-sm capitalize ${
-                activeTab === "timing"
+                playback.isPlaying
                   ? "bg-neutral-800 border-neutral-600 text-white"
                   : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
               }`}
             >
-              timing
+              {playback.isPlaying ? "stop" : "play"}
             </button>
-            <button
-              onClick={() => setActiveTab((t) => (t === "notation" ? "timing" : "notation"))}
-              className={`touch-none select-none px-3 py-1.5 rounded border text-sm capitalize ${
-                activeTab === "notation"
-                  ? "bg-neutral-800 border-neutral-600 text-white"
-                  : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
-              }`}
-            >
-              notation
-            </button>
-            <button
-              onClick={() => setActiveTab((t) => (t === "selection" ? "timing" : "selection"))}
-              className={`touch-none select-none px-3 py-1.5 rounded border text-sm capitalize ${
-                activeTab === "selection"
-                  ? "bg-neutral-800 border-neutral-600 text-white"
-                  : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
-              }`}
-            >looping</button>
+          </div>
+
+          <div className="flex items-center gap-2 order-2">
             <button
               type="button"
               onClick={undoGrid}
@@ -1056,343 +1514,166 @@ useEffect(() => {
             </button>
           </div>
 
+        </div>
 
-          
-          <div className="flex items-center gap-2 ml-auto" data-loopui='1'>
-            <button
-              type="button"
-              onClick={async () => {
-                try {
-                  await exportNotationPdf(notationExportRef.current, { title: "Drum Notation" });
-                } catch (e) {
-                  console.error(e);
-                  alert(e?.message || "Failed to export PDF");
-                }
-              }}
-              className="touch-none select-none px-3 py-1.5 rounded border text-sm bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60 capitalize"
-              title="Print the current notation"
-            >
-              print
-            </button>
-
-            <button
-              onClick={togglePlaybackFromBeginning}
-              className={`touch-none select-none px-3 py-1.5 rounded border text-sm capitalize ${
-                playback.isPlaying
-                  ? "bg-neutral-800 border-neutral-600 text-white"
-                  : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
-              }`}
-            >
-              {playback.isPlaying ? "stop" : "play"}
-            </button>
-
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-neutral-300">BPM</span>
-              <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
-                <button
-                  type="button"
-                  onPointerDown={() => startBpmRepeat(-1)}
-                  onPointerUp={stopBpmRepeat}
-                  onPointerCancel={stopBpmRepeat}
-                  onPointerLeave={stopBpmRepeat}
-                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                  aria-label="Decrease BPM"
-                >
-                  −
-                </button>
-
-                <input
-                  type="number"
-                  inputMode="numeric"
-                  min={20}
-                  max={400}
-                  value={bpmDraft}
-                  onFocus={(e) => e.target.select()}
-                  onClick={(e) => e.target.select()}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    setBpmDraft(v);
-                    if (v === "") return;
-                    const n = Number(v);
-                    // Allow partial typing (e.g. "3" -> "33" -> "333") without snapping to min.
-                    // Only live-update BPM when the typed number is already in-range.
-                    if (Number.isFinite(n)) {
-                      const rounded = Math.round(n);
-                      if (rounded >= 20 && rounded <= 400) setBpm(rounded);
-                    }
-                  }}
-                  onBlur={() => {
-                    if (bpmDraft === "") {
-                      setBpmDraft(String(bpm));
-                      return;
-                    }
-                    const n = Number(bpmDraft);
-                    if (!Number.isFinite(n)) {
-                      setBpmDraft(String(bpm));
-                      return;
-                    }
-                    const clamped = clampBpm(Math.round(n));
-                    setBpm(clamped);
-                    setBpmDraft(String(clamped));
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") e.currentTarget.blur();
-                  }}
-                  className="w-[70px] px-3 py-1 text-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700 outline-none appearance-none no-spinner"
-                  aria-label="BPM"
-                />
-
-                <button
-                  type="button"
-                  onPointerDown={() => startBpmRepeat(1)}
-                  onPointerUp={stopBpmRepeat}
-                  onPointerCancel={stopBpmRepeat}
-                  onPointerLeave={stopBpmRepeat}
-                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                  aria-label="Increase BPM"
-                >
-                  +
-                </button>
-              </div>
-            </div>
-
-            <button
-              onClick={() => setActiveTab((t) => (t === "layout" ? "timing" : "layout"))}
-              className={`touch-none select-none px-3 py-1.5 rounded border text-sm capitalize ${
-                activeTab === "layout"
-                  ? "bg-neutral-800 border-neutral-600 text-white"
-                  : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
-              }`}
-            >
-              layout
-            </button>
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-neutral-300">Drumkit</span>
-              <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
-                <button
-                  type="button"
-                  onClick={() => stepPreset(-1)}
-                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                  aria-label="Previous preset"
-                >
-                  −
-                </button>
-                <div
-                  onClick={() => setIsKitEditorOpen(true)}
-                  className="min-w-[88px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700 capitalize cursor-pointer hover:bg-neutral-700/60"
-                  title="Open drumkit editor"
-                >
-                  {selectedPreset}
-                </div>
-                <button
-                  type="button"
-                  onClick={() => stepPreset(1)}
-                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                  aria-label="Next preset"
-                >
-                  +
-                </button>
-              </div>
-            </div>
-          </div>
-
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => setActiveTab((t) => (t === "timing" ? "none" : "timing"))}
+            className={`touch-none select-none px-3 py-1.5 rounded border text-sm capitalize ${
+              activeTab === "timing"
+                ? "bg-neutral-800 border-neutral-600 text-white"
+                : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
+            }`}
+          >
+            Drum Grid
+          </button>
+          <button
+            onClick={() => setActiveTab((t) => (t === "notation" ? "none" : "notation"))}
+            className={`touch-none select-none px-3 py-1.5 rounded border text-sm capitalize ${
+              activeTab === "notation"
+                ? "bg-neutral-800 border-neutral-600 text-white"
+                : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
+            }`}
+          >
+            notation
+          </button>
+          <button
+            onClick={() => setActiveTab((t) => (t === "selection" ? "none" : "selection"))}
+            className={`touch-none select-none px-3 py-1.5 rounded border text-sm capitalize ${
+              activeTab === "selection"
+                ? "bg-neutral-800 border-neutral-600 text-white"
+                : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
+            }`}
+          >
+            editing
+          </button>
         </div>
 
         {activeTab === "timing" && (
-          <div className="flex flex-wrap items-center gap-4">
-            
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-neutral-300 whitespace-nowrap">Resolution</span>
-              <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
-                <button
-                  type="button"
-                  onClick={() => {
-                    const order = [4, 8, 16, 32];
-                    const idx = order.indexOf(resolution);
-                    const next = order[(idx - 1 + order.length) % order.length];
-                    handleResolutionChange(next);
-                  }}
-                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                >
-                  −
-                </button>
-                <div className="min-w-[60px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700">
-                  {resolution === 4 ? "4th" : resolution === 8 ? "8th" : resolution === 16 ? "16th" : "32th"}
+          <div className="flex flex-col gap-3">
+            <div ref={gridMenuRowPrimaryRef} className="flex flex-wrap items-center gap-4">
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-neutral-300 whitespace-nowrap">Resolution</span>
+                <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const order = [4, 8, 16, 32];
+                      const idx = order.indexOf(resolution);
+                      const next = order[(idx - 1 + order.length) % order.length];
+                      handleResolutionChange(next);
+                    }}
+                    className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                  >
+                    −
+                  </button>
+                  <div className="min-w-[60px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700">
+                    {resolution === 4 ? "4th" : resolution === 8 ? "8th" : resolution === 16 ? "16th" : "32th"}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const order = [4, 8, 16, 32];
+                      const idx = order.indexOf(resolution);
+                      const next = order[(idx + 1) % order.length];
+                      handleResolutionChange(next);
+                    }}
+                    className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                  >
+                    +
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const order = [4, 8, 16, 32];
-                    const idx = order.indexOf(resolution);
-                    const next = order[(idx + 1) % order.length];
-                    handleResolutionChange(next);
-                  }}
-                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                >
-                  +
-                </button>
               </div>
-            </div>
 
-
-            <button
-              type="button"
-              onClick={() => setKeepTiming((v) => !v)}
-              className={`touch-none select-none px-3 py-[5px] rounded border text-sm ${
-                keepTiming
-                  ? "bg-neutral-800 border-neutral-700 text-white"
-                  : "bg-neutral-900 border-neutral-800 text-neutral-600"
-              }`}
-              title="Keep timing when changing resolution (remap steps)"
-            >
-              Keep timing
-            </button>
-
-
-            
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-neutral-300">Bars</span>
-              <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
-                <button
-                  type="button"
-                  onClick={() => setBars((b) => Math.max(1, b - 1))}
-                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                  aria-label="Decrease bars"
-                >
-                  −
-                </button>
-                <div className="min-w-[44px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700">
-                  {bars}
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setBars((b) => Math.min(8, b + 1))}
-                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                  aria-label="Increase bars"
-                >
-                  +
-                </button>
-              </div>
-            </div>
-
-
-
-            
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-neutral-300 whitespace-nowrap">Time</span>
-              <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
-                <button
-                  type="button"
-                  onClick={() => {
-                    const order = [
-                      { n: 4, d: 4 },
-                      { n: 3, d: 4 },
-                      { n: 6, d: 8 },
-                    ];
-                    const idx = order.findIndex((x) => x.n === timeSig.n && x.d === timeSig.d);
-                    const next = order[(idx - 1 + order.length) % order.length];
-                    handleTimeSigChange(next);
-                  }}
-                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                  aria-label="Previous time signature"
-                >
-                  −
-                </button>
-                <div className="min-w-[64px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700">
-                  {timeSig.n}/{timeSig.d}
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const order = [
-                      { n: 4, d: 4 },
-                      { n: 3, d: 4 },
-                      { n: 6, d: 8 },
-                    ];
-                    const idx = order.findIndex((x) => x.n === timeSig.n && x.d === timeSig.d);
-                    const next = order[(idx + 1) % order.length];
-                    handleTimeSigChange(next);
-                  }}
-                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                  aria-label="Next time signature"
-                >
-                  +
-                </button>
-              </div>
-            </div>
-
-</div>
-        )}
-
-        {activeTab === "layout" && (
-          <div className="flex flex-wrap items-center gap-4">
-
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-neutral-300 whitespace-nowrap">Bars/line</span>
-              <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
-                <button
-                  type="button"
-                  onClick={() => setBarsPerLine((v) => Math.max(1, v - 1))}
-                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                >
-                  −
-                </button>
-                <div className="min-w-[44px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700">
-                  {barsPerLine}
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setBarsPerLine((v) => Math.min(bars, v + 1))}
-                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                >
-                  +
-                </button>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-neutral-300 whitespace-nowrap">Grid bars/line</span>
-              <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
-                <button
-                  type="button"
-                  onClick={() => setGridBarsPerLine((v) => Math.max(1, v - 1))}
-                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                >
-                  −
-                </button>
-                <div className="min-w-[44px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700">
-                  {gridBarsPerLine}
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setGridBarsPerLine((v) => Math.min(bars, v + 1))}
-                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                >
-                  +
-                </button>
-              </div>
-            </div>
-
-            <label className="text-sm text-neutral-300 flex items-center gap-2">
-              <span className="whitespace-nowrap">Layout</span>
-              <select
-                value={layout}
-                onChange={(e) => setLayout(e.target.value)}
-                className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1"
+              <button
+                type="button"
+                onClick={() => setKeepTiming((v) => !v)}
+                className={`touch-none select-none px-3 py-[5px] rounded border text-sm ${
+                  keepTiming
+                    ? "bg-neutral-800 border-neutral-700 text-white"
+                    : "bg-neutral-900 border-neutral-800 text-neutral-600"
+                }`}
+                title="Keep timing when changing resolution (remap steps)"
               >
-                <option value="grid-top">Grid top / Notation bottom</option>
-                <option value="notation-top">Notation top / Grid bottom</option>
-                <option value="grid-right">Grid left / Notation right</option>
-                <option value="notation-right">Notation left / Grid right</option>
-              </select>
-            </label>
+                Keep timing
+              </button>
 
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-neutral-300">Bars</span>
+                <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
+                  <button
+                    type="button"
+                    onClick={() => setBars((b) => Math.max(1, b - 1))}
+                    className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                    aria-label="Decrease bars"
+                  >
+                    −
+                  </button>
+                  <div className="min-w-[44px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700">
+                    {bars}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setBars((b) => Math.min(8, b + 1))}
+                    className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                    aria-label="Increase bars"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
 
-</div>
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-neutral-300 whitespace-nowrap">Time</span>
+                <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const order = [
+                        { n: 4, d: 4 },
+                        { n: 3, d: 4 },
+                        { n: 6, d: 8 },
+                      ];
+                      const idx = order.findIndex((x) => x.n === timeSig.n && x.d === timeSig.d);
+                      const next = order[(idx - 1 + order.length) % order.length];
+                      handleTimeSigChange(next);
+                    }}
+                    className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                    aria-label="Previous time signature"
+                  >
+                    −
+                  </button>
+                  <div className="min-w-[64px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700">
+                    {timeSig.n}/{timeSig.d}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const order = [
+                        { n: 4, d: 4 },
+                        { n: 3, d: 4 },
+                        { n: 6, d: 8 },
+                      ];
+                      const idx = order.findIndex((x) => x.n === timeSig.n && x.d === timeSig.d);
+                      const next = order[(idx + 1) % order.length];
+                      handleTimeSigChange(next);
+                    }}
+                    className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                    aria-label="Next time signature"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div ref={gridMenuRowSecondaryRef} className="flex flex-wrap items-center gap-4">
+            </div>
+          </div>
         )}
 
         {activeTab === "selection" && (
-          <div className="flex flex-wrap items-center gap-4">
+          <div ref={selectionMenuRowRef} className="flex flex-wrap items-center gap-4">
             
 
             
@@ -1488,25 +1769,105 @@ useEffect(() => {
                 </button>
               </div>
             </div>
-
-<button
-              onMouseDown={(e) => e.stopPropagation()}
-              onClick={() => {
-if (!loopRule) return;
-                setBaseGridWithUndo((prev) => bakeLoopInto(prev, loopRule, loopRepeats));
-                setLoopRule(null);
-                setSelection(null);
-              }}
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-neutral-300">Loop overlap</span>
+              <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setLoopOverlapMode((prev) => {
+                      const idx = Math.max(0, MOVE_OVERLAP_MODES.findIndex((m) => m.id === prev));
+                      return MOVE_OVERLAP_MODES[(idx - 1 + MOVE_OVERLAP_MODES.length) % MOVE_OVERLAP_MODES.length].id;
+                    })
+                  }
+                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                  aria-label="Previous loop overlap mode"
+                >
+                  −
+                </button>
+                <div className="min-w-[126px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700">
+                  {MOVE_OVERLAP_MODES.find((m) => m.id === loopOverlapMode)?.label || "Fill in gaps"}
+                </div>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setLoopOverlapMode((prev) => {
+                      const idx = Math.max(0, MOVE_OVERLAP_MODES.findIndex((m) => m.id === prev));
+                      return MOVE_OVERLAP_MODES[(idx + 1) % MOVE_OVERLAP_MODES.length].id;
+                    })
+                  }
+                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                  aria-label="Next loop overlap mode"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-neutral-300">Move overlap</span>
+              <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setMoveOverlapMode((prev) => {
+                      const idx = Math.max(0, MOVE_OVERLAP_MODES.findIndex((m) => m.id === prev));
+                      return MOVE_OVERLAP_MODES[(idx - 1 + MOVE_OVERLAP_MODES.length) % MOVE_OVERLAP_MODES.length].id;
+                    })
+                  }
+                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                  aria-label="Previous move overlap mode"
+                >
+                  −
+                </button>
+                <div className="min-w-[126px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700">
+                  {MOVE_OVERLAP_MODES.find((m) => m.id === moveOverlapMode)?.label || "All overrides all"}
+                </div>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setMoveOverlapMode((prev) => {
+                      const idx = Math.max(0, MOVE_OVERLAP_MODES.findIndex((m) => m.id === prev));
+                      return MOVE_OVERLAP_MODES[(idx + 1) % MOVE_OVERLAP_MODES.length].id;
+                    })
+                  }
+                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                  aria-label="Next move overlap mode"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setWrapSelectionMoveEnabled((v) => !v)}
               className={`touch-none select-none px-3 py-[5px] rounded border text-sm ${
-                loopRule ? "bg-neutral-800 border-neutral-700" : "bg-neutral-900 border-neutral-800 text-neutral-600"
+                wrapSelectionMoveEnabled
+                  ? "bg-neutral-800 border-neutral-700 text-white"
+                  : "bg-neutral-900 border-neutral-800 text-neutral-600"
               }`}
-              title="Bake loop: commit repeated notes and remove the active loop"
+              title="When moving selection with arrows, wrap around at grid edges"
             >
-              Bake loop
+              Wrap edges
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                setMoveOverrideBehavior((prev) =>
+                  prev === "permanent" ? "temporary" : "permanent"
+                )
+              }
+              className={`touch-none select-none px-3 py-[5px] rounded border text-sm ${
+                moveOverrideBehavior === "permanent"
+                  ? "bg-neutral-800 border-neutral-700 text-white"
+                  : "bg-neutral-900 border-neutral-800 text-neutral-600"
+              }`}
+              title="When on: overlaps become permanent changes"
+            >
+              Permanent
             </button>
           </div>
         )}{activeTab === "notation" && (
-          <div className="flex flex-wrap items-center gap-4">
+          <div ref={notationMenuRowRef} className="flex flex-wrap items-center gap-4">
             <button
               type="button"
               onClick={() => setMergeRests((v) => !v)}
@@ -1559,6 +1920,22 @@ if (!loopRule) return;
               title="Render beams horizontally (no tilt)"
             >
               Flat beams
+            </button>
+            <button
+              type="button"
+              onClick={() => setIsMidiDialogOpen(true)}
+              className="touch-none select-none px-3 py-1.5 rounded border text-sm bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60 capitalize"
+              title="Export current pattern as MIDI file"
+            >
+              export midi
+            </button>
+            <button
+              type="button"
+              onClick={() => setIsPrintDialogOpen(true)}
+              className="touch-none select-none px-3 py-1.5 rounded border text-sm bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60 capitalize"
+              title="Print the current notation"
+            >
+              print
             </button>
 
 
@@ -1616,6 +1993,7 @@ if (!loopRule) return;
                 loopRule={loopRule}
                 loopRepeats={loopRepeats}
                 setLoopRule={setLoopRule}
+                wrappedSelectionCells={wrappedSelectionCells}
                 playhead={playback.playhead}
       />
             </div>
@@ -1641,6 +2019,7 @@ if (!loopRule) return;
                 loopRule={loopRule}
                 loopRepeats={loopRepeats}
                 setLoopRule={setLoopRule}
+                wrappedSelectionCells={wrappedSelectionCells}
                 playhead={playback.playhead}
               />
             </div>
@@ -1665,16 +2044,166 @@ if (!loopRule) return;
         )}
       </main>
 
+      <footer className="mt-6 pt-1" data-loopui='1'>
+        <div className="flex flex-wrap items-center justify-end gap-3">
+          {activeTab === "layout" && (
+          <div ref={layoutMenuRowRef} className="flex flex-wrap items-center gap-4">
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-neutral-300 whitespace-nowrap">Bars/line</span>
+              <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
+                <button
+                  type="button"
+                  onClick={() => setBarsPerLine((v) => Math.max(1, v - 1))}
+                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                >
+                  −
+                </button>
+                <div className="min-w-[44px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700">
+                  {barsPerLine}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setBarsPerLine((v) => Math.min(bars, v + 1))}
+                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-neutral-300 whitespace-nowrap">Grid bars/line</span>
+              <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
+                <button
+                  type="button"
+                  onClick={() => setGridBarsPerLine((v) => Math.max(1, v - 1))}
+                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                >
+                  −
+                </button>
+                <div className="min-w-[44px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700">
+                  {gridBarsPerLine}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setGridBarsPerLine((v) => Math.min(bars, v + 1))}
+                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+
+            <label className="text-sm text-neutral-300 flex items-center gap-2">
+              <span className="whitespace-nowrap">Layout</span>
+              <select
+                value={layout}
+                onChange={(e) => setLayout(e.target.value)}
+                className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1"
+              >
+                <option value="grid-top">Grid top / Notation bottom</option>
+                <option value="notation-top">Notation top / Grid bottom</option>
+                <option value="grid-right">Grid left / Notation right</option>
+                <option value="notation-right">Notation left / Grid right</option>
+              </select>
+            </label>
+          </div>
+        )}
+          <button
+            onClick={() => setActiveTab((t) => (t === "layout" ? "none" : "layout"))}
+            className={`touch-none select-none px-3 py-1.5 rounded border text-sm capitalize ${
+              activeTab === "layout"
+                ? "bg-neutral-800 border-neutral-600 text-white"
+                : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
+            }`}
+          >
+            layout
+          </button>
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-neutral-300">BPM</span>
+            <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
+              <button
+                type="button"
+                onPointerDown={() => startBpmRepeat(-1)}
+                onPointerUp={stopBpmRepeat}
+                onPointerCancel={stopBpmRepeat}
+                onPointerLeave={stopBpmRepeat}
+                className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                aria-label="Decrease BPM"
+              >
+                −
+              </button>
+
+              <input
+                type="number"
+                inputMode="numeric"
+                min={20}
+                max={400}
+                value={bpmDraft}
+                onFocus={(e) => e.target.select()}
+                onClick={(e) => e.target.select()}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setBpmDraft(v);
+                  if (v === "") return;
+                  const n = Number(v);
+                  if (Number.isFinite(n)) {
+                    const rounded = Math.round(n);
+                    if (rounded >= 20 && rounded <= 400) setBpm(rounded);
+                  }
+                }}
+                onBlur={() => {
+                  if (bpmDraft === "") {
+                    setBpmDraft(String(bpm));
+                    return;
+                  }
+                  const n = Number(bpmDraft);
+                  if (!Number.isFinite(n)) {
+                    setBpmDraft(String(bpm));
+                    return;
+                  }
+                  const clamped = clampBpm(Math.round(n));
+                  setBpm(clamped);
+                  setBpmDraft(String(clamped));
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") e.currentTarget.blur();
+                }}
+                className="w-[70px] px-3 py-1 text-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700 outline-none appearance-none no-spinner"
+                aria-label="BPM"
+              />
+
+              <button
+                type="button"
+                onPointerDown={() => startBpmRepeat(1)}
+                onPointerUp={stopBpmRepeat}
+                onPointerCancel={stopBpmRepeat}
+                onPointerLeave={stopBpmRepeat}
+                className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                aria-label="Increase BPM"
+              >
+                +
+              </button>
+            </div>
+          </div>
+        </div>
+      </footer>
+
       {isKitEditorOpen && (
         <div
           className="fixed inset-0 z-50 bg-black/60 p-4 flex items-center justify-center"
           onMouseDown={() => {
+            if (isSaveAsDialogOpen) {
+              setIsSaveAsDialogOpen(false);
+              setSaveAsName("");
+              return;
+            }
             setIsKitEditorOpen(false);
             setPendingRemoval(null);
           }}
         >
           <div
-            className="w-full max-w-[27rem] max-h-[90vh] overflow-auto rounded-xl border border-neutral-700 bg-neutral-900 p-4 md:p-5"
+            className="w-full max-w-[24rem] max-h-[90vh] overflow-auto rounded-xl border border-neutral-700 bg-neutral-900 p-4 md:p-5"
             onMouseDown={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between gap-3">
@@ -1693,48 +2222,146 @@ if (!loopRule) return;
 
             <div className="mt-4 flex flex-wrap items-center gap-2">
               <span className="text-sm text-neutral-300">Preset</span>
-              <select
-                value={selectedPreset}
-                onChange={(e) => {
-                  const value = e.target.value;
-                  if (value === "custom" && customPresetIds) applyKitIds(customPresetIds);
-                  if (value === "standard") requestPresetChange("standard");
-                  if (value === "full") requestPresetChange("full");
-                }}
-                className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-sm"
+              <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
+                <button
+                  type="button"
+                  onClick={() => stepPreset(-1)}
+                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                  aria-label="Previous preset"
+                >
+                  −
+                </button>
+                <input
+                  type="text"
+                  value={presetNameInlineDraft}
+                  readOnly={!selectedSavedPreset}
+                  onFocus={(e) => {
+                    if (!selectedSavedPreset) return;
+                    e.currentTarget.select();
+                  }}
+                  onChange={(e) => {
+                    if (!selectedSavedPreset) return;
+                    setPresetNameInlineDraft(e.target.value);
+                  }}
+                  onKeyDown={(e) => {
+                    if (!selectedSavedPreset) return;
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      renameSelectedPresetInline();
+                    }
+                    if (e.key === "Escape") {
+                      e.preventDefault();
+                      setPresetNameInlineDraft(selectedSavedPreset.label);
+                    }
+                  }}
+                  className={`min-w-[112px] px-3 py-1 text-sm text-center text-white bg-neutral-800 border-l border-r border-neutral-700 outline-none ${
+                    selectedSavedPreset ? "cursor-text" : "cursor-default"
+                  }`}
+                  title={selectedSavedPreset ? "Edit name and press Enter to save" : "Built-in presets cannot be renamed"}
+                />
+                <button
+                  type="button"
+                  onClick={() => stepPreset(1)}
+                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                  aria-label="Next preset"
+                >
+                  +
+                </button>
+              </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSaveAsName("");
+                    setIsSaveAsDialogOpen(true);
+                  }}
+                  className="px-2.5 py-1 rounded border text-sm border-neutral-700 text-white bg-neutral-800 hover:bg-neutral-700/60"
+                  title="Save current drumkit as a new preset"
               >
-                {hasSavedCustomPreset && <option value="custom">Custom</option>}
-                <option value="standard">Standard</option>
-                <option value="full">Full</option>
-              </select>
+                Save As
+              </button>
               <button
                 type="button"
-                onClick={() => setPresetChangeWarningEnabled((v) => !v)}
-                className={`ml-3 px-2.5 py-1 rounded border text-sm ${
-                  presetChangeWarningEnabled
+                onClick={deleteSelectedPreset}
+                disabled={!selectedSavedPreset}
+                className={`px-2.5 py-1 rounded border text-sm ${
+                  selectedSavedPreset
+                    ? "border-red-900 text-red-200 hover:bg-red-900/30"
+                    : "border-neutral-800 text-neutral-500 bg-neutral-900/60 cursor-not-allowed"
+                }`}
+                title={selectedSavedPreset ? "Delete selected preset" : "Only saved presets can be deleted"}
+              >
+                Delete
+              </button>
+              <button
+                type="button"
+                onClick={() => setKeepTracksWithNotesEnabled((v) => !v)}
+                className={`px-2.5 py-1 rounded border text-sm ${
+                  keepTracksWithNotesEnabled
                     ? "border-neutral-700 text-white bg-neutral-800 hover:bg-neutral-700/60"
                     : "border-neutral-800 text-neutral-500 bg-neutral-900/60 hover:bg-neutral-800/40"
                 }`}
-                title="Toggle preset change warning"
+                title="Automatically keep tracks with notes"
               >
-                Preset Change Warning
+                Keep tracks with notes
               </button>
             </div>
+
+            {isSaveAsDialogOpen && (
+              <div className="mt-3 rounded-lg border border-neutral-700 bg-neutral-950/50 p-3" onMouseDown={(e) => e.stopPropagation()}>
+                <div className="text-sm text-neutral-200 mb-2">Save Preset As</div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    type="text"
+                    autoFocus
+                    value={saveAsName}
+                    onChange={(e) => setSaveAsName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        savePresetAsNew();
+                      }
+                      if (e.key === "Escape") {
+                        e.preventDefault();
+                        setIsSaveAsDialogOpen(false);
+                        setSaveAsName("");
+                      }
+                    }}
+                    placeholder="Preset name"
+                    className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-sm"
+                  />
+                  <button
+                    type="button"
+                    onClick={savePresetAsNew}
+                    disabled={!saveAsName.trim()}
+                    className={`px-2.5 py-1 rounded border text-sm ${
+                      saveAsName.trim()
+                        ? "border-neutral-700 text-white bg-neutral-800 hover:bg-neutral-700/60"
+                        : "border-neutral-800 text-neutral-500 bg-neutral-900/60 cursor-not-allowed"
+                    }`}
+                  >
+                    Save
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsSaveAsDialogOpen(false);
+                      setSaveAsName("");
+                    }}
+                    className="px-2.5 py-1 rounded border border-neutral-700 text-sm text-neutral-300 hover:bg-neutral-800/60"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
 
             {pendingRemoval && (
               <div className="mt-4 rounded-lg border border-amber-700/70 bg-amber-950/30 p-3">
                 <div className="text-sm text-amber-200">
                   {(INSTRUMENT_BY_ID[pendingRemoval.instId]?.label || pendingRemoval.instId) +
-                    " has notes. Remove it by deleting notes, or move notes to another track."}
+                    " has notes."}
                 </div>
                 <div className="mt-2 flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={confirmRemoveDeleteNotes}
-                    className="px-3 py-1.5 rounded border border-amber-600 text-sm text-amber-100 hover:bg-amber-800/40"
-                  >
-                    Delete notes and remove
-                  </button>
                   <select
                     value={pendingRemoval.moveTargetId || ""}
                     onChange={(e) =>
@@ -1763,7 +2390,14 @@ if (!loopRule) return;
                         : "border-neutral-700 text-neutral-500 cursor-not-allowed"
                     }`}
                   >
-                    Move notes and remove
+                    Move notes
+                  </button>
+                  <button
+                    type="button"
+                    onClick={confirmRemoveDeleteNotes}
+                    className="px-3 py-1.5 rounded border border-amber-600 text-sm text-amber-100 hover:bg-amber-800/40"
+                  >
+                    Delete notes
                   </button>
                   <button
                     type="button"
@@ -1776,83 +2410,29 @@ if (!loopRule) return;
               </div>
             )}
 
-            <div className="mt-5 grid grid-cols-1 md:grid-cols-[1.35fr_0.65fr] gap-1">
+            <div className="mt-5 grid grid-cols-[1.35fr_0.65fr] gap-1">
               <div>
                 <div className="text-sm font-medium mb-2">Kit Order</div>
                 <div className="text-xs text-neutral-400 mb-2">Drag rows to reorder instruments.</div>
+                <DndContext sensors={kitOrderSensors} collisionDetection={closestCenter} onDragEnd={onKitOrderDragEnd}>
+                <SortableContext items={kitInstrumentIds} strategy={verticalListSortingStrategy}>
                 <div className="space-y-2">
                   {kitInstrumentIds.map((id, idx) => {
                     const inst = INSTRUMENT_BY_ID[id];
                     if (!inst) return null;
                     return (
-                      <div
+                      <SortableKitOrderRow
                         key={`kit-${id}`}
-                        draggable
-                        onDragStart={(e) => {
-                          setDraggingKitId(id);
-                          e.dataTransfer.effectAllowed = "move";
-                          e.dataTransfer.setData("text/plain", id);
-                          e.dataTransfer.setDragImage(getTransparentDragImage(), 0, 0);
-                        }}
-                        onDragEnd={() => setDraggingKitId(null)}
-                        onDragOver={(e) => {
-                          e.preventDefault();
-                          e.dataTransfer.dropEffect = "move";
-                          const dragId = e.dataTransfer.getData("text/plain") || draggingKitId;
-                          if (dragId && dragId !== id) moveInstrumentBefore(dragId, id);
-                        }}
-                        onDrop={(e) => {
-                          e.preventDefault();
-                          const dragId = e.dataTransfer.getData("text/plain") || draggingKitId;
-                          moveInstrumentBefore(dragId, id);
-                          setDraggingKitId(null);
-                        }}
-                        className={`flex items-center gap-1 rounded border px-1.5 py-1 ${
-                          draggingKitId === id
-                            ? "border-cyan-700/70 bg-cyan-950/20"
-                            : "border-neutral-800"
-                        }`}
-                      >
-                        <div className="w-3.5 text-[11px] text-neutral-400">{idx + 1}</div>
-                        <div className="text-neutral-500 text-[9px]">⋮⋮</div>
-                        <div className="flex-1 text-sm leading-tight pr-1">
-                          {inst.label}
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => moveInstrument(id, -1)}
-                          disabled={idx === 0}
-                          className={`h-6 w-6 shrink-0 rounded border text-[11px] leading-none ${
-                            idx === 0
-                              ? "border-neutral-800 text-neutral-600 cursor-not-allowed"
-                              : "border-neutral-700 text-neutral-200 hover:bg-neutral-800/60"
-                          }`}
-                        >
-                          ↑
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => moveInstrument(id, 1)}
-                          disabled={idx === kitInstrumentIds.length - 1}
-                          className={`h-6 w-6 shrink-0 rounded border text-[11px] leading-none ${
-                            idx === kitInstrumentIds.length - 1
-                              ? "border-neutral-800 text-neutral-600 cursor-not-allowed"
-                              : "border-neutral-700 text-neutral-200 hover:bg-neutral-800/60"
-                          }`}
-                        >
-                          ↓
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => requestRemoveInstrument(id)}
-                          className="h-6 px-2 shrink-0 rounded border border-red-900 text-[10px] leading-none text-red-200 hover:bg-red-900/30"
-                        >
-                          remove
-                        </button>
-                      </div>
+                        id={id}
+                        index={idx}
+                        label={inst.label}
+                        onRemove={() => requestRemoveInstrument(id)}
+                      />
                     );
                   })}
                 </div>
+                </SortableContext>
+                </DndContext>
               </div>
 
               <div>
@@ -1910,33 +2490,29 @@ if (!loopRule) return;
             className="w-full max-w-xl rounded-xl border border-neutral-700 bg-neutral-900 p-4 md:p-5"
             onMouseDown={(e) => e.stopPropagation()}
           >
-            <h3 className="text-base font-semibold">Preset Change Warning</h3>
+            <h3 className="text-base font-semibold">Remove Notes</h3>
             <p className="mt-2 text-sm text-neutral-300">
-              Switching to <span className="capitalize">{pendingPresetChange.presetName}</span> would remove tracks that contain notes:
+              Switching to <span>{PRESET_LABELS[pendingPresetChange.presetName] || pendingPresetChange.presetName}</span> would remove tracks that contain notes:
             </p>
             <div className="mt-2 text-sm text-amber-200">
               {pendingPresetChange.removedWithNotes
                 .map((id) => INSTRUMENT_BY_ID[id]?.label || id)
                 .join(", ")}
             </div>
-            <p className="mt-3 text-xs text-neutral-400">
-              Default action keeps tracks that have notes and removes only empty tracks.
-            </p>
-
             <div className="mt-4 flex flex-wrap items-center gap-2">
               <button
                 type="button"
                 onClick={confirmPresetKeepNotedTracks}
                 className="px-3 py-1.5 rounded border border-cyan-600 text-sm text-cyan-100 hover:bg-cyan-800/30"
               >
-                Keep tracks with notes (Default)
+                {keepTracksWithNotesEnabled ? "Keep tracks with notes (Default)" : "Keep tracks with notes"}
               </button>
               <button
                 type="button"
                 onClick={confirmPresetDeleteAnyway}
                 className="px-3 py-1.5 rounded border border-red-700 text-sm text-red-100 hover:bg-red-900/30"
               >
-                Delete anyway
+                {keepTracksWithNotesEnabled ? "Remove anyway" : "Remove anyway (Default)"}
               </button>
               <button
                 type="button"
@@ -1950,6 +2526,190 @@ if (!loopRule) return;
         </div>
       )}
 
+      {isPrintDialogOpen && (
+        <div
+          className="fixed inset-0 z-[90] bg-black/60 p-4 flex items-center justify-center"
+          onMouseDown={() => setIsPrintDialogOpen(false)}
+        >
+          <div
+            className="w-full max-w-md rounded-xl border border-neutral-700 bg-neutral-900 p-4 md:p-5"
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-base font-semibold">Print Notation</h3>
+            <div className="mt-4 grid grid-cols-1 gap-3">
+              <label className="text-sm text-neutral-300 flex flex-col gap-1">
+                <span>Title</span>
+                <input
+                  type="text"
+                  value={printTitle}
+                  onChange={(e) => setPrintTitle(e.target.value)}
+                  placeholder="Untitled"
+                  className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1.5 text-sm text-white"
+                />
+              </label>
+              <label className="text-sm text-neutral-300 flex flex-col gap-1">
+                <span>Composer</span>
+                <input
+                  type="text"
+                  value={printComposer}
+                  onChange={(e) => setPrintComposer(e.target.value)}
+                  placeholder="Composer"
+                  className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1.5 text-sm text-white"
+                />
+              </label>
+              <button
+                type="button"
+                onClick={() => setPrintWatermarkEnabled((v) => !v)}
+                className={`w-fit px-2.5 py-1 rounded border text-sm ${
+                  !printWatermarkEnabled
+                    ? "border-neutral-700 text-white bg-neutral-800 hover:bg-neutral-700/60"
+                    : "border-neutral-800 text-neutral-500 bg-neutral-900/60 hover:bg-neutral-800/40"
+                }`}
+                title="Show footer watermark in exported PDF"
+              >
+                Disable watermark
+              </button>
+            </div>
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setIsPrintDialogOpen(false)}
+                className="px-3 py-1.5 rounded border border-neutral-700 text-sm text-neutral-300 hover:bg-neutral-800/60"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    await exportNotationPdf(notationExportRef.current, {
+                      title: printTitle.trim() || "Drum Notation",
+                      scoreTitle: printTitle.trim(),
+                      composer: printComposer.trim(),
+                      watermark: printWatermarkEnabled,
+                    });
+                    setIsPrintDialogOpen(false);
+                  } catch (e) {
+                    console.error(e);
+                    alert(e?.message || "Failed to export PDF");
+                  }
+                }}
+                className="px-3 py-1.5 rounded border border-neutral-700 text-sm text-white bg-neutral-800 hover:bg-neutral-700/60"
+              >
+                Print
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isMidiDialogOpen && (
+        <div
+          className="fixed inset-0 z-[91] bg-black/60 p-4 flex items-center justify-center"
+          onMouseDown={() => setIsMidiDialogOpen(false)}
+        >
+          <div
+            className="w-full max-w-md rounded-xl border border-neutral-700 bg-neutral-900 p-4 md:p-5"
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-base font-semibold">Export MIDI</h3>
+            <div className="mt-4 grid grid-cols-1 gap-3">
+              <label className="text-sm text-neutral-300 flex flex-col gap-1">
+                <span>Title</span>
+                <input
+                  type="text"
+                  value={printTitle}
+                  onChange={(e) => setPrintTitle(e.target.value)}
+                  placeholder="Untitled"
+                  className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1.5 text-sm text-white"
+                />
+              </label>
+              <label className="text-sm text-neutral-300 flex flex-col gap-1">
+                <span>Composer</span>
+                <input
+                  type="text"
+                  value={printComposer}
+                  onChange={(e) => setPrintComposer(e.target.value)}
+                  placeholder="Composer"
+                  className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1.5 text-sm text-white"
+                />
+              </label>
+            </div>
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setIsMidiDialogOpen(false)}
+                className="px-3 py-1.5 rounded border border-neutral-700 text-sm text-neutral-300 hover:bg-neutral-800/60"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  try {
+                    exportDrumMidi({
+                      grid: computedGrid,
+                      instruments,
+                      columns,
+                      resolution,
+                      bpm,
+                      timeSig,
+                      title: printTitle.trim(),
+                      composer: printComposer.trim(),
+                      filename: printTitle.trim() || "Drum Notation",
+                    });
+                    setIsMidiDialogOpen(false);
+                  } catch (e) {
+                    console.error(e);
+                    alert(e?.message || "Failed to export MIDI");
+                  }
+                }}
+                className="px-3 py-1.5 rounded border border-neutral-700 text-sm text-white bg-neutral-800 hover:bg-neutral-700/60"
+              >
+                Export
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+    </div>
+  );
+}
+
+
+function SortableKitOrderRow({
+  id,
+  index,
+  label,
+  onRemove,
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      {...attributes}
+      {...listeners}
+      className={`flex items-center gap-1.5 rounded border px-1.5 py-1 ${
+        isDragging ? "border-cyan-700/70 bg-cyan-950/20" : "border-neutral-800"
+      }`}
+    >
+      <div className="w-3.5 text-[11px] text-neutral-400">{index + 1}</div>
+      <div className="mr-1 text-neutral-500 text-[9px]">⋮⋮</div>
+      <div className="flex-1 whitespace-nowrap text-sm leading-tight pr-1">{label}</div>
+      <button
+        type="button"
+        onClick={onRemove}
+        className="h-6 px-2 shrink-0 rounded border border-red-900 text-[10px] leading-none text-red-200 hover:bg-red-900/30"
+      >
+        remove
+      </button>
     </div>
   );
 }
@@ -1960,7 +2720,7 @@ function Grid({
   grid, columns, bars, stepsPerBar, resolution, timeSig, gridBarsPerLine,
   cycleVelocity, toggleGhost, selection, setSelection, loopRule,
     loopRepeats,
-  setLoopRule, playhead
+  setLoopRule, wrappedSelectionCells, playhead
 }) {
 
   const notifySelectionFinalized = React.useCallback(() => {
@@ -2152,9 +2912,14 @@ function Grid({
 
     // Only show selection outline if it spans at least 2 cells
     if (selection) {
+      const r = instruments.findIndex((x) => x.id === instId);
+      if (wrappedSelectionCells && wrappedSelectionCells.length >= 2) {
+        return wrappedSelectionCells.some((cell) => cell.row === r && cell.col === stepIndex)
+          ? "selected"
+          : "none";
+      }
       const width = selection.endExclusive - selection.start;
       if (width >= 2) {
-        const r = instruments.findIndex((x) => x.id === instId);
         if (
           r >= selection.rowStart &&
           r <= selection.rowEnd &&
@@ -2221,7 +2986,25 @@ function Grid({
 
             {instruments.map((inst) => (
               <React.Fragment key={`${inst.id}-${lineIdx}`}>
-                <div className="pr-2 text-xs text-right whitespace-nowrap select-none">{inst.label}</div>
+                <div
+                  className="pr-2 text-xs text-right whitespace-nowrap select-none cursor-pointer hover:text-neutral-200"
+                  onMouseDown={(e) => {
+                    e.stopPropagation();
+                    if (e.button !== 0) return;
+                    const r = instruments.findIndex((x) => x.id === inst.id);
+                    if (r < 0) return;
+                    setSelection({
+                      rowStart: r,
+                      rowEnd: r,
+                      start: 0,
+                      endExclusive: columns,
+                    });
+                    notifySelectionFinalized();
+                  }}
+                  title="Select full row"
+                >
+                  {inst.label}
+                </div>
                 {timeline.map((t, i) => {
                   if (t.type === "gap") return <div key={`g-${inst.id}-${lineIdx}-${i}`} />;
                   const val = grid[inst.id]?.[t.stepIndex] ?? CELL.OFF;
@@ -2434,6 +3217,19 @@ function Grid({
                       onMouseDown={(e) => {
                         e.stopPropagation();
                         if (loopRule) return;
+                        // Guard against stale ghost press state leaking into a new interaction.
+                        if (press.current.pointerId === "mouse" && press.current.mode === "ghostDone") {
+                          if (longPress.current.timer) {
+                            window.clearTimeout(longPress.current.timer);
+                            longPress.current.timer = null;
+                          }
+                          press.current.active = false;
+                          press.current.pointerId = null;
+                          press.current.mode = "none";
+                          press.current.ghostToggled = false;
+                          press.current.didSelect = false;
+                          longPress.current.did = false;
+                        }
 
                         const r = instruments.findIndex((x) => x.id === inst.id);
                         const c = t.stepIndex;
