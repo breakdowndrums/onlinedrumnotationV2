@@ -6,6 +6,7 @@ export function makeAudioEngine() {
   let isPlaying = false;
   let bpm = 120;
   let resolution = 16;
+  let transportColumns = 32;
 
   // Scheduler state
   let currentStep = 0;
@@ -63,9 +64,23 @@ export function makeAudioEngine() {
     buffers = next || {};
   }
 
-  function setTransport({ nextBpm, nextResolution }) {
+  function setTransport({ nextBpm, nextResolution, nextColumns }) {
     if (typeof nextBpm === "number") bpm = nextBpm;
     if (typeof nextResolution === "number") resolution = nextResolution;
+    if (typeof nextColumns === "number" && Number.isFinite(nextColumns) && nextColumns > 0) {
+      const prevColumns = Math.max(1, transportColumns);
+      const mappedColumns = Math.max(1, Math.floor(nextColumns));
+
+      // Keep musical phase stable when step grid size changes (e.g. 8th -> 16th).
+      if (isPlaying && mappedColumns !== prevColumns) {
+        const phase = ((currentStep % prevColumns) + prevColumns) % prevColumns;
+        currentStep = Math.floor((phase / prevColumns) * mappedColumns) % mappedColumns;
+      } else {
+        currentStep = Math.min(currentStep, mappedColumns - 1);
+      }
+
+      transportColumns = mappedColumns;
+    }
   }
 
   function secondsPerStep() {
@@ -193,6 +208,7 @@ function trigger(instId, time, gainValue = 1) {
 
     const snap = getGridSnapshot();
     const maxStep = Math.max(0, (snap.columns ?? 1) - 1);
+    transportColumns = Math.max(1, snap.columns ?? 1);
     currentStep = Math.max(0, Math.min(maxStep, startStep));
     nextNoteTime = audioCtx.currentTime + 0.03;
 

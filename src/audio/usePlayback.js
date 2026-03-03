@@ -18,8 +18,8 @@ export function usePlayback({ instruments, grid, columns, bpm, resolution }) {
   }, [instruments, grid, columns]);
 
   useEffect(() => {
-    engine.setTransport({ nextBpm: bpm, nextResolution: resolution });
-  }, [engine, bpm, resolution]);
+    engine.setTransport({ nextBpm: bpm, nextResolution: resolution, nextColumns: columns });
+  }, [engine, bpm, resolution, columns]);
 
   useEffect(() => {
     engine.setOnStep((step) => setPlayhead(step));

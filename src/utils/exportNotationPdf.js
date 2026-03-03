@@ -9,6 +9,9 @@ export async function exportNotationPdf(containerEl, opts = {}) {
   if (!containerEl) throw new Error("Notation container not found");
 
   const title = opts.title || "drum-notation";
+  const scoreTitle = (opts.scoreTitle || "").trim();
+  const composer = (opts.composer || "").trim();
+  const watermarkEnabled = opts.watermark !== false;
   const svgEls = Array.from(containerEl.querySelectorAll("svg"));
   if (svgEls.length === 0) throw new Error("No notation SVGs found to export");
 
@@ -18,10 +21,12 @@ export async function exportNotationPdf(containerEl, opts = {}) {
 
   const pad = 36; // 0.5 inch
   const maxW = pageW - pad * 2;
-  const maxH = pageH - pad * 2;
 
   for (let i = 0; i < svgEls.length; i++) {
     const svg = svgEls[i];
+    const showHeader = i === 0 && (scoreTitle || composer);
+    const topPad = showHeader ? pad + 36 : pad;
+    const maxH = pageH - topPad - pad;
 
     // Clone so we can safely adjust styling for print without touching UI
     const clone = svg.cloneNode(true);
@@ -50,9 +55,28 @@ export async function exportNotationPdf(containerEl, opts = {}) {
     const outW = svgW * scale;
     const outH = svgH * scale;
     const x = pad + (maxW - outW) / 2;
-    const y = pad + (maxH - outH) / 2;
+    const y = topPad + (maxH - outH) / 2;
 
     if (i > 0) pdf.addPage();
+    if (showHeader) {
+      if (scoreTitle) {
+        pdf.setFont("helvetica", "bold");
+        pdf.setFontSize(22);
+        pdf.text(scoreTitle, pageW / 2, pad - 8 + 16, { align: "center" });
+      }
+      if (composer) {
+        pdf.setFont("helvetica", "normal");
+        pdf.setFontSize(11);
+        pdf.text(`Composer: ${composer}`, pageW - pad, pad - 6 + 16, { align: "right" });
+      }
+    }
+    if (watermarkEnabled) {
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(10);
+      pdf.setTextColor(180, 180, 180);
+      pdf.text("onlinedrumnotation.com", pageW / 2, pageH - 14, { align: "center" });
+      pdf.setTextColor(0, 0, 0);
+    }
 
     // svg2pdf renders into current page; specify x/y and scale
     await svg2pdf(clone, pdf, {
