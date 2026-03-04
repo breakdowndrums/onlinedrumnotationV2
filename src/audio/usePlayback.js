@@ -4,22 +4,27 @@ import { loadSamples } from "./sampleLoader";
 import { SAMPLE_MAP } from "./sampleMap";
 import { primeIOSAudioSync } from "./iosPrime";
 
-export function usePlayback({ instruments, grid, columns, bpm, resolution }) {
+export function usePlayback({ instruments, grid, columns, bpm, resolution, stepQuarterDurations }) {
   const engine = useMemo(() => makeAudioEngine(), []);
   const [isReady, setIsReady] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [playhead, setPlayhead] = useState(0);
   const [error, setError] = useState(null);
 
-  const snapRef = useRef({ instruments, grid, columns });
+  const snapRef = useRef({ instruments, grid, columns, stepQuarterDurations });
 
   useEffect(() => {
-    snapRef.current = { instruments, grid, columns };
-  }, [instruments, grid, columns]);
+    snapRef.current = { instruments, grid, columns, stepQuarterDurations };
+  }, [instruments, grid, columns, stepQuarterDurations]);
 
   useEffect(() => {
-    engine.setTransport({ nextBpm: bpm, nextResolution: resolution, nextColumns: columns });
-  }, [engine, bpm, resolution, columns]);
+    engine.setTransport({
+      nextBpm: bpm,
+      nextResolution: resolution,
+      nextColumns: columns,
+      nextStepQuarterDurations: stepQuarterDurations,
+    });
+  }, [engine, bpm, resolution, columns, stepQuarterDurations]);
 
   useEffect(() => {
     engine.setOnStep((step) => setPlayhead(step));
