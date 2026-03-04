@@ -7,6 +7,7 @@ export function makeAudioEngine() {
   let bpm = 120;
   let resolution = 16;
   let transportColumns = 32;
+  let stepQuarterDurations = [];
 
   // Scheduler state
   let currentStep = 0;
@@ -64,17 +65,53 @@ export function makeAudioEngine() {
     buffers = next || {};
   }
 
-  function setTransport({ nextBpm, nextResolution, nextColumns }) {
+  function setTransport({ nextBpm, nextResolution, nextColumns, nextStepQuarterDurations }) {
     if (typeof nextBpm === "number") bpm = nextBpm;
     if (typeof nextResolution === "number") resolution = nextResolution;
+    const prevStepQuarterDurations = stepQuarterDurations;
+    if (Array.isArray(nextStepQuarterDurations) && nextStepQuarterDurations.length > 0) {
+      stepQuarterDurations = nextStepQuarterDurations.map((v) =>
+        Number.isFinite(v) && v > 0 ? Number(v) : 1 / Math.max(1, resolution / 4)
+      );
+    } else {
+      stepQuarterDurations = [];
+    }
     if (typeof nextColumns === "number" && Number.isFinite(nextColumns) && nextColumns > 0) {
       const prevColumns = Math.max(1, transportColumns);
       const mappedColumns = Math.max(1, Math.floor(nextColumns));
+      const prevDurations =
+        prevStepQuarterDurations.length === prevColumns
+          ? prevStepQuarterDurations
+          : Array.from({ length: prevColumns }, () => 1 / Math.max(1, resolution / 4));
+      const nextDurations =
+        stepQuarterDurations.length === mappedColumns
+          ? stepQuarterDurations
+          : Array.from({ length: mappedColumns }, () => 1 / Math.max(1, resolution / 4));
+      const sum = (arr) => arr.reduce((a, b) => a + b, 0);
+      const prevTotal = Math.max(1e-6, sum(prevDurations));
+      const nextTotal = Math.max(1e-6, sum(nextDurations));
 
       // Keep musical phase stable when step grid size changes (e.g. 8th -> 16th).
-      if (isPlaying && mappedColumns !== prevColumns) {
-        const phase = ((currentStep % prevColumns) + prevColumns) % prevColumns;
-        currentStep = Math.floor((phase / prevColumns) * mappedColumns) % mappedColumns;
+      const durationsChanged =
+        prevDurations.length !== nextDurations.length ||
+        prevDurations.some((v, i) => Math.abs(v - (nextDurations[i] ?? v)) > 1e-8);
+      if (isPlaying && (mappedColumns !== prevColumns || durationsChanged)) {
+        const safeStep = ((currentStep % prevColumns) + prevColumns) % prevColumns;
+        let elapsed = 0;
+        for (let i = 0; i < safeStep; i++) elapsed += prevDurations[i] ?? 0;
+        const target = (elapsed / prevTotal) * nextTotal;
+        let acc = 0;
+        let mappedStep = 0;
+        for (let i = 0; i < mappedColumns; i++) {
+          const nextAcc = acc + (nextDurations[i] ?? 0);
+          if (target < nextAcc) {
+            mappedStep = i;
+            break;
+          }
+          acc = nextAcc;
+          mappedStep = i;
+        }
+        currentStep = mappedStep % mappedColumns;
       } else {
         currentStep = Math.min(currentStep, mappedColumns - 1);
       }
@@ -86,6 +123,14 @@ export function makeAudioEngine() {
   function secondsPerStep() {
     // BPM is quarter-notes per minute
     return (60 / bpm) * (4 / resolution);
+  }
+
+  function secondsForStep(stepIndex) {
+    if (Array.isArray(stepQuarterDurations) && stepQuarterDurations.length === transportColumns) {
+      const q = stepQuarterDurations[Math.max(0, Math.min(transportColumns - 1, stepIndex))] ?? (1 / Math.max(1, resolution / 4));
+      return (60 / bpm) * q;
+    }
+    return secondsPerStep();
   }
 
   
@@ -196,7 +241,7 @@ function trigger(instId, time, gainValue = 1) {
     while (nextNoteTime < audioCtx.currentTime + scheduleAheadTimeSec) {
       scheduleStep(grid, instruments, currentStep, nextNoteTime);
 
-      nextNoteTime += secondsPerStep();
+      nextNoteTime += secondsForStep(currentStep);
       currentStep += 1;
       if (currentStep >= columns) currentStep = 0;
     }
