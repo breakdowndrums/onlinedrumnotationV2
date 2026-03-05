@@ -1,4 +1,4 @@
-import { isKvReady, kvGet } from "../_kv.js";
+import { isKvReady, kvConfigStatus, kvGet } from "../_kv.js";
 
 const ID_RE = /^[A-Za-z0-9_-]{4,64}$/;
 
@@ -8,7 +8,7 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: "Method not allowed" });
   }
   if (!isKvReady()) {
-    return res.status(503).json({ error: "Share storage not configured" });
+    return res.status(503).json({ error: "Share storage not configured", kv: kvConfigStatus() });
   }
 
   try {

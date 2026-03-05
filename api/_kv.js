@@ -1,8 +1,28 @@
-const KV_URL = process.env.KV_REST_API_URL || "";
-const KV_TOKEN = process.env.KV_REST_API_TOKEN || "";
+const KV_URL =
+  process.env.KV_REST_API_URL ||
+  process.env.UPSTASH_REDIS_REST_URL ||
+  "";
+const KV_TOKEN =
+  process.env.KV_REST_API_TOKEN ||
+  process.env.UPSTASH_REDIS_REST_TOKEN ||
+  "";
 
 function ensureKvConfigured() {
   return KV_URL && KV_TOKEN;
+}
+
+export function kvConfigStatus() {
+  return {
+    hasKvRestApiUrl: !!process.env.KV_REST_API_URL,
+    hasKvRestApiToken: !!process.env.KV_REST_API_TOKEN,
+    hasUpstashRestUrl: !!process.env.UPSTASH_REDIS_REST_URL,
+    hasUpstashRestToken: !!process.env.UPSTASH_REDIS_REST_TOKEN,
+    using: KV_URL && KV_TOKEN
+      ? process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN
+        ? "KV_REST_API_*"
+        : "UPSTASH_REDIS_REST_*"
+      : "none",
+  };
 }
 
 function buildHeaders() {
