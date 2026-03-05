@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    { "source": "/g/:id", "destination": "/" },
+    { "source": "/how-to-write-drum-notation", "destination": "/how-to-write-drum-notation.html" },
+    { "source": "/drum-notation-cheat-sheet", "destination": "/drum-notation-cheat-sheet.html" },
+    { "source": "/drum-groove-notation-examples", "destination": "/drum-groove-notation-examples.html" }
+  ]
+}
