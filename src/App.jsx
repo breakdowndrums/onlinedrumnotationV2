@@ -478,7 +478,14 @@ export default function App() {
     () => decodeShareState(routeOptions.shared),
     [routeOptions.shared]
   );
-  const [resolvedSharedState, setResolvedSharedState] = useState(null);
+  const [resolvedSharedState, setResolvedSharedState] = useState(() => {
+    const preloadedId = window.__DG_PRELOADED_SHARE_ID;
+    const preloadedPayload = window.__DG_PRELOADED_SHARE_PAYLOAD;
+    if (routeOptions.shareId && preloadedId === routeOptions.shareId && preloadedPayload && typeof preloadedPayload === "object") {
+      return preloadedPayload;
+    }
+    return null;
+  });
 
   const [kitInstrumentIds, setKitInstrumentIds] = useState(DRUMKIT_PRESETS.standard);
   const instruments = React.useMemo(
@@ -564,6 +571,7 @@ export default function App() {
       setResolvedSharedState(null);
       return;
     }
+    if (resolvedSharedState && typeof resolvedSharedState === "object") return;
     let cancelled = false;
     const controller = new AbortController();
     const load = async () => {
@@ -584,7 +592,7 @@ export default function App() {
       cancelled = true;
       controller.abort();
     };
-  }, [routeOptions.shareId]);
+  }, [routeOptions.shareId, resolvedSharedState]);
 
   useEffect(() => {
     return () => {
@@ -640,6 +648,23 @@ export default function App() {
 
   const clampBpm = (n) => Math.min(400, Math.max(20, n));
   const stepBpm = (delta) => setBpm((v) => clampBpm(v + delta));
+  const tapTempoTimesRef = React.useRef([]);
+  const handleTapTempo = React.useCallback(() => {
+    const now = performance.now();
+    const prev = tapTempoTimesRef.current;
+    if (prev.length > 0 && now - prev[prev.length - 1] > 2000) {
+      tapTempoTimesRef.current = [now];
+      return;
+    }
+    const next = [...prev, now].slice(-12);
+    tapTempoTimesRef.current = next;
+    if (next.length < 3) return;
+    let sum = 0;
+    for (let i = 1; i < next.length; i++) sum += next[i] - next[i - 1];
+    const avgMs = sum / (next.length - 1);
+    if (!Number.isFinite(avgMs) || avgMs <= 0) return;
+    setBpm(clampBpm(Math.round(60000 / avgMs)));
+  }, []);
 
   const bpmRepeatRef = React.useRef({ timer: null, interval: null });
   const stopBpmRepeat = React.useCallback(() => {
@@ -3352,6 +3377,14 @@ useEffect(() => {
             layout
           </button>
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleTapTempo}
+              className="touch-none select-none px-3 py-1.5 rounded border text-sm bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
+              title="Tap tempo (starts after 3 taps)"
+            >
+              Tap
+            </button>
             <span className="text-sm text-neutral-300">BPM</span>
             <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
               <button
