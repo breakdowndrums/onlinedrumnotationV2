@@ -1294,10 +1294,14 @@ useEffect(() => {
   const gridPastRef = React.useRef([]);
   const gridFutureRef = React.useRef([]);
   const baseGridRef = React.useRef(null);
+  const tupletOverridesRef = React.useRef(tupletOverridesByBar);
 
   React.useEffect(() => {
     baseGridRef.current = baseGrid;
   }, [baseGrid]);
+  React.useEffect(() => {
+    tupletOverridesRef.current = tupletOverridesByBar;
+  }, [tupletOverridesByBar]);
 
   React.useEffect(() => {
     if (applyingTupletRemapRef.current) {
@@ -1316,6 +1320,16 @@ useEffect(() => {
     });
     return snap;
   }, []);
+  const snapshotTuplets = React.useCallback((t) => {
+    return (t || []).map((row) => [...row]);
+  }, []);
+  const snapshotEditorState = React.useCallback(
+    (gridState, tupletState) => ({
+      grid: snapshotGrid(gridState),
+      tuplets: snapshotTuplets(tupletState),
+    }),
+    [snapshotGrid, snapshotTuplets]
+  );
 
   const syncHistoryState = React.useCallback(() => {
     setGridPast([...gridPastRef.current]);
@@ -1323,7 +1337,10 @@ useEffect(() => {
   }, []);
 
   const pushGridHistory = React.useCallback(() => {
-    gridPastRef.current = [...gridPastRef.current, snapshotGrid(baseGridRef.current)];
+    gridPastRef.current = [
+      ...gridPastRef.current,
+      snapshotEditorState(baseGridRef.current, tupletOverridesRef.current),
+    ];
     // clear redo stack on new edit
     gridFutureRef.current = [];
     // optional cap to keep memory bounded
@@ -1331,25 +1348,33 @@ useEffect(() => {
       gridPastRef.current = gridPastRef.current.slice(gridPastRef.current.length - 200);
     }
     syncHistoryState();
-  }, [snapshotGrid, syncHistoryState]);
+  }, [snapshotEditorState, syncHistoryState]);
 
   const undoGrid = React.useCallback(() => {
     if (gridPastRef.current.length === 0) return;
     const prev = gridPastRef.current[gridPastRef.current.length - 1];
     gridPastRef.current = gridPastRef.current.slice(0, -1);
-    gridFutureRef.current = [snapshotGrid(baseGridRef.current), ...gridFutureRef.current];
-    setBaseGrid(prev);
+    gridFutureRef.current = [
+      snapshotEditorState(baseGridRef.current, tupletOverridesRef.current),
+      ...gridFutureRef.current,
+    ];
+    setBaseGrid(prev?.grid || {});
+    if (Array.isArray(prev?.tuplets)) setTupletOverridesByBar(prev.tuplets);
     syncHistoryState();
-  }, [snapshotGrid, syncHistoryState]);
+  }, [snapshotEditorState, syncHistoryState]);
 
   const redoGrid = React.useCallback(() => {
     if (gridFutureRef.current.length === 0) return;
     const next = gridFutureRef.current[0];
     gridFutureRef.current = gridFutureRef.current.slice(1);
-    gridPastRef.current = [...gridPastRef.current, snapshotGrid(baseGridRef.current)];
-    setBaseGrid(next);
+    gridPastRef.current = [
+      ...gridPastRef.current,
+      snapshotEditorState(baseGridRef.current, tupletOverridesRef.current),
+    ];
+    setBaseGrid(next?.grid || {});
+    if (Array.isArray(next?.tuplets)) setTupletOverridesByBar(next.tuplets);
     syncHistoryState();
-  }, [snapshotGrid, syncHistoryState]);
+  }, [snapshotEditorState, syncHistoryState]);
 
   const setBaseGridWithUndo = React.useCallback(
     (updater) => {
