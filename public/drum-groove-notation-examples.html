@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Drum Groove Notation Examples | Rock, Funk, Triplet</title>
+    <meta name="description" content="Drum groove notation examples for rock, funk, and triplet feels. Learn pattern structure, counting, and arrangement ideas." />
+    <link rel="canonical" href="https://onlinedrumnotation.com/drum-groove-notation-examples" />
+    <style>
+      :root { --bg: #171717; --surface: #0f0f0f; --border: #404040; --text: #ffffff; --muted: #d4d4d4; --link: #7dd3fc; }
+      body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; margin: 0; background: var(--bg); color: var(--text); }
+      .wrap { max-width: 980px; margin: 0 auto; padding: 28px 18px 40px; line-height: 1.6; }
+      h1, h2 { line-height: 1.2; }
+      p { color: var(--muted); }
+      a { color: var(--link); }
+      .ex { border: 1px solid var(--border); border-radius: 10px; background: var(--surface); padding: 14px; margin: 14px 0; }
+      .nav { font-size: 14px; margin-bottom: 20px; }
+      .embed { margin-top: 12px; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--bg); }
+      .embed iframe { display: block; width: 100%; border: 0; height: 320px; background: var(--bg); }
+      @media (max-width: 720px) {
+        .embed iframe { height: 240px; }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="wrap">
+      <div class="nav"><a href="/">Open Drum Notation Tool</a></div>
+      <h1>Drum Groove Notation Examples</h1>
+      <p>Use these pattern concepts to build clean, readable drum charts in your own style.</p>
+
+      <div class="ex">
+        <h2>Example 1: Basic 8th-Note Rock Groove</h2>
+        <p>Closed hi-hat on eighths, snare on beats 2 and 4, kick on beat 1 and variations around beat 3.</p>
+        <div class="embed">
+          <iframe
+            data-example-id="rock8"
+            src="/?embed=1&example=rock8"
+            title="Basic 8th-note rock groove embed"
+            loading="lazy"
+            scrolling="no"
+            referrerpolicy="strict-origin-when-cross-origin"
+          ></iframe>
+        </div>
+      </div>
+
+      <div class="ex">
+        <h2>Example 2: 16th-Note Funk Groove</h2>
+        <p>Include ghost snare notes between backbeats and syncopated kick placements. Keep beam groups by beat for readability.</p>
+        <div class="embed">
+          <iframe
+            data-example-id="funk16"
+            src="/?embed=1&example=funk16"
+            title="16th-note funk groove embed"
+            loading="lazy"
+            scrolling="no"
+            referrerpolicy="strict-origin-when-cross-origin"
+          ></iframe>
+        </div>
+      </div>
+
+      <div class="ex">
+        <h2>Example 3: Triplet / Shuffle Feel</h2>
+        <p>Use triplet subdivision with clear tuplet marking. Keep hi-hat articulation and snare accents consistent.</p>
+        <div class="embed">
+          <iframe
+            data-example-id="shuffle"
+            src="/?embed=1&example=shuffle"
+            title="Triplet shuffle groove embed"
+            loading="lazy"
+            scrolling="no"
+            referrerpolicy="strict-origin-when-cross-origin"
+          ></iframe>
+        </div>
+      </div>
+
+      <div class="ex">
+        <h2>Example 4: Fill Transition</h2>
+        <p>Move from groove into tom/snare fill in final beat of the bar, then return to groove in the next bar.</p>
+        <div class="embed">
+          <iframe
+            data-example-id="fill"
+            src="/?embed=1&example=fill"
+            title="Groove plus fill transition embed"
+            loading="lazy"
+            scrolling="no"
+            referrerpolicy="strict-origin-when-cross-origin"
+          ></iframe>
+        </div>
+      </div>
+
+      <p><strong>Related pages:</strong> <a href="/how-to-write-drum-notation.html">How to Write Drum Notation</a> · <a href="/drum-notation-cheat-sheet.html">Drum Notation Cheat Sheet</a></p>
+    </main>
+    <script>
+      window.addEventListener("message", function (event) {
+        const data = event && event.data;
+        if (!data || data.type !== "drumgrid-embed-height") return;
+        const id = data.exampleId;
+        const height = Number(data.height);
+        if (!id || !Number.isFinite(height) || height < 120) return;
+        const frame = document.querySelector('iframe[data-example-id="' + id + '"]');
+        if (!frame) return;
+        frame.style.height = Math.ceil(height) + "px";
+      });
+    </script>
+  </body>
+</html>
