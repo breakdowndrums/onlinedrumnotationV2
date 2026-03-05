@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { isKvReady, kvGet, kvSetJsonWithExpiry } from "./_kv.js";
+import { isKvReady, kvConfigStatus, kvGet, kvSetJsonWithExpiry } from "./_kv.js";
 
 const SHARE_TTL_SECONDS = 60 * 60 * 24 * 365; // 1 year
 const MAX_PAYLOAD_BYTES = 120000;
@@ -33,7 +33,7 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: "Method not allowed" });
   }
   if (!isKvReady()) {
-    return res.status(503).json({ error: "Share storage not configured" });
+    return res.status(503).json({ error: "Share storage not configured", kv: kvConfigStatus() });
   }
 
   try {
