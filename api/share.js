@@ -8,6 +8,25 @@ function makeId() {
   return crypto.randomBytes(6).toString("base64url");
 }
 
+async function readJsonBody(req) {
+  if (req.body && typeof req.body === "object") return req.body;
+  if (typeof req.body === "string") {
+    try {
+      return JSON.parse(req.body);
+    } catch (_) {
+      return null;
+    }
+  }
+  const chunks = [];
+  for await (const chunk of req) chunks.push(Buffer.from(chunk));
+  if (!chunks.length) return null;
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  } catch (_) {
+    return null;
+  }
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");
@@ -18,7 +37,8 @@ export default async function handler(req, res) {
   }
 
   try {
-    const payload = req.body?.payload;
+    const body = await readJsonBody(req);
+    const payload = body?.payload;
     if (!payload || typeof payload !== "object") {
       return res.status(400).json({ error: "Missing payload" });
     }
