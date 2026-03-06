@@ -103,6 +103,20 @@ const PRESET_LABELS = {
   ksh: "Minimal",
 };
 const USER_PRESETS_STORAGE_KEY = "drum-grid-user-presets-v1";
+const LOCAL_BEAT_LIBRARY_STORAGE_KEY = "drum-grid-local-beat-library-v1";
+const PUBLIC_SUBMIT_COMPOSER_STORAGE_KEY = "drum-grid-public-submit-composer-v1";
+const SONG_ARRANGEMENT_STORAGE_KEY = "drum-grid-song-arrangement-v1";
+const BEAT_CATEGORY_OPTIONS = [
+  "Groove",
+  "Fill",
+  "Intro",
+  "Verse",
+  "Chorus",
+  "Bridge",
+  "Outro",
+  "Other",
+];
+const BEAT_STYLE_OPTIONS = ["Rock", "Funk", "Jazz", "Hiphop", "DnB", "Disco", "Latin & World"];
 
 
 const CELL = {
@@ -118,6 +132,18 @@ const MOVE_OVERLAP_MODES = [
   { id: "all-to-all", label: "All overwrites" },
   { id: "active-to-all", label: "Hits ovewrite" },
   { id: "active-to-empty", label: "Fill in gaps" },
+];
+const LIBRARY_SORT_MODES = [
+  { id: "latest", label: "Upload date: newest" },
+  { id: "oldest", label: "Upload date: oldest" },
+  { id: "bpm-asc", label: "BPM: low to high" },
+  { id: "bpm-desc", label: "BPM: high to low" },
+];
+const LIBRARY_BPM_FILTER_MODES = [
+  { id: "any", label: "Any BPM" },
+  { id: "exact", label: "Exact BPM" },
+  { id: "pm5", label: "BPM ±5" },
+  { id: "pm10", label: "BPM ±10" },
 ];
 
 const TUPLET_OPTIONS = [null, 3, 5, 6, 7, 9];
@@ -502,6 +528,67 @@ export default function App() {
   const [isLegalDialogOpen, setIsLegalDialogOpen] = useState(false);
   const [legalTab, setLegalTab] = useState("impressum"); // impressum | privacy
   const [showLegalEmail, setShowLegalEmail] = useState(false);
+  const [isBeatLibraryOpen, setIsBeatLibraryOpen] = useState(false);
+  const [isArrangementOpen, setIsArrangementOpen] = useState(false);
+  const [arrangementPlaybackEnabled, setArrangementPlaybackEnabled] = useState(false);
+  const [arrangementPlaybackIndex, setArrangementPlaybackIndex] = useState(0);
+  const [arrangementSelection, setArrangementSelection] = useState(null); // {start,end} row indices
+  const [arrangementSelectionAnchor, setArrangementSelectionAnchor] = useState(null); // row index
+  const [arrangementPos, setArrangementPos] = useState({ x: 56, y: 112 });
+  const [isPublicSubmitDialogOpen, setIsPublicSubmitDialogOpen] = useState(false);
+  const [beatLibraryPos, setBeatLibraryPos] = useState({ x: 56, y: 80 });
+  const [beatLibraryTab, setBeatLibraryTab] = useState("local"); // local | public
+  const [arrangementSourceTab, setArrangementSourceTab] = useState("local"); // local | public
+  const [arrangementSourcesCollapsed, setArrangementSourcesCollapsed] = useState(false);
+  const arrangementPanelWidth = arrangementSourcesCollapsed ? 576 : 1088; // max-w-[36rem] / max-w-[68rem]
+  const [arrangementItems, setArrangementItems] = useState(() => {
+    try {
+      const raw = window.localStorage.getItem(SONG_ARRANGEMENT_STORAGE_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      if (!Array.isArray(parsed)) return [];
+      return parsed
+        .map((item) => ({
+          id: String(item?.id || ""),
+          source: item?.source === "public" ? "public" : "local",
+          beatId: String(item?.beatId || ""),
+          repeats: Math.max(1, Math.min(64, Number(item?.repeats) || 1)),
+        }))
+        .filter((item) => item.id && item.beatId);
+    } catch (_) {
+      return [];
+    }
+  });
+  const [beatNameDraft, setBeatNameDraft] = useState("");
+  const [publicSubmitTitle, setPublicSubmitTitle] = useState("");
+  const [publicSubmitComposer, setPublicSubmitComposer] = useState("");
+  const [lockedPublicComposer, setLockedPublicComposer] = useState(() => {
+    try {
+      const raw = window.localStorage.getItem(PUBLIC_SUBMIT_COMPOSER_STORAGE_KEY);
+      return String(raw || "").trim();
+    } catch (_) {
+      return "";
+    }
+  });
+  const [beatCategoryDraft, setBeatCategoryDraft] = useState("all");
+  const [beatStyleDraft, setBeatStyleDraft] = useState("all");
+  const [librarySort, setLibrarySort] = useState("latest"); // latest | oldest
+  const [libraryTimeSigFilter, setLibraryTimeSigFilter] = useState("all");
+  const [libraryBpmFilterMode, setLibraryBpmFilterMode] = useState("any"); // any | exact | pm5 | pm10
+  const [libraryBpmTarget, setLibraryBpmTarget] = useState(120);
+  const [localBeats, setLocalBeats] = useState(() => {
+    try {
+      const raw = window.localStorage.getItem(LOCAL_BEAT_LIBRARY_STORAGE_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (_) {
+      return [];
+    }
+  });
+  const [localBeatPast, setLocalBeatPast] = useState([]);
+  const [localBeatFuture, setLocalBeatFuture] = useState([]);
+  const [publicBeats, setPublicBeats] = useState([]);
+  const [publicLibraryLoading, setPublicLibraryLoading] = useState(false);
+  const [publicLibraryError, setPublicLibraryError] = useState("");
   const [savedPresets, setSavedPresets] = useState(() => {
     try {
       const raw = window.localStorage.getItem(USER_PRESETS_STORAGE_KEY);
@@ -547,6 +634,28 @@ export default function App() {
   const [bpmDraft, setBpmDraft] = useState("120");
   const [menuViewportTick, setMenuViewportTick] = useState(0);
   const activeTabRef = React.useRef(activeTab);
+  const wasBeatLibraryOpenRef = React.useRef(false);
+  const beatLibraryDragRef = React.useRef({
+    dragging: false,
+    offsetX: 0,
+    offsetY: 0,
+  });
+  const arrangementDragRef = React.useRef({
+    dragging: false,
+    offsetX: 0,
+    offsetY: 0,
+  });
+  const arrangementPanelRef = React.useRef(null);
+  const kitOrderListRef = React.useRef(null);
+  const arrangementListRef = React.useRef(null);
+  const applyImportedBeatPayloadRef = React.useRef(null);
+  const playbackPlayRef = React.useRef(null);
+  const arrangementTransitionTimerRef = React.useRef(null);
+  const arrangementStartedRef = React.useRef(false);
+  const arrangementSegmentRef = React.useRef({ key: "", endAt: 0 });
+  const arrangementPlayableEntriesRef = React.useRef([]);
+  const arrangementLoopRangeRef = React.useRef(null);
+  const arrangementPlaybackIndexRef = React.useRef(0);
   const shareCopiedTimerRef = React.useRef(null);
   const pendingExampleLoadRef = React.useRef(null);
   const appliedExampleIdRef = React.useRef(null);
@@ -561,6 +670,26 @@ export default function App() {
   useEffect(() => {
     setBpmDraft(String(bpm));
   }, [bpm]);
+  useEffect(() => {
+    try {
+      if (lockedPublicComposer) {
+        window.localStorage.setItem(PUBLIC_SUBMIT_COMPOSER_STORAGE_KEY, lockedPublicComposer);
+      } else {
+        window.localStorage.removeItem(PUBLIC_SUBMIT_COMPOSER_STORAGE_KEY);
+      }
+    } catch (_) {}
+  }, [lockedPublicComposer]);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(SONG_ARRANGEMENT_STORAGE_KEY, JSON.stringify(arrangementItems));
+    } catch (_) {}
+  }, [arrangementItems]);
+  useEffect(() => {
+    if (isBeatLibraryOpen && !wasBeatLibraryOpenRef.current) {
+      setLibraryBpmTarget(bpm);
+    }
+    wasBeatLibraryOpenRef.current = isBeatLibraryOpen;
+  }, [isBeatLibraryOpen, bpm]);
 
   useEffect(() => {
     activeTabRef.current = activeTab;
@@ -755,7 +884,16 @@ useEffect(() => {
     if (!selection && !loopRule) return;
     const onKey = (e) => {
       if (e.key !== "Escape") return;
-      if (pendingPresetChange || isKitEditorOpen || isPrintDialogOpen || isMidiDialogOpen || isLegalDialogOpen) return;
+      if (
+        pendingPresetChange ||
+        isKitEditorOpen ||
+        isBeatLibraryOpen ||
+        isArrangementOpen ||
+        isPublicSubmitDialogOpen ||
+        isPrintDialogOpen ||
+        isMidiDialogOpen ||
+        isLegalDialogOpen
+      ) return;
       const el = e.target;
       const tag = (el?.tagName || "").toLowerCase();
       const isTyping = tag === "input" || tag === "textarea" || el?.isContentEditable;
@@ -766,7 +904,133 @@ useEffect(() => {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [selection, loopRule, pendingPresetChange, isKitEditorOpen, isPrintDialogOpen, isMidiDialogOpen, isLegalDialogOpen]);
+  }, [
+    selection,
+    loopRule,
+    pendingPresetChange,
+    isKitEditorOpen,
+    isBeatLibraryOpen,
+    isArrangementOpen,
+    isPublicSubmitDialogOpen,
+    isPrintDialogOpen,
+    isMidiDialogOpen,
+    isLegalDialogOpen,
+  ]);
+
+  useEffect(() => {
+    if (!isBeatLibraryOpen) return;
+    const panelWidth = 704; // max-w-[44rem]
+    const margin = 8;
+    const nextX = Math.max(margin, window.innerWidth - panelWidth - margin);
+    setBeatLibraryPos((prev) => ({ ...prev, x: nextX }));
+    const raf = window.requestAnimationFrame(() => {
+      beatNameInputRef.current?.focus();
+      beatNameInputRef.current?.select?.();
+    });
+    const onKeyDown = (e) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      setIsBeatLibraryOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.cancelAnimationFrame(raf);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [isBeatLibraryOpen]);
+  useEffect(() => {
+    if (!isArrangementOpen) return;
+    const margin = 8;
+    const nextX = Math.max(margin, window.innerWidth - arrangementPanelWidth - margin);
+    setArrangementPos((prev) => ({ ...prev, x: nextX }));
+    const onKeyDown = (e) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      setIsArrangementOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [isArrangementOpen, arrangementPanelWidth]);
+  useEffect(() => {
+    if (isBeatLibraryOpen) return;
+    setIsPublicSubmitDialogOpen(false);
+  }, [isBeatLibraryOpen]);
+  useEffect(() => {
+    if (!isPublicSubmitDialogOpen) return;
+    const raf = window.requestAnimationFrame(() => {
+      publicSubmitTitleInputRef.current?.focus();
+      publicSubmitTitleInputRef.current?.select?.();
+    });
+    const onKeyDown = async (e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setIsPublicSubmitDialogOpen(false);
+        return;
+      }
+      if (e.key !== "Enter") return;
+      const activeEl = document.activeElement;
+      if (activeEl === publicSubmitTitleInputRef.current) {
+        e.preventDefault();
+        if (!lockedPublicComposer) publicSubmitComposerInputRef.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.cancelAnimationFrame(raf);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [isPublicSubmitDialogOpen, lockedPublicComposer]);
+  useEffect(() => {
+    if (!isBeatLibraryOpen) return;
+    const onMouseMove = (e) => {
+      const drag = beatLibraryDragRef.current;
+      if (!drag.dragging) return;
+      const width = 704; // max-w-[44rem]
+      const height = Math.min(window.innerHeight - 20, 760);
+      const minX = 8;
+      const minY = 8;
+      const maxX = Math.max(minX, window.innerWidth - width - 8);
+      const maxY = Math.max(minY, window.innerHeight - height - 8);
+      const nextX = Math.max(minX, Math.min(maxX, e.clientX - drag.offsetX));
+      const nextY = Math.max(minY, Math.min(maxY, e.clientY - drag.offsetY));
+      setBeatLibraryPos({ x: nextX, y: nextY });
+    };
+    const stopDrag = () => {
+      beatLibraryDragRef.current.dragging = false;
+    };
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", stopDrag);
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", stopDrag);
+    };
+  }, [isBeatLibraryOpen]);
+  useEffect(() => {
+    if (!isArrangementOpen) return;
+    const onMouseMove = (e) => {
+      const drag = arrangementDragRef.current;
+      if (!drag.dragging) return;
+      const width = arrangementPanelWidth;
+      const panelHeight = arrangementPanelRef.current?.offsetHeight || 860;
+      const height = Math.min(window.innerHeight - 20, panelHeight);
+      const minX = 8;
+      const minY = 8;
+      const maxX = Math.max(minX, window.innerWidth - width - 8);
+      const maxY = Math.max(minY, window.innerHeight - height - 8);
+      const nextX = Math.max(minX, Math.min(maxX, e.clientX - drag.offsetX));
+      const nextY = Math.max(minY, Math.min(maxY, e.clientY - drag.offsetY));
+      setArrangementPos({ x: nextX, y: nextY });
+    };
+    const stopDrag = () => {
+      arrangementDragRef.current.dragging = false;
+    };
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", stopDrag);
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", stopDrag);
+    };
+  }, [isArrangementOpen, arrangementPanelWidth]);
 
   useEffect(() => {
     if (!isLegalDialogOpen) return;
@@ -856,6 +1120,9 @@ useEffect(() => {
   const [printTitle, setPrintTitle] = useState("");
   const [printComposer, setPrintComposer] = useState("");
   const [printWatermarkEnabled, setPrintWatermarkEnabled] = useState(true);
+  const beatNameInputRef = useRef(null);
+  const publicSubmitTitleInputRef = useRef(null);
+  const publicSubmitComposerInputRef = useRef(null);
   const printTitleInputRef = useRef(null);
   const printComposerInputRef = useRef(null);
 // "fast" (>=16ths) | "all"
@@ -1316,10 +1583,17 @@ useEffect(() => {
   const [gridPast, setGridPast] = useState([]);
   const [gridFuture, setGridFuture] = useState([]);
 
+  const localBeatsRef = React.useRef(localBeats);
+  const localBeatPastRef = React.useRef([]);
+  const localBeatFutureRef = React.useRef([]);
   const gridPastRef = React.useRef([]);
   const gridFutureRef = React.useRef([]);
   const baseGridRef = React.useRef(null);
   const tupletOverridesRef = React.useRef(tupletOverridesByBar);
+
+  React.useEffect(() => {
+    localBeatsRef.current = localBeats;
+  }, [localBeats]);
 
   React.useEffect(() => {
     baseGridRef.current = baseGrid;
@@ -1408,6 +1682,79 @@ useEffect(() => {
     },
     [pushGridHistory]
   );
+
+  const cloneLocalBeatList = React.useCallback((beats) => {
+    if (!Array.isArray(beats)) return [];
+    return beats.map((beat) => {
+      try {
+        return structuredClone(beat);
+      } catch (_) {
+        try {
+          return JSON.parse(JSON.stringify(beat));
+        } catch (_) {
+          return beat;
+        }
+      }
+    });
+  }, []);
+
+  const syncLocalBeatHistoryState = React.useCallback(() => {
+    setLocalBeatPast([...localBeatPastRef.current]);
+    setLocalBeatFuture([...localBeatFutureRef.current]);
+  }, []);
+
+  const pushLocalBeatHistory = React.useCallback(() => {
+    localBeatPastRef.current = [
+      ...localBeatPastRef.current,
+      cloneLocalBeatList(localBeatsRef.current),
+    ];
+    localBeatFutureRef.current = [];
+    if (localBeatPastRef.current.length > 200) {
+      localBeatPastRef.current = localBeatPastRef.current.slice(localBeatPastRef.current.length - 200);
+    }
+    syncLocalBeatHistoryState();
+  }, [cloneLocalBeatList, syncLocalBeatHistoryState]);
+
+  const setLocalBeatsWithUndo = React.useCallback(
+    (updater) => {
+      pushLocalBeatHistory();
+      setLocalBeats((prev) => {
+        const next = typeof updater === "function" ? updater(prev) : updater;
+        const normalized = Array.isArray(next) ? next : [];
+        localBeatsRef.current = normalized;
+        return normalized;
+      });
+    },
+    [pushLocalBeatHistory]
+  );
+
+  const undoLocalBeatHistory = React.useCallback(() => {
+    if (localBeatPastRef.current.length === 0) return;
+    const prev = localBeatPastRef.current[localBeatPastRef.current.length - 1];
+    localBeatPastRef.current = localBeatPastRef.current.slice(0, -1);
+    localBeatFutureRef.current = [
+      cloneLocalBeatList(localBeatsRef.current),
+      ...localBeatFutureRef.current,
+    ];
+    const nextBeats = cloneLocalBeatList(prev);
+    localBeatsRef.current = nextBeats;
+    setLocalBeats(nextBeats);
+    syncLocalBeatHistoryState();
+  }, [cloneLocalBeatList, syncLocalBeatHistoryState]);
+
+  const redoLocalBeatHistory = React.useCallback(() => {
+    if (localBeatFutureRef.current.length === 0) return;
+    const next = localBeatFutureRef.current[0];
+    localBeatFutureRef.current = localBeatFutureRef.current.slice(1);
+    localBeatPastRef.current = [
+      ...localBeatPastRef.current,
+      cloneLocalBeatList(localBeatsRef.current),
+    ];
+    const nextBeats = cloneLocalBeatList(next);
+    localBeatsRef.current = nextBeats;
+    setLocalBeats(nextBeats);
+    syncLocalBeatHistoryState();
+  }, [cloneLocalBeatList, syncLocalBeatHistoryState]);
 
   useEffect(() => {
     const tupletsMatchFor = (overridesByBar) =>
@@ -1514,6 +1861,11 @@ useEffect(() => {
       window.localStorage.setItem(USER_PRESETS_STORAGE_KEY, JSON.stringify(savedPresets));
     } catch (_) {}
   }, [savedPresets]);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(LOCAL_BEAT_LIBRARY_STORAGE_KEY, JSON.stringify(localBeats));
+    } catch (_) {}
+  }, [localBeats]);
 
   const getPresetIds = React.useCallback(
     (presetName) => {
@@ -1531,69 +1883,6 @@ useEffect(() => {
     },
     [savedPresets]
   );
-  useEffect(() => {
-    const shareSourceKey = routeOptions.shareId
-      ? `g:${routeOptions.shareId}`
-      : routeOptions.shared
-        ? `s:${routeOptions.shared}`
-        : "";
-    const effectiveSharedState = routeOptions.shareId ? resolvedSharedState : requestedSharedState;
-    if (!effectiveSharedState || typeof effectiveSharedState !== "object") return;
-    if (appliedSharedKeyRef.current === shareSourceKey) return;
-
-    const nextBars = Math.max(1, Math.min(8, Number(effectiveSharedState.bars) || 1));
-    const resOrder = [4, 8, 16, 32];
-    const rawRes = Number(effectiveSharedState.resolution);
-    const nextResolution = resOrder.includes(rawRes) ? rawRes : 8;
-    const rawTs = effectiveSharedState.timeSig || {};
-    const nextTimeSig = {
-      n: Math.max(1, Number(rawTs.n) || 4),
-      d: Math.max(1, Number(rawTs.d) || 4),
-    };
-    const quarterCount = getQuarterBeatsPerBar(nextTimeSig);
-    const tupletsByBar = Array.from({ length: nextBars }, (_, barIdx) =>
-      Array.from({ length: quarterCount }, (_, qIdx) => {
-        const raw = effectiveSharedState.tupletsByBar?.[barIdx]?.[qIdx];
-        return clampTupletValue(raw) ?? null;
-      })
-    );
-    const nextKitIds = Array.isArray(effectiveSharedState.kitInstrumentIds)
-      ? [...new Set(effectiveSharedState.kitInstrumentIds.filter((id) => INSTRUMENT_BY_ID[id]))]
-      : [];
-    if (!nextKitIds.length) nextKitIds.push(...DRUMKIT_PRESETS.standard);
-
-    pendingSharedLoadRef.current = {
-      bars: nextBars,
-      resolution: nextResolution,
-      timeSig: nextTimeSig,
-      tupletsByBar,
-      grid:
-        effectiveSharedState.grid && typeof effectiveSharedState.grid === "object"
-          ? effectiveSharedState.grid
-          : {},
-    };
-    appliedSharedKeyRef.current = shareSourceKey;
-
-    const nextLayout = effectiveSharedState.layout;
-    const layoutOptions = ["grid-top", "notation-top", "grid-right", "notation-right"];
-    if (layoutOptions.includes(nextLayout)) setLayout(nextLayout);
-    const nextBpm = Number(effectiveSharedState.bpm);
-    if (Number.isFinite(nextBpm)) setBpm(Math.max(20, Math.min(400, Math.round(nextBpm))));
-
-    setModifiedPresetBase(null);
-    setPendingPresetChange(null);
-    setPendingRemoval(null);
-    setSelection(null);
-    setLoopRule(null);
-    setActiveTab("none");
-    setLoopRepeats("off");
-    setKitInstrumentIds(nextKitIds);
-    setBars(nextBars);
-    setResolution(nextResolution);
-    setTimeSig(nextTimeSig);
-    setTupletOverridesByBar(tupletsByBar);
-  }, [requestedSharedState, resolvedSharedState, routeOptions.shared, routeOptions.shareId]);
-
   useEffect(() => {
     if (routeOptions.shared || routeOptions.shareId) return;
     if (!requestedExample) return;
@@ -1896,6 +2185,344 @@ useEffect(() => {
         : "Modified";
   const selectedSavedPreset =
     selectedPreset ? savedPresets.find((p) => p.id === selectedPreset) || null : null;
+  const getBeatBpm = React.useCallback((beat) => {
+    const direct = Number(beat?.bpm);
+    if (Number.isFinite(direct) && direct >= 20 && direct <= 400) return Math.round(direct);
+    const payloadBpm = Number(beat?.payload?.bpm);
+    if (Number.isFinite(payloadBpm) && payloadBpm >= 20 && payloadBpm <= 400) return Math.round(payloadBpm);
+    return null;
+  }, []);
+  const bpmPassesLibraryFilter = React.useCallback(
+    (beatBpm) => {
+      if (libraryBpmFilterMode === "any") return true;
+      if (!Number.isFinite(beatBpm)) return false;
+      if (libraryBpmFilterMode === "exact") return beatBpm === libraryBpmTarget;
+      if (libraryBpmFilterMode === "pm5") return Math.abs(beatBpm - libraryBpmTarget) <= 5;
+      if (libraryBpmFilterMode === "pm10") return Math.abs(beatBpm - libraryBpmTarget) <= 10;
+      return true;
+    },
+    [libraryBpmFilterMode, libraryBpmTarget]
+  );
+  const getLibrarySortLabel = React.useCallback(
+    (sortMode) => LIBRARY_SORT_MODES.find((m) => m.id === sortMode)?.label || "Upload date: newest",
+    []
+  );
+  const cycleLibrarySort = React.useCallback(() => {
+    setLibrarySort((prev) => {
+      const idx = LIBRARY_SORT_MODES.findIndex((m) => m.id === prev);
+      const nextIdx = idx < 0 ? 0 : (idx + 1) % LIBRARY_SORT_MODES.length;
+      return LIBRARY_SORT_MODES[nextIdx].id;
+    });
+  }, []);
+  const cycleLibraryBpmFilterMode = React.useCallback(() => {
+    setLibraryBpmFilterMode((prev) => {
+      const idx = LIBRARY_BPM_FILTER_MODES.findIndex((m) => m.id === prev);
+      const nextIdx = idx < 0 ? 0 : (idx + 1) % LIBRARY_BPM_FILTER_MODES.length;
+      return LIBRARY_BPM_FILTER_MODES[nextIdx].id;
+    });
+  }, []);
+  const libraryBpmValues = React.useMemo(() => {
+    const source = beatLibraryTab === "public" ? publicBeats : localBeats;
+    const values = source
+      .map((beat) => getBeatBpm(beat))
+      .filter((v) => Number.isFinite(v))
+      .map((v) => Math.round(v));
+    return Array.from(new Set(values)).sort((a, b) => a - b);
+  }, [beatLibraryTab, publicBeats, localBeats, getBeatBpm]);
+  const stepLibraryBpmTarget = React.useCallback(
+    (delta) => {
+      const direction = delta >= 0 ? 1 : -1;
+      const values = libraryBpmValues;
+      if (!values.length) return;
+      setLibraryBpmTarget((prev) => {
+        if (direction > 0) {
+          const higher = values.find((v) => v > prev);
+          return higher ?? values[values.length - 1];
+        }
+        for (let i = values.length - 1; i >= 0; i--) {
+          if (values[i] < prev) return values[i];
+        }
+        return values[0];
+      });
+    },
+    [libraryBpmValues]
+  );
+  const getBpmFilterLabel = React.useCallback(() => {
+    if (libraryBpmFilterMode === "any") return "Any";
+    if (libraryBpmFilterMode === "exact") return `${libraryBpmTarget}`;
+    if (libraryBpmFilterMode === "pm5") return `${libraryBpmTarget}±5`;
+    if (libraryBpmFilterMode === "pm10") return `${libraryBpmTarget}±10`;
+    return "Any";
+  }, [libraryBpmFilterMode, libraryBpmTarget]);
+  const libraryBpmRepeatRef = React.useRef({ timer: null, interval: null });
+  const stopLibraryBpmRepeat = React.useCallback(() => {
+    const r = libraryBpmRepeatRef.current;
+    if (r.timer) window.clearTimeout(r.timer);
+    if (r.interval) window.clearInterval(r.interval);
+    r.timer = null;
+    r.interval = null;
+  }, []);
+  const startLibraryBpmRepeat = React.useCallback(
+    (delta) => {
+      stopLibraryBpmRepeat();
+      stepLibraryBpmTarget(delta);
+      libraryBpmRepeatRef.current.timer = window.setTimeout(() => {
+        libraryBpmRepeatRef.current.interval = window.setInterval(
+          () => stepLibraryBpmTarget(delta),
+          50
+        );
+      }, 130);
+    },
+    [stopLibraryBpmRepeat, stepLibraryBpmTarget]
+  );
+  useEffect(() => () => stopLibraryBpmRepeat(), [stopLibraryBpmRepeat]);
+  const allTimeSigCategories = React.useMemo(() => {
+    const fromLocal = localBeats.map((b) => String(b?.timeSigCategory || "")).filter(Boolean);
+    const fromPublic = publicBeats.map((b) => String(b?.timeSigCategory || "")).filter(Boolean);
+    return Array.from(new Set([...fromLocal, ...fromPublic])).sort();
+  }, [localBeats, publicBeats]);
+  const filteredLocalBeats = React.useMemo(() => {
+    const list = localBeats.filter((beat) => {
+      if (libraryTimeSigFilter !== "all" && beat?.timeSigCategory !== libraryTimeSigFilter) return false;
+      if (beatStyleDraft !== "all" && String(beat?.style || "") !== beatStyleDraft) return false;
+      if (beatCategoryDraft !== "all" && String(beat?.category || "") !== beatCategoryDraft) return false;
+      if (!bpmPassesLibraryFilter(getBeatBpm(beat))) return false;
+      return true;
+    });
+    const byTime = (a, b) =>
+      new Date(a?.createdAt || 0).getTime() - new Date(b?.createdAt || 0).getTime();
+    const byBpm = (a, b) => (getBeatBpm(a) ?? -1) - (getBeatBpm(b) ?? -1);
+    return [...list].sort((a, b) => {
+      if (librarySort === "oldest") return byTime(a, b);
+      if (librarySort === "bpm-asc") return byBpm(a, b);
+      if (librarySort === "bpm-desc") return byBpm(b, a);
+      return byTime(b, a);
+    });
+  }, [
+    localBeats,
+    libraryTimeSigFilter,
+    beatStyleDraft,
+    beatCategoryDraft,
+    librarySort,
+    getBeatBpm,
+    bpmPassesLibraryFilter,
+  ]);
+  const filteredPublicBeats = React.useMemo(() => {
+    const list = publicBeats.filter((beat) => {
+      if (libraryTimeSigFilter !== "all" && beat?.timeSigCategory !== libraryTimeSigFilter) return false;
+      if (beatStyleDraft !== "all" && String(beat?.style || "") !== beatStyleDraft) return false;
+      if (beatCategoryDraft !== "all" && String(beat?.category || "") !== beatCategoryDraft) return false;
+      if (!bpmPassesLibraryFilter(getBeatBpm(beat))) return false;
+      return true;
+    });
+    const byTime = (a, b) =>
+      new Date(a?.createdAt || 0).getTime() - new Date(b?.createdAt || 0).getTime();
+    const byBpm = (a, b) => (getBeatBpm(a) ?? -1) - (getBeatBpm(b) ?? -1);
+    return [...list].sort((a, b) => {
+      if (librarySort === "oldest") return byTime(a, b);
+      if (librarySort === "bpm-asc") return byBpm(a, b);
+      if (librarySort === "bpm-desc") return byBpm(b, a);
+      return byTime(b, a);
+    });
+  }, [
+    publicBeats,
+    libraryTimeSigFilter,
+    beatStyleDraft,
+    beatCategoryDraft,
+    librarySort,
+    getBeatBpm,
+    bpmPassesLibraryFilter,
+  ]);
+  const getBeatBySourceRef = React.useCallback(
+    (source, beatId) => {
+      const list = source === "public" ? publicBeats : localBeats;
+      return list.find((b) => String(b?.id || "") === String(beatId || "")) || null;
+    },
+    [publicBeats, localBeats]
+  );
+  const arrangementRows = React.useMemo(() => {
+    return arrangementItems.map((item) => {
+      const beat = getBeatBySourceRef(item.source, item.beatId);
+      const beatBars = Math.max(1, Number(beat?.payload?.bars) || 1);
+      const beatTimeSig = beat?.timeSigCategory || "4/4";
+      const beatBpm = getBeatBpm(beat);
+      const [nRaw, dRaw] = String(beatTimeSig).split("/");
+      const n = Math.max(1, Number(nRaw) || 4);
+      const d = Math.max(1, Number(dRaw) || 4);
+      const barSeconds = beatBpm ? (60 / beatBpm) * ((n * 4) / d) : 0;
+      return {
+        ...item,
+        beat,
+        beatBars,
+        beatTimeSig,
+        beatBpm,
+        sectionBars: beatBars * item.repeats,
+        sectionSeconds: barSeconds * beatBars * item.repeats,
+      };
+    });
+  }, [arrangementItems, getBeatBySourceRef, getBeatBpm]);
+  const arrangementPlayableEntries = React.useMemo(() => {
+    const out = [];
+    arrangementRows.forEach((row, rowIndex) => {
+      if (!row?.beat?.payload) return;
+      const count = Math.max(1, Number(row.repeats) || 1);
+      for (let i = 0; i < count; i++) out.push({ rowIndex, row, repeatIndex: i });
+    });
+    return out;
+  }, [arrangementRows]);
+  const normalizedArrangementSelection = React.useMemo(() => {
+    if (!arrangementSelection) return null;
+    const start = Math.max(0, Math.min(arrangementSelection.start, arrangementSelection.end));
+    const end = Math.max(0, Math.max(arrangementSelection.start, arrangementSelection.end));
+    if (start >= arrangementRows.length || end >= arrangementRows.length) return null;
+    return { start, end };
+  }, [arrangementSelection, arrangementRows.length]);
+  const activeArrangementPlayingRowIndex = React.useMemo(() => {
+    const entry = arrangementPlayableEntries[arrangementPlaybackIndex];
+    return Number.isFinite(entry?.rowIndex) ? entry.rowIndex : -1;
+  }, [arrangementPlayableEntries, arrangementPlaybackIndex]);
+  const arrangementTotals = React.useMemo(() => {
+    const totalBars = arrangementRows.reduce((sum, row) => sum + row.sectionBars, 0);
+    const totalSeconds = arrangementRows.reduce((sum, row) => sum + row.sectionSeconds, 0);
+    return { totalBars, totalSeconds };
+  }, [arrangementRows]);
+  const arrangementAddBeat = React.useCallback((source, beatId) => {
+    setArrangementItems((prev) => {
+      const normalizedSource = source === "public" ? "public" : "local";
+      const normalizedBeatId = String(beatId);
+      const last = prev[prev.length - 1];
+      if (
+        last &&
+        last.source === normalizedSource &&
+        String(last.beatId) === normalizedBeatId
+      ) {
+        return prev.map((row, idx) =>
+          idx === prev.length - 1
+            ? { ...row, repeats: Math.max(1, Math.min(64, (Number(row.repeats) || 1) + 1)) }
+            : row
+        );
+      }
+      return [
+        ...prev,
+        {
+          id: `arr-${Math.random().toString(36).slice(2, 10)}`,
+          source: normalizedSource,
+          beatId: normalizedBeatId,
+          repeats: 1,
+        },
+      ];
+    });
+  }, []);
+  const arrangementMoveRow = React.useCallback((rowId, delta) => {
+    setArrangementItems((prev) => {
+      const idx = prev.findIndex((row) => row.id === rowId);
+      if (idx < 0) return prev;
+      const nextIdx = idx + delta;
+      if (nextIdx < 0 || nextIdx >= prev.length) return prev;
+      const out = [...prev];
+      const [row] = out.splice(idx, 1);
+      out.splice(nextIdx, 0, row);
+      return out;
+    });
+  }, []);
+  const arrangementNudgeRepeats = React.useCallback((rowId, delta) => {
+    setArrangementItems((prev) =>
+      prev.map((row) =>
+        row.id === rowId
+          ? { ...row, repeats: Math.max(1, Math.min(64, (Number(row.repeats) || 1) + delta)) }
+          : row
+      )
+    );
+  }, []);
+  const arrangementRemoveRow = React.useCallback((rowId) => {
+    setArrangementItems((prev) => prev.filter((row) => row.id !== rowId));
+  }, []);
+  const handleArrangementRowSelect = React.useCallback((rowIndex) => {
+    if (!Number.isFinite(rowIndex) || rowIndex < 0) return;
+    const sel = normalizedArrangementSelection;
+    if (!sel) {
+      setArrangementSelectionAnchor(rowIndex);
+      setArrangementSelection({ start: rowIndex, end: rowIndex });
+      return;
+    }
+    const { start, end } = sel;
+    const isInside = rowIndex >= start && rowIndex <= end;
+    if (isInside) {
+      if (start === end && rowIndex === start) {
+        setArrangementSelection(null);
+        setArrangementSelectionAnchor(null);
+        return;
+      }
+      if (rowIndex === start) {
+        setArrangementSelectionAnchor(start + 1);
+        setArrangementSelection({ start: start + 1, end });
+        return;
+      }
+      if (rowIndex === end) {
+        setArrangementSelectionAnchor(start);
+        setArrangementSelection({ start, end: end - 1 });
+        return;
+      }
+      // Middle click would split the range; restart from this row to keep selection contiguous.
+      setArrangementSelectionAnchor(rowIndex);
+      setArrangementSelection({ start: rowIndex, end: rowIndex });
+      return;
+    }
+    // Clicking outside grows the contiguous block to the clicked row.
+    if (rowIndex < start) {
+      setArrangementSelectionAnchor(end);
+      setArrangementSelection({ start: rowIndex, end });
+      return;
+    }
+    if (rowIndex > end) {
+      setArrangementSelectionAnchor(start);
+      setArrangementSelection({ start, end: rowIndex });
+      return;
+    }
+    setArrangementSelectionAnchor(rowIndex);
+    setArrangementSelection({ start: rowIndex, end: rowIndex });
+  }, [normalizedArrangementSelection]);
+  const arrangementSourceBeats =
+    arrangementSourceTab === "public" ? filteredPublicBeats : filteredLocalBeats;
+  const openBeatLibraryWindow = React.useCallback(() => {
+    setIsArrangementOpen(false);
+    setIsBeatLibraryOpen(true);
+  }, []);
+  const openArrangementWindow = React.useCallback(() => {
+    setIsBeatLibraryOpen(false);
+    setIsArrangementOpen(true);
+  }, []);
+  useEffect(() => {
+    if (!arrangementSelection) return;
+    if (!arrangementRows.length) {
+      setArrangementSelection(null);
+      setArrangementSelectionAnchor(null);
+      return;
+    }
+    const maxRow = arrangementRows.length - 1;
+    if (arrangementSelection.start > maxRow || arrangementSelection.end > maxRow) {
+      setArrangementSelection(null);
+      setArrangementSelectionAnchor(null);
+    }
+  }, [arrangementRows.length, arrangementSelection]);
+  const isLocalLibraryHistoryActive = isBeatLibraryOpen && beatLibraryTab === "local";
+  const canUndoTop = isLocalLibraryHistoryActive ? localBeatPast.length > 0 : gridPast.length > 0;
+  const canRedoTop = isLocalLibraryHistoryActive ? localBeatFuture.length > 0 : gridFuture.length > 0;
+  const handleTopUndo = React.useCallback(() => {
+    if (isLocalLibraryHistoryActive) {
+      undoLocalBeatHistory();
+      return;
+    }
+    undoGrid();
+  }, [isLocalLibraryHistoryActive, undoLocalBeatHistory, undoGrid]);
+  const handleTopRedo = React.useCallback(() => {
+    if (isLocalLibraryHistoryActive) {
+      redoLocalBeatHistory();
+      return;
+    }
+    redoGrid();
+  }, [isLocalLibraryHistoryActive, redoLocalBeatHistory, redoGrid]);
+
   useEffect(() => {
     setPresetNameInlineDraft(selectedSavedPreset ? selectedSavedPreset.label : selectedPresetLabel);
   }, [selectedSavedPreset, selectedPresetLabel]);
@@ -2046,6 +2673,49 @@ useEffect(() => {
     },
     [kitInstrumentIds, applyManualKitIds]
   );
+  const restrictKitDragToList = React.useCallback(({ transform, activeNodeRect }) => {
+    const listEl = kitOrderListRef.current;
+    if (!listEl || !transform || !activeNodeRect) {
+      return transform ? { ...transform, x: 0 } : transform;
+    }
+    const listRect = listEl.getBoundingClientRect();
+    const minY = listRect.top - activeNodeRect.top;
+    const maxY = listRect.bottom - activeNodeRect.bottom;
+    return {
+      ...transform,
+      x: 0,
+      y: Math.max(minY, Math.min(maxY, transform.y)),
+    };
+  }, []);
+  const arrangementOrderSensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: { distance: 6 },
+    })
+  );
+  const onArrangementOrderDragEnd = React.useCallback((event) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    setArrangementItems((prev) => {
+      const oldIndex = prev.findIndex((row) => row.id === String(active.id));
+      const newIndex = prev.findIndex((row) => row.id === String(over.id));
+      if (oldIndex < 0 || newIndex < 0) return prev;
+      return arrayMove(prev, oldIndex, newIndex);
+    });
+  }, []);
+  const restrictArrangementDragToList = React.useCallback(({ transform, activeNodeRect }) => {
+    const listEl = arrangementListRef.current;
+    if (!listEl || !transform || !activeNodeRect) {
+      return transform ? { ...transform, x: 0 } : transform;
+    }
+    const listRect = listEl.getBoundingClientRect();
+    const minY = listRect.top - activeNodeRect.top;
+    const maxY = listRect.bottom - activeNodeRect.bottom;
+    return {
+      ...transform,
+      x: 0,
+      y: Math.max(minY, Math.min(maxY, transform.y)),
+    };
+  }, []);
 
 
   const bakeLoopInto = (prevGrid, rule, repeats = "all", overlapMode = "all-to-all") => {
@@ -2103,7 +2773,7 @@ useEffect(() => {
     if (!loopRule) return;
     const onKey = (e) => {
       if (e.key !== "Enter") return;
-      if (pendingPresetChange || isKitEditorOpen || isPrintDialogOpen || isMidiDialogOpen) return;
+      if (pendingPresetChange || isKitEditorOpen || isArrangementOpen || isPublicSubmitDialogOpen || isPrintDialogOpen || isMidiDialogOpen) return;
       const el = e.target;
       const tag = (el?.tagName || "").toLowerCase();
       const isTyping = tag === "input" || tag === "textarea" || el?.isContentEditable;
@@ -2121,6 +2791,8 @@ useEffect(() => {
     loopOverlapMode,
     pendingPresetChange,
     isKitEditorOpen,
+    isArrangementOpen,
+    isPublicSubmitDialogOpen,
     isPrintDialogOpen,
     isMidiDialogOpen,
   ]);
@@ -2206,6 +2878,9 @@ useEffect(() => {
     stepQuarterDurations,
   });
   useEffect(() => {
+    playbackPlayRef.current = playback.play;
+  }, [playback.play]);
+  useEffect(() => {
     let cancelled = false;
     const detectBrave = async () => {
       try {
@@ -2230,6 +2905,252 @@ useEffect(() => {
       playback.play({ startStep: 0 });
     }
   }, [playback.isPlaying, playback.play, playback.stop, playback.setPlayhead]);
+  const getArrangementRowDurationMs = React.useCallback(
+    (row) => {
+      const payload = row?.beat?.payload;
+      if (!payload || typeof payload !== "object") return 0;
+      const rawRes = Number(payload.resolution);
+      const beatResolution = [4, 8, 16, 32].includes(rawRes) ? rawRes : 8;
+      const rawTs = payload.timeSig || {};
+      const beatTimeSig = {
+        n: Math.max(1, Number(rawTs.n) || 4),
+        d: Math.max(1, Number(rawTs.d) || 4),
+      };
+      const beatBars = Math.max(1, Math.min(64, Number(payload.bars) || 1));
+      const quarterCount = getQuarterBeatsPerBar(beatTimeSig);
+      const baseSubdiv = getBaseSubdivPerQuarter(beatResolution);
+      const tupletsByBar = Array.from({ length: beatBars }, (_, barIdx) =>
+        Array.from({ length: quarterCount }, (_, qIdx) => {
+          const raw = payload.tupletsByBar?.[barIdx]?.[qIdx];
+          return clampTupletValue(raw) ?? null;
+        })
+      );
+      const quarterSubsByBar = tupletsByBar.map((r) =>
+        resolveQuarterSubdivisions(r, baseSubdiv)
+      );
+      let totalQuarterUnits = 0;
+      quarterSubsByBar.forEach((r) => {
+        r.forEach(() => {
+          totalQuarterUnits += 1;
+        });
+      });
+      const beatBpm = Math.max(20, Math.min(400, Number(row.beatBpm || payload.bpm || bpm) || bpm));
+      return Math.max(50, Math.round((totalQuarterUnits * 60 * 1000) / beatBpm));
+    },
+    [bpm]
+  );
+  const computeArrangementLoopRange = React.useCallback((queue, selection) => {
+    if (!selection || !Array.isArray(queue) || queue.length < 1) return null;
+    const selStart = selection.start;
+    const selEnd = selection.end;
+    const firstInRange = queue.findIndex(
+      (entry) => entry.rowIndex >= selStart && entry.rowIndex <= selEnd
+    );
+    let lastInRange = -1;
+    for (let i = queue.length - 1; i >= 0; i--) {
+      const rowIndex = queue[i]?.rowIndex;
+      if (rowIndex >= selStart && rowIndex <= selEnd) {
+        lastInRange = i;
+        break;
+      }
+    }
+    if (firstInRange >= 0 && lastInRange >= firstInRange) {
+      return { start: firstInRange, end: lastInRange };
+    }
+    return null;
+  }, []);
+  const getArrangementSegmentKey = React.useCallback((entry) => {
+    if (!entry?.row) return "missing";
+    return `${entry.row.id}:${entry.row.beatId}:${entry.repeatIndex}`;
+  }, []);
+  const arrangementPlaybackLoopRange = React.useMemo(
+    () => computeArrangementLoopRange(arrangementPlayableEntries, normalizedArrangementSelection),
+    [arrangementPlayableEntries, normalizedArrangementSelection, computeArrangementLoopRange]
+  );
+  useEffect(() => {
+    arrangementPlayableEntriesRef.current = arrangementPlayableEntries;
+  }, [arrangementPlayableEntries]);
+  useEffect(() => {
+    arrangementLoopRangeRef.current = arrangementPlaybackLoopRange;
+  }, [arrangementPlaybackLoopRange]);
+  useEffect(() => {
+    arrangementPlaybackIndexRef.current = arrangementPlaybackIndex;
+  }, [arrangementPlaybackIndex]);
+  const startArrangementPlayback = React.useCallback(() => {
+    if (!arrangementPlayableEntries.length) return;
+    if (playback.isPlaying) playback.stop();
+    if (arrangementTransitionTimerRef.current) {
+      window.clearTimeout(arrangementTransitionTimerRef.current);
+      arrangementTransitionTimerRef.current = null;
+    }
+    arrangementStartedRef.current = false;
+    arrangementSegmentRef.current = { key: "", endAt: 0 };
+    const queue = arrangementPlayableEntries;
+    const loopRange = computeArrangementLoopRange(queue, normalizedArrangementSelection);
+    const startIndex = loopRange ? loopRange.start : 0;
+    setArrangementPlaybackIndex(startIndex);
+    setArrangementPlaybackEnabled(true);
+    const first = queue[startIndex];
+    if (first?.row?.beat?.payload) {
+      applyImportedBeatPayloadRef.current?.(
+        first.row.beat.payload,
+        `arrangement-play:${startIndex}:${first.row.id}:${first.row.beatId}`
+      );
+    }
+  }, [
+    arrangementPlayableEntries,
+    normalizedArrangementSelection,
+    playback.isPlaying,
+    playback.stop,
+    computeArrangementLoopRange,
+  ]);
+  const stopArrangementPlayback = React.useCallback(() => {
+    playback.stop();
+    if (arrangementTransitionTimerRef.current) {
+      window.clearTimeout(arrangementTransitionTimerRef.current);
+      arrangementTransitionTimerRef.current = null;
+    }
+    arrangementStartedRef.current = false;
+    arrangementSegmentRef.current = { key: "", endAt: 0 };
+    setArrangementPlaybackEnabled(false);
+    setArrangementPlaybackIndex(0);
+  }, [playback.stop]);
+  useEffect(() => {
+    if (!arrangementPlaybackEnabled) return;
+    if (!arrangementPlayableEntries.length) {
+      stopArrangementPlayback();
+      return;
+    }
+    if (arrangementPlaybackIndex >= arrangementPlayableEntries.length) {
+      setArrangementPlaybackIndex(arrangementPlayableEntries.length - 1);
+    }
+  }, [
+    arrangementPlaybackEnabled,
+    arrangementPlayableEntries,
+    arrangementPlaybackIndex,
+    stopArrangementPlayback,
+  ]);
+  useEffect(() => {
+    if (!arrangementPlaybackEnabled) return;
+    const entry = arrangementPlayableEntries[arrangementPlaybackIndex];
+    if (!entry?.row?.beat?.payload) {
+      stopArrangementPlayback();
+      return;
+    }
+    if (pendingSharedLoadRef.current) return;
+    const raf = window.requestAnimationFrame(() => {
+      if (!arrangementStartedRef.current) {
+        playback.setPlayhead(0);
+        const playFn = playbackPlayRef.current;
+        if (typeof playFn !== "function") {
+          stopArrangementPlayback();
+          return;
+        }
+        playFn({ startStep: 0 })
+          .then(() => {
+            arrangementStartedRef.current = true;
+          })
+          .catch(() => {
+            stopArrangementPlayback();
+          });
+      }
+      const segmentKey = getArrangementSegmentKey(entry);
+      const now = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+      let waitMs = 0;
+      if (
+        arrangementSegmentRef.current.key === segmentKey &&
+        Number.isFinite(arrangementSegmentRef.current.endAt)
+      ) {
+        waitMs = Math.max(0, arrangementSegmentRef.current.endAt - now);
+      } else {
+        const durationMs = getArrangementRowDurationMs(entry.row);
+        // Small early compensation for sample attack/padding so beat changes feel on-time.
+        const boundaryCompMs = -20;
+        const segmentMs = Math.max(40, durationMs + boundaryCompMs);
+        arrangementSegmentRef.current = {
+          key: segmentKey,
+          endAt: now + segmentMs,
+        };
+        waitMs = segmentMs;
+      }
+      if (arrangementTransitionTimerRef.current) {
+        window.clearTimeout(arrangementTransitionTimerRef.current);
+      }
+      arrangementTransitionTimerRef.current = window.setTimeout(() => {
+        const liveEntries = arrangementPlayableEntriesRef.current || [];
+        if (!liveEntries.length) {
+          stopArrangementPlayback();
+          return;
+        }
+        const currentKey = arrangementSegmentRef.current.key;
+        let currentIndex = liveEntries.findIndex(
+          (candidate) => getArrangementSegmentKey(candidate) === currentKey
+        );
+        if (currentIndex < 0) {
+          currentIndex = Math.max(
+            0,
+            Math.min(arrangementPlaybackIndexRef.current, liveEntries.length - 1)
+          );
+        }
+        let nextIndex = currentIndex + 1;
+        const liveLoopRange = arrangementLoopRangeRef.current;
+        if (liveLoopRange && nextIndex > liveLoopRange.end) {
+          nextIndex = liveLoopRange.start;
+        }
+        if (nextIndex >= liveEntries.length) {
+          stopArrangementPlayback();
+          return;
+        }
+        const nextEntry = liveEntries[nextIndex];
+        arrangementSegmentRef.current = { key: "", endAt: 0 };
+        setArrangementPlaybackIndex(nextIndex);
+        if (nextEntry?.row?.beat?.payload) {
+          applyImportedBeatPayloadRef.current?.(
+            nextEntry.row.beat.payload,
+            `arrangement-play:${nextIndex}:${nextEntry.row.id}:${nextEntry.row.beatId}`
+          );
+        } else {
+          stopArrangementPlayback();
+        }
+      }, waitMs);
+    });
+    return () => {
+      window.cancelAnimationFrame(raf);
+      if (arrangementTransitionTimerRef.current) {
+        window.clearTimeout(arrangementTransitionTimerRef.current);
+        arrangementTransitionTimerRef.current = null;
+      }
+    };
+  }, [
+    arrangementPlaybackEnabled,
+    arrangementPlayableEntries,
+    arrangementPlaybackIndex,
+    baseGrid,
+    bars,
+    resolution,
+    timeSig.n,
+    timeSig.d,
+    playback.setPlayhead,
+    stopArrangementPlayback,
+    getArrangementRowDurationMs,
+    getArrangementSegmentKey,
+  ]);
+  useEffect(() => {
+    if (!arrangementPlaybackEnabled) return;
+    if (playback.isPlaying) return;
+    if (!arrangementStartedRef.current) return;
+    stopArrangementPlayback();
+  }, [arrangementPlaybackEnabled, playback.isPlaying, stopArrangementPlayback]);
+  useEffect(() => {
+    if (isArrangementOpen) return;
+    if (!arrangementPlaybackEnabled) return;
+    playback.stop();
+    setArrangementPlaybackEnabled(false);
+    if (arrangementTransitionTimerRef.current) {
+      window.clearTimeout(arrangementTransitionTimerRef.current);
+      arrangementTransitionTimerRef.current = null;
+    }
+  }, [isArrangementOpen, arrangementPlaybackEnabled, playback.stop]);
 
   
   const notationExportRef = useRef(null);
@@ -2252,7 +3173,7 @@ useEffect(() => {
       alert(e?.message || "Failed to export PDF");
     }
   }, [printTitle, printComposer, printWatermarkEnabled]);
-  const handleShareLink = React.useCallback(async () => {
+  const buildCurrentBeatPayload = React.useCallback(() => {
     const grid = {};
     ALL_INSTRUMENTS.forEach((inst) => {
       const row = baseGrid[inst.id] || [];
@@ -2264,8 +3185,7 @@ useEffect(() => {
       }
       if (events.length) grid[inst.id] = events;
     });
-
-    const payload = {
+    return {
       v: 1,
       kitInstrumentIds,
       bars,
@@ -2276,6 +3196,246 @@ useEffect(() => {
       tupletsByBar: normalizedTupletOverridesByBar,
       grid,
     };
+  }, [
+    baseGrid,
+    columns,
+    kitInstrumentIds,
+    bars,
+    resolution,
+    timeSig,
+    bpm,
+    layout,
+    normalizedTupletOverridesByBar,
+  ]);
+
+  const applyImportedBeatPayload = React.useCallback(
+    (payload, sourceKey) => {
+      const shareSourceKey = sourceKey || `import:${Date.now()}`;
+      if (!payload || typeof payload !== "object") return;
+      if (appliedSharedKeyRef.current === shareSourceKey) return;
+      const nextBars = Math.max(1, Math.min(8, Number(payload.bars) || 1));
+      const resOrder = [4, 8, 16, 32];
+      const rawRes = Number(payload.resolution);
+      const nextResolution = resOrder.includes(rawRes) ? rawRes : 8;
+      const rawTs = payload.timeSig || {};
+      const nextTimeSig = {
+        n: Math.max(1, Number(rawTs.n) || 4),
+        d: Math.max(1, Number(rawTs.d) || 4),
+      };
+      const quarterCount = getQuarterBeatsPerBar(nextTimeSig);
+      const tupletsByBar = Array.from({ length: nextBars }, (_, barIdx) =>
+        Array.from({ length: quarterCount }, (_, qIdx) => {
+          const raw = payload.tupletsByBar?.[barIdx]?.[qIdx];
+          return clampTupletValue(raw) ?? null;
+        })
+      );
+      const nextKitIds = Array.isArray(payload.kitInstrumentIds)
+        ? [...new Set(payload.kitInstrumentIds.filter((id) => INSTRUMENT_BY_ID[id]))]
+        : [];
+      if (!nextKitIds.length) nextKitIds.push(...DRUMKIT_PRESETS.standard);
+
+      pendingSharedLoadRef.current = {
+        bars: nextBars,
+        resolution: nextResolution,
+        timeSig: nextTimeSig,
+        tupletsByBar,
+        grid: payload.grid && typeof payload.grid === "object" ? payload.grid : {},
+      };
+      appliedSharedKeyRef.current = shareSourceKey;
+
+      const nextLayout = payload.layout;
+      const layoutOptions = ["grid-top", "notation-top", "grid-right", "notation-right"];
+      if (layoutOptions.includes(nextLayout)) setLayout(nextLayout);
+      const nextBpm = Number(payload.bpm);
+      if (Number.isFinite(nextBpm)) setBpm(Math.max(20, Math.min(400, Math.round(nextBpm))));
+
+      setModifiedPresetBase(null);
+      setPendingPresetChange(null);
+      setPendingRemoval(null);
+      setSelection(null);
+      setLoopRule(null);
+      setActiveTab("none");
+      setLoopRepeats("off");
+      setKitInstrumentIds(nextKitIds);
+      setBars(nextBars);
+      setResolution(nextResolution);
+      setTimeSig(nextTimeSig);
+      setTupletOverridesByBar(tupletsByBar);
+    },
+    []
+  );
+  useEffect(() => {
+    applyImportedBeatPayloadRef.current = applyImportedBeatPayload;
+  }, [applyImportedBeatPayload]);
+  useEffect(() => {
+    const shareSourceKey = routeOptions.shareId
+      ? `g:${routeOptions.shareId}`
+      : routeOptions.shared
+        ? `s:${routeOptions.shared}`
+        : "";
+    const effectiveSharedState = routeOptions.shareId ? resolvedSharedState : requestedSharedState;
+    if (!effectiveSharedState || typeof effectiveSharedState !== "object") return;
+    applyImportedBeatPayload(effectiveSharedState, shareSourceKey);
+  }, [requestedSharedState, resolvedSharedState, routeOptions.shared, routeOptions.shareId, applyImportedBeatPayload]);
+  const arrangementLoadRowToEditor = React.useCallback(
+    (row) => {
+      if (!row?.beat?.payload) return;
+      applyImportedBeatPayload(row.beat.payload, `arrangement:${row.id}:${row.beatId}`);
+    },
+    [applyImportedBeatPayload]
+  );
+  const arrangementPlaySourceBeatInEditor = React.useCallback(
+    async (source, beat) => {
+      if (!beat?.payload) return;
+      if (arrangementPlaybackEnabled) stopArrangementPlayback();
+      applyImportedBeatPayload(
+        beat.payload,
+        `arrangement-source:${source}:${beat.id}:${beat.createdAt || ""}`
+      );
+      playback.stop();
+      playback.setPlayhead(0);
+      try {
+        await playback.play({ startStep: 0 });
+      } catch (_) {}
+    },
+    [
+      arrangementPlaybackEnabled,
+      stopArrangementPlayback,
+      applyImportedBeatPayload,
+      playback.stop,
+      playback.setPlayhead,
+      playback.play,
+    ]
+  );
+
+  const saveCurrentBeatLocal = React.useCallback(() => {
+    const fallbackName = `Beat ${localBeats.length + 1}`;
+    const name = beatNameDraft.trim() || fallbackName;
+    const now = new Date().toISOString();
+    const item = {
+      id: `local-${Math.random().toString(36).slice(2, 10)}`,
+      name,
+      category: beatCategoryDraft === "all" ? "Groove" : beatCategoryDraft,
+      style: beatStyleDraft === "all" ? undefined : beatStyleDraft.trim() || undefined,
+      timeSigCategory: `${timeSig.n}/${timeSig.d}`,
+      bpm,
+      createdAt: now,
+      payload: buildCurrentBeatPayload(),
+      source: "local",
+    };
+    setLocalBeatsWithUndo((prev) => [item, ...prev].slice(0, 500));
+  }, [
+    beatNameDraft,
+    beatCategoryDraft,
+    beatStyleDraft,
+    timeSig,
+    bpm,
+    buildCurrentBeatPayload,
+    localBeats.length,
+    setLocalBeatsWithUndo,
+  ]);
+
+  const submitCurrentBeatPublic = React.useCallback(async (opts = null) => {
+    const titleInput = String(opts?.title ?? beatNameDraft).trim();
+    const composerInput = String(opts?.composer ?? printComposer).trim();
+    const name = titleInput;
+    if (!name) return false;
+    setPublicLibraryError("");
+    try {
+      const res = await fetch("/api/beats", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name,
+          title: name,
+          composer: composerInput || undefined,
+          category: beatCategoryDraft === "all" ? "Groove" : beatCategoryDraft,
+          style: beatStyleDraft === "all" ? undefined : beatStyleDraft.trim() || undefined,
+          timeSigCategory: `${timeSig.n}/${timeSig.d}`,
+          bpm,
+          payload: buildCurrentBeatPayload(),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setPublicLibraryError(data?.error || "Failed to submit beat");
+        return false;
+      }
+      setPublicBeats((prev) => [data?.beat, ...prev].filter(Boolean));
+      return true;
+    } catch (_) {
+      setPublicLibraryError("Failed to submit beat");
+      return false;
+    }
+  }, [beatNameDraft, printComposer, beatCategoryDraft, beatStyleDraft, timeSig, bpm, buildCurrentBeatPayload]);
+  const openPublicSubmitDialog = React.useCallback(() => {
+    const nextTitle = (printTitle || beatNameDraft || "").trim();
+    const nextComposer = (lockedPublicComposer || printComposer || "").trim();
+    setPublicLibraryError("");
+    setPublicSubmitTitle(nextTitle);
+    setPublicSubmitComposer(nextComposer);
+    setIsPublicSubmitDialogOpen(true);
+  }, [printTitle, beatNameDraft, printComposer, lockedPublicComposer]);
+  const confirmPublicSubmit = React.useCallback(async () => {
+    const title = publicSubmitTitle.trim();
+    if (!title) return;
+    const composer = (lockedPublicComposer || publicSubmitComposer).trim();
+    if (!composer) {
+      setPublicLibraryError("Composer is required for public submission.");
+      return;
+    }
+    const ok = await submitCurrentBeatPublic({ title, composer });
+    if (!ok) return;
+    if (!lockedPublicComposer) setLockedPublicComposer(composer);
+    // Keep title/composer in sync across print, midi, and public submit flows.
+    setPrintTitle(title);
+    setPrintComposer(composer);
+    setBeatNameDraft(title);
+    setIsPublicSubmitDialogOpen(false);
+    setIsBeatLibraryOpen(false);
+  }, [
+    publicSubmitTitle,
+    publicSubmitComposer,
+    lockedPublicComposer,
+    submitCurrentBeatPublic,
+    setPrintTitle,
+    setPrintComposer,
+  ]);
+
+  const refreshPublicLibrary = React.useCallback(async () => {
+    setPublicLibraryLoading(true);
+    setPublicLibraryError("");
+    try {
+      const params = new URLSearchParams();
+      params.set("sort", librarySort === "oldest" ? "oldest" : "latest");
+      if (beatCategoryDraft !== "all") params.set("category", beatCategoryDraft);
+      if (libraryTimeSigFilter !== "all") params.set("timeSig", libraryTimeSigFilter);
+      if (beatStyleDraft !== "all") params.set("style", beatStyleDraft);
+      const res = await fetch(`/api/beats?${params.toString()}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setPublicLibraryError(data?.error || "Failed to load public library");
+        setPublicLibraryLoading(false);
+        return;
+      }
+      setPublicBeats(Array.isArray(data?.beats) ? data.beats : []);
+    } catch (_) {
+      setPublicLibraryError("Failed to load public library");
+    } finally {
+      setPublicLibraryLoading(false);
+    }
+  }, [librarySort, beatCategoryDraft, libraryTimeSigFilter, beatStyleDraft]);
+  useEffect(() => {
+    if (!isBeatLibraryOpen || beatLibraryTab !== "public") return;
+    refreshPublicLibrary();
+  }, [isBeatLibraryOpen, beatLibraryTab, refreshPublicLibrary]);
+  useEffect(() => {
+    if (isBeatLibraryOpen) return;
+    setPublicLibraryError("");
+  }, [isBeatLibraryOpen]);
+
+  const handleShareLink = React.useCallback(async () => {
+    const payload = buildCurrentBeatPayload();
     let text = "";
     let usedShortLink = false;
     try {
@@ -2323,15 +3483,7 @@ useEffect(() => {
       window.prompt("Copy share link", text);
     }
   }, [
-    baseGrid,
-    columns,
-    kitInstrumentIds,
-    bars,
-    resolution,
-    timeSig,
-    bpm,
-    layout,
-    normalizedTupletOverridesByBar,
+    buildCurrentBeatPayload,
   ]);
 // Spacebar toggles Play/Stop (avoid stealing space when typing)
   useEffect(() => {
@@ -2621,23 +3773,23 @@ useEffect(() => {
           <div className="flex items-center gap-2 order-2">
             <button
               type="button"
-              onClick={undoGrid}
-              disabled={gridPast.length === 0}
+              onClick={handleTopUndo}
+              disabled={!canUndoTop}
               className={`touch-none select-none px-3 py-1.5 rounded border text-sm bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60 ${
-                gridPast.length === 0 ? "opacity-40 cursor-not-allowed" : ""
+                !canUndoTop ? "opacity-40 cursor-not-allowed" : ""
               }`}
-              title="Undo (grid only)"
+              title={isLocalLibraryHistoryActive ? "Undo beat library change" : "Undo (grid only)"}
             >
               ←
             </button>
             <button
               type="button"
-              onClick={redoGrid}
-              disabled={gridFuture.length === 0}
+              onClick={handleTopRedo}
+              disabled={!canRedoTop}
               className={`touch-none select-none px-3 py-1.5 rounded border text-sm bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60 ${
-                gridFuture.length === 0 ? "opacity-40 cursor-not-allowed" : ""
+                !canRedoTop ? "opacity-40 cursor-not-allowed" : ""
               }`}
-              title="Redo (grid only)"
+              title={isLocalLibraryHistoryActive ? "Redo beat library change" : "Redo (grid only)"}
             >
               →
             </button>
@@ -2665,6 +3817,22 @@ useEffect(() => {
                 <path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0z" />
                 <path d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4zM2.5 3h11V2h-11z" />
               </svg>
+            </button>
+            <button
+              type="button"
+              onClick={openBeatLibraryWindow}
+              className="touch-none select-none px-3 py-1.5 rounded border text-sm bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
+              title="Open beat library"
+            >
+              Library
+            </button>
+            <button
+              type="button"
+              onClick={openArrangementWindow}
+              className="touch-none select-none px-3 py-1.5 rounded border text-sm bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
+              title="Open song arrangement"
+            >
+              Arrange
             </button>
             <button
               type="button"
@@ -3124,10 +4292,6 @@ useEffect(() => {
             >
               print
             </button>
-
-
-            
-
           </div>
         )}
       </header>
@@ -3454,6 +4618,504 @@ useEffect(() => {
         </div>
       </footer>
 
+      {isBeatLibraryOpen && (
+        <div className="fixed inset-0 z-50 pointer-events-none">
+          <div
+            className="w-full max-w-[44rem] max-h-[90vh] overflow-auto rounded-xl border border-neutral-700 bg-neutral-900 p-4 md:p-5 pointer-events-auto shadow-2xl"
+            style={{
+              position: "absolute",
+              left: beatLibraryPos.x,
+              top: beatLibraryPos.y,
+            }}
+            onMouseDown={(e) => {
+              // Keep normal controls interactive; dragging is only from the title bar.
+              e.stopPropagation();
+            }}
+          >
+            <div className="flex items-center justify-between gap-3">
+              <div
+                className="flex items-center gap-3 cursor-move select-none"
+                onMouseDown={(e) => {
+                  const panel = e.currentTarget.closest(".pointer-events-auto");
+                  if (!(panel instanceof HTMLElement)) return;
+                  const rect = panel.getBoundingClientRect();
+                  beatLibraryDragRef.current.dragging = true;
+                  beatLibraryDragRef.current.offsetX = e.clientX - rect.left;
+                  beatLibraryDragRef.current.offsetY = e.clientY - rect.top;
+                }}
+                title="Drag window"
+              >
+                <h2 className="text-base font-semibold">Beat Library</h2>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setBeatLibraryTab("local")}
+                    className={`px-2.5 py-1 rounded border text-sm ${
+                      beatLibraryTab === "local"
+                        ? "border-neutral-700 text-white bg-neutral-800"
+                        : "border-neutral-800 text-neutral-400 bg-neutral-900/60"
+                    }`}
+                  >
+                    Local
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setBeatLibraryTab("public")}
+                    className={`px-2.5 py-1 rounded border text-sm ${
+                      beatLibraryTab === "public"
+                        ? "border-neutral-700 text-white bg-neutral-800"
+                        : "border-neutral-800 text-neutral-400 bg-neutral-900/60"
+                    }`}
+                  >
+                    Public
+                  </button>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsBeatLibraryOpen(false)}
+                className="px-3 py-1.5 rounded border border-neutral-700 text-sm text-neutral-300 hover:bg-neutral-800/60"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="mt-4 flex flex-wrap items-end gap-2">
+              <input
+                ref={beatNameInputRef}
+                type="text"
+                value={beatNameDraft}
+                onChange={(e) => setBeatNameDraft(e.target.value)}
+                onKeyDown={async (e) => {
+                  if (e.key !== "Enter") return;
+                  e.preventDefault();
+                  if (beatLibraryTab === "public") {
+                    openPublicSubmitDialog();
+                    return;
+                  }
+                  saveCurrentBeatLocal();
+                  setIsBeatLibraryOpen(false);
+                }}
+                placeholder="Beat name"
+                className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-sm min-w-[180px]"
+              />
+              <select
+                value={beatCategoryDraft}
+                onChange={(e) => setBeatCategoryDraft(e.target.value)}
+                className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-sm"
+              >
+                <option value="all">All categories</option>
+                {BEAT_CATEGORY_OPTIONS.map((c) => (
+                  <option key={`cat-${c}`} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={beatStyleDraft}
+                onChange={(e) => setBeatStyleDraft(e.target.value)}
+                className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-sm"
+              >
+                <option value="all">All styles</option>
+                {BEAT_STYLE_OPTIONS.map((c) => (
+                  <option key={`style-${c}`} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={saveCurrentBeatLocal}
+                className="px-2.5 py-1 rounded border text-sm border-neutral-700 text-white bg-neutral-800 hover:bg-neutral-700/60"
+                title="Save to local beat library"
+              >
+                Save
+              </button>
+              <button
+                type="button"
+                onClick={openPublicSubmitDialog}
+                className="px-2.5 py-1 rounded border text-sm border-neutral-800 text-neutral-500 bg-neutral-900/60 hover:bg-neutral-800/40"
+                title="Submit to public beat library"
+              >
+                Submit public
+              </button>
+            </div>
+
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <span className="text-xs text-neutral-400">Sort</span>
+              <button
+                type="button"
+                onClick={cycleLibrarySort}
+                className="px-2 py-0.5 rounded border border-neutral-700 text-xs text-neutral-300 hover:bg-neutral-800/50"
+              >
+                {getLibrarySortLabel(librarySort)}
+              </button>
+              <span className="text-xs text-neutral-400">Time sig</span>
+              <select
+                value={libraryTimeSigFilter}
+                onChange={(e) => setLibraryTimeSigFilter(e.target.value)}
+                className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs"
+              >
+                <option value="all">All</option>
+                {allTimeSigCategories.map((ts) => (
+                  <option key={`ts-${ts}`} value={ts}>
+                    {ts}
+                  </option>
+                ))}
+              </select>
+              <span className="text-xs text-neutral-400">BPM</span>
+              <div className="flex items-stretch overflow-hidden rounded border border-neutral-700 bg-neutral-800">
+                <button
+                  type="button"
+                  onPointerDown={() => startLibraryBpmRepeat(-1)}
+                  onPointerUp={stopLibraryBpmRepeat}
+                  onPointerCancel={stopLibraryBpmRepeat}
+                  onPointerLeave={stopLibraryBpmRepeat}
+                  className="px-2 text-xs text-neutral-300 hover:bg-neutral-700/60 active:bg-neutral-700"
+                  aria-label="Decrease BPM filter value"
+                >
+                  −
+                </button>
+                <button
+                  type="button"
+                  onClick={cycleLibraryBpmFilterMode}
+                  className="min-w-[64px] border-l border-r border-neutral-700 px-2 py-1 text-xs text-white hover:bg-neutral-700/60"
+                  title="Cycle BPM filter mode"
+                >
+                  {getBpmFilterLabel()}
+                </button>
+                <button
+                  type="button"
+                  onPointerDown={() => startLibraryBpmRepeat(1)}
+                  onPointerUp={stopLibraryBpmRepeat}
+                  onPointerCancel={stopLibraryBpmRepeat}
+                  onPointerLeave={stopLibraryBpmRepeat}
+                  className="px-2 text-xs text-neutral-300 hover:bg-neutral-700/60 active:bg-neutral-700"
+                  aria-label="Increase BPM filter value"
+                >
+                  +
+                </button>
+              </div>
+              {beatLibraryTab === "public" && (
+                <button
+                  type="button"
+                  onClick={refreshPublicLibrary}
+                  className="px-2 py-0.5 rounded border border-neutral-700 text-xs text-neutral-300 hover:bg-neutral-800/50"
+                >
+                  Refresh
+                </button>
+              )}
+            </div>
+
+            {publicLibraryError && (
+              <div className="mt-3 rounded border border-amber-700/70 bg-amber-950/30 px-2 py-1 text-xs text-amber-100 flex items-center justify-between gap-2">
+                <span>{publicLibraryError}</span>
+                <button
+                  type="button"
+                  onClick={() => setPublicLibraryError("")}
+                  className="px-1 rounded border border-amber-700/60 text-amber-100 hover:bg-amber-800/40"
+                  aria-label="Close beat library error"
+                  title="Close"
+                >
+                  x
+                </button>
+              </div>
+            )}
+
+            <div className="mt-4 space-y-2">
+              {(beatLibraryTab === "local" ? filteredLocalBeats : filteredPublicBeats).map((beat) => {
+                const beatBpm = getBeatBpm(beat);
+                return (
+                  <div key={`beat-${beat.id}`} className="rounded border border-neutral-800 bg-neutral-950/40 px-3 py-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <div className="text-sm text-white">
+                          {beat.name || "Untitled Beat"}
+                          {beat.composer ? (
+                            <span className="ml-2 text-xs text-neutral-400">{`by ${beat.composer}`}</span>
+                          ) : null}
+                        </div>
+                        <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-neutral-400">
+                          {beat.createdAt ? (
+                            <span className="inline-block w-[78px] text-neutral-600 tabular-nums">
+                              {new Date(beat.createdAt).toLocaleDateString()}
+                            </span>
+                          ) : (
+                            <span className="inline-block w-[78px] text-neutral-600">—</span>
+                          )}
+                          <span className="inline-block w-[40px] tabular-nums">{beat.timeSigCategory || "4/4"}</span>
+                          <span className="inline-block w-[72px] tabular-nums">
+                            {Number.isFinite(beatBpm) ? `${beatBpm} BPM` : "—"}
+                          </span>
+                          <span className="inline-block w-[72px] truncate">{beat.category || "Groove"}</span>
+                          <span className="inline-block w-[108px] truncate">{beat.style || "—"}</span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            applyImportedBeatPayload(beat.payload, `${beatLibraryTab}:${beat.id}:${beat.createdAt || ""}`);
+                          }}
+                          className="px-2.5 py-1 rounded border border-neutral-700 text-sm text-neutral-200 hover:bg-neutral-800/60"
+                        >
+                          Load
+                        </button>
+                        {beatLibraryTab === "local" && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setLocalBeatsWithUndo((prev) => prev.filter((b) => b.id !== beat.id))
+                            }
+                            className="px-2.5 py-1 rounded border border-red-900 text-sm text-red-200 hover:bg-red-900/30"
+                          >
+                            Delete
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+              {beatLibraryTab === "public" && publicLibraryLoading && (
+                <div className="text-xs text-neutral-400">Loading public library…</div>
+              )}
+              {beatLibraryTab === "local" && filteredLocalBeats.length === 0 && (
+                <div className="text-xs text-neutral-500">No local beats saved yet.</div>
+              )}
+              {beatLibraryTab === "public" && !publicLibraryLoading && filteredPublicBeats.length === 0 && (
+                <div className="text-xs text-neutral-500">No public beats yet.</div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isArrangementOpen && (
+        <div className="fixed inset-0 z-[88] pointer-events-none">
+          <div
+            ref={arrangementPanelRef}
+            className={`w-full ${arrangementSourcesCollapsed ? "max-w-[36rem]" : "max-w-[68rem]"} max-h-[88vh] overflow-auto rounded-xl border border-neutral-700 bg-neutral-900 p-4 md:p-5 pointer-events-auto shadow-2xl`}
+            style={{
+              position: "absolute",
+              left: arrangementPos.x,
+              top: arrangementPos.y,
+            }}
+            onMouseDown={(e) => {
+              e.stopPropagation();
+            }}
+          >
+            <div className="flex items-center justify-between gap-3">
+              <div
+                className="cursor-move select-none"
+                onMouseDown={(e) => {
+                  const panel = e.currentTarget.closest(".pointer-events-auto");
+                  if (!(panel instanceof HTMLElement)) return;
+                  const rect = panel.getBoundingClientRect();
+                  arrangementDragRef.current.dragging = true;
+                  arrangementDragRef.current.offsetX = e.clientX - rect.left;
+                  arrangementDragRef.current.offsetY = e.clientY - rect.top;
+                }}
+                title="Drag window"
+              >
+                <h3 className="text-base font-semibold">Song Arrangement</h3>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setArrangementSourcesCollapsed((v) => !v)}
+                  className="px-3 py-1.5 rounded border border-neutral-700 text-sm text-neutral-300 hover:bg-neutral-800/60"
+                >
+                  {arrangementSourcesCollapsed ? "Show sources" : "Hide sources"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (arrangementPlaybackEnabled && playback.isPlaying) stopArrangementPlayback();
+                    else startArrangementPlayback();
+                  }}
+                  disabled={arrangementPlayableEntries.length < 1}
+                  className={`px-3 py-1.5 rounded border text-sm ${
+                    arrangementPlaybackEnabled && playback.isPlaying
+                      ? "border-neutral-600 text-white bg-neutral-800"
+                      : arrangementPlayableEntries.length > 0
+                        ? "border-neutral-700 text-white bg-neutral-800 hover:bg-neutral-700/60"
+                        : "border-neutral-800 text-neutral-500 bg-neutral-900/60 cursor-not-allowed"
+                  }`}
+                >
+                  {arrangementPlaybackEnabled && playback.isPlaying ? "Stop" : "Play arrangement"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsArrangementOpen(false)}
+                  className="px-3 py-1.5 rounded border border-neutral-700 text-sm text-neutral-300 hover:bg-neutral-800/60"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-neutral-300">
+              <span className="rounded border border-neutral-700 px-2 py-1">{`Total bars: ${arrangementTotals.totalBars}`}</span>
+              <span className="rounded border border-neutral-700 px-2 py-1">
+                {`Est. length: ${Math.floor(Math.max(0, Math.round(arrangementTotals.totalSeconds)) / 60)}:${String(
+                  Math.max(0, Math.round(arrangementTotals.totalSeconds)) % 60
+                ).padStart(2, "0")}`}
+              </span>
+              {normalizedArrangementSelection ? (
+                <span className="rounded border border-emerald-700/70 px-2 py-1 text-emerald-200">
+                  {`Loop selection: ${normalizedArrangementSelection.start + 1}-${normalizedArrangementSelection.end + 1}`}
+                </span>
+              ) : null}
+            </div>
+
+            <div className={`mt-4 grid grid-cols-1 ${arrangementSourcesCollapsed ? "" : "lg:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)]"} gap-4`}>
+              {!arrangementSourcesCollapsed && (
+              <div className="rounded border border-neutral-800 bg-neutral-950/40 p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-sm text-neutral-200">Beat Sources</div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setArrangementSourceTab("local")}
+                      className={`px-2.5 py-1 rounded border text-xs ${
+                        arrangementSourceTab === "local"
+                          ? "border-neutral-700 text-white bg-neutral-800"
+                          : "border-neutral-800 text-neutral-400 bg-neutral-900/60"
+                      }`}
+                    >
+                      Local
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setArrangementSourceTab("public")}
+                      className={`px-2.5 py-1 rounded border text-xs ${
+                        arrangementSourceTab === "public"
+                          ? "border-neutral-700 text-white bg-neutral-800"
+                          : "border-neutral-800 text-neutral-400 bg-neutral-900/60"
+                      }`}
+                    >
+                      Public
+                    </button>
+                  </div>
+                </div>
+                {!arrangementSourcesCollapsed ? (
+                  <div className="mt-3 max-h-[52vh] overflow-auto space-y-2 pr-1">
+                    {arrangementSourceBeats.map((beat) => {
+                      const beatBpm = getBeatBpm(beat);
+                      const sourceLabel = arrangementSourceTab === "public" ? "public" : "local";
+                      return (
+                        <div key={`arr-src-${sourceLabel}-${beat.id}`} className="rounded border border-neutral-800 bg-neutral-900/40 px-2.5 py-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="min-w-0">
+                              <div className="text-sm text-white truncate">{beat.name || "Untitled Beat"}</div>
+                              <div className="text-xs text-neutral-400 truncate">
+                                {(beat.timeSigCategory || "4/4") +
+                                  (Number.isFinite(beatBpm) ? ` · ${beatBpm} BPM` : "") +
+                                  ` · ${Math.max(1, Number(beat?.payload?.bars) || 1)} bars`}
+                              </div>
+                            </div>
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => arrangementPlaySourceBeatInEditor(arrangementSourceTab, beat)}
+                              className="px-2 py-1 rounded border border-neutral-700 text-xs text-neutral-200 bg-neutral-900 hover:bg-neutral-700/60"
+                            >
+                              Play
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => arrangementAddBeat(arrangementSourceTab, beat.id)}
+                              className="px-2 py-1 rounded border border-neutral-700 text-xs text-white bg-neutral-800 hover:bg-neutral-700/60"
+                            >
+                              Add
+                            </button>
+                          </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {arrangementSourceBeats.length === 0 && (
+                      <div className="text-xs text-neutral-500">No beats in this source with current filters.</div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="mt-2 text-xs text-neutral-500">Beat sources collapsed.</div>
+                )}
+              </div>
+              )}
+
+              <div className="rounded border border-neutral-800 bg-neutral-950/40 p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-sm text-neutral-200">Arrangement</div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setArrangementSelection(null);
+                        setArrangementSelectionAnchor(null);
+                      }}
+                      className="px-2 py-1 rounded border border-neutral-800 text-xs text-neutral-400 hover:bg-neutral-800/50"
+                    >
+                      Clear selection
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setArrangementItems([])}
+                      className="px-2 py-1 rounded border border-neutral-800 text-xs text-neutral-400 hover:bg-neutral-800/50"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                </div>
+                <div className="mt-2 text-[11px] text-neutral-500">Click rows to build a contiguous loop block. Click selected rows again to shrink/clear. Play loops selected range.</div>
+                <div ref={arrangementListRef} className="mt-3 max-h-[52vh] overflow-auto pr-1">
+                  <DndContext
+                    sensors={arrangementOrderSensors}
+                    collisionDetection={closestCenter}
+                    onDragEnd={onArrangementOrderDragEnd}
+                    modifiers={[restrictArrangementDragToList]}
+                  >
+                    <SortableContext
+                      items={arrangementRows.map((row) => row.id)}
+                      strategy={verticalListSortingStrategy}
+                    >
+                      <div className="space-y-2">
+                        {arrangementRows.map((row, idx) => (
+                          <SortableArrangementRow
+                            key={`arr-row-${row.id}`}
+                            row={row}
+                            index={idx}
+                            isPlaying={arrangementPlaybackEnabled && idx === activeArrangementPlayingRowIndex}
+                            isSelected={Boolean(
+                              normalizedArrangementSelection &&
+                                idx >= normalizedArrangementSelection.start &&
+                                idx <= normalizedArrangementSelection.end
+                            )}
+                            onSelect={() => handleArrangementRowSelect(idx)}
+                            onLoad={() => arrangementLoadRowToEditor(row)}
+                            onMoveUp={() => arrangementMoveRow(row.id, -1)}
+                            onMoveDown={() => arrangementMoveRow(row.id, 1)}
+                            onRepeatDown={() => arrangementNudgeRepeats(row.id, -1)}
+                            onRepeatUp={() => arrangementNudgeRepeats(row.id, 1)}
+                            onRemove={() => arrangementRemoveRow(row.id)}
+                          />
+                        ))}
+                      </div>
+                    </SortableContext>
+                  </DndContext>
+                  {arrangementRows.length === 0 && (
+                    <div className="text-xs text-neutral-500">
+                      No sections yet. Add beats from the source list to build your song form.
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {isKitEditorOpen && (
         <div
           className="fixed inset-0 z-50 bg-black/60 p-4 flex items-center justify-center"
@@ -3679,9 +5341,14 @@ useEffect(() => {
               <div>
                 <div className="text-sm font-medium mb-2">Kit Order</div>
                 <div className="text-xs text-neutral-400 mb-2">Drag rows to reorder instruments.</div>
-                <DndContext sensors={kitOrderSensors} collisionDetection={closestCenter} onDragEnd={onKitOrderDragEnd}>
+                <DndContext
+                  sensors={kitOrderSensors}
+                  collisionDetection={closestCenter}
+                  onDragEnd={onKitOrderDragEnd}
+                  modifiers={[restrictKitDragToList]}
+                >
                 <SortableContext items={kitInstrumentIds} strategy={verticalListSortingStrategy}>
-                <div className="space-y-2">
+                <div ref={kitOrderListRef} className="space-y-2">
                   {kitInstrumentIds.map((id, idx) => {
                     const inst = INSTRUMENT_BY_ID[id];
                     if (!inst) return null;
@@ -3851,6 +5518,76 @@ useEffect(() => {
                 className="px-3 py-1.5 rounded border border-neutral-700 text-sm text-white bg-neutral-800 hover:bg-neutral-700/60"
               >
                 Print
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isPublicSubmitDialogOpen && (
+        <div
+          className="fixed inset-0 z-[89] bg-black/60 p-4 flex items-center justify-center"
+          onMouseDown={() => setIsPublicSubmitDialogOpen(false)}
+        >
+          <div
+            className="w-full max-w-md rounded-xl border border-neutral-700 bg-neutral-900 p-4 md:p-5"
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-base font-semibold">Submit Public Beat</h3>
+            <div className="mt-4 grid grid-cols-1 gap-3">
+              <label className="text-sm text-neutral-300 flex flex-col gap-1">
+                <span>Title</span>
+                <input
+                  ref={publicSubmitTitleInputRef}
+                  type="text"
+                  value={publicSubmitTitle}
+                  onChange={(e) => setPublicSubmitTitle(e.target.value)}
+                  placeholder="Untitled"
+                  className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1.5 text-sm text-white"
+                />
+              </label>
+              <label className="text-sm text-neutral-300 flex flex-col gap-1">
+                <span>Composer</span>
+                <input
+                  ref={publicSubmitComposerInputRef}
+                  type="text"
+                  value={publicSubmitComposer}
+                  onChange={(e) => setPublicSubmitComposer(e.target.value)}
+                  onKeyDown={async (e) => {
+                    if (e.key !== "Enter") return;
+                    e.preventDefault();
+                    await confirmPublicSubmit();
+                  }}
+                  placeholder="Composer"
+                  disabled={Boolean(lockedPublicComposer)}
+                  className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1.5 text-sm text-white"
+                />
+              </label>
+              <div className="text-xs text-amber-200/90">
+                {lockedPublicComposer
+                  ? `Composer is locked for this browser: ${lockedPublicComposer}`
+                  : "Warning: Composer can only be set once on this browser for public uploads."}
+              </div>
+            </div>
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setIsPublicSubmitDialogOpen(false)}
+                className="px-3 py-1.5 rounded border border-neutral-700 text-sm text-neutral-300 hover:bg-neutral-800/60"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmPublicSubmit}
+                disabled={!publicSubmitTitle.trim() || !(lockedPublicComposer || publicSubmitComposer.trim())}
+                className={`px-3 py-1.5 rounded border text-sm ${
+                  publicSubmitTitle.trim() && (lockedPublicComposer || publicSubmitComposer.trim())
+                    ? "border-neutral-700 text-white bg-neutral-800 hover:bg-neutral-700/60"
+                    : "border-neutral-800 text-neutral-500 bg-neutral-900/60 cursor-not-allowed"
+                }`}
+              >
+                Submit
               </button>
             </div>
           </div>
@@ -4099,6 +5836,147 @@ function SortableKitOrderRow({
       >
         remove
       </button>
+    </div>
+  );
+}
+
+function SortableArrangementRow({
+  row,
+  index,
+  isPlaying,
+  isSelected,
+  onSelect,
+  onLoad,
+  onMoveUp,
+  onMoveDown,
+  onRepeatDown,
+  onRepeatUp,
+  onRemove,
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: row.id,
+  });
+  const verticalTransform = transform ? { ...transform, x: 0 } : null;
+  const style = {
+    transform: CSS.Transform.toString(verticalTransform),
+    transition,
+  };
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      onClick={() => onSelect?.()}
+      className={`rounded border px-2.5 py-2 ${
+        isPlaying
+          ? "border-cyan-500/80 bg-cyan-900/20 shadow-[0_0_0_1px_rgba(6,182,212,0.35)]"
+          : isSelected
+            ? "border-emerald-500/70 bg-emerald-900/20"
+            : isDragging
+              ? "border-cyan-700/70 bg-cyan-950/20"
+              : "border-neutral-800 bg-neutral-900/40"
+      }`}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <div className="min-w-0">
+          <div className="text-sm text-white truncate">
+            {`${index + 1}. ${row.beat?.name || "(missing beat)"}`}
+          </div>
+          <div className="text-xs text-neutral-400 truncate">
+            {(row.source === "public" ? "public" : "local") +
+              ` · ${row.beatTimeSig}` +
+              (Number.isFinite(row.beatBpm) ? ` · ${row.beatBpm} BPM` : "") +
+              ` · ${row.beatBars} bars/beat` +
+              ` · section ${row.sectionBars} bars`}
+          </div>
+        </div>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            {...attributes}
+            {...listeners}
+            onClick={(e) => e.stopPropagation()}
+            className="px-2 py-1 rounded border border-neutral-700 text-xs text-neutral-300 hover:bg-neutral-700/60 cursor-grab active:cursor-grabbing"
+            title="Drag to reorder"
+            aria-label="Drag to reorder"
+          >
+            ⋮⋮
+          </button>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onLoad?.();
+            }}
+            disabled={!row.beat?.payload}
+            className={`px-2 py-1 rounded border text-xs ${
+              row.beat?.payload
+                ? "border-neutral-700 text-neutral-100 hover:bg-neutral-700/60"
+                : "border-neutral-800 text-neutral-500 cursor-not-allowed"
+            }`}
+          >
+            Load
+          </button>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onMoveUp?.();
+            }}
+            className="px-2 py-1 rounded border border-neutral-700 text-xs text-neutral-200 hover:bg-neutral-700/60"
+            aria-label="Move section up"
+          >
+            ↑
+          </button>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onMoveDown?.();
+            }}
+            className="px-2 py-1 rounded border border-neutral-700 text-xs text-neutral-200 hover:bg-neutral-700/60"
+            aria-label="Move section down"
+          >
+            ↓
+          </button>
+          <div className="flex items-stretch overflow-hidden rounded border border-neutral-700 bg-neutral-800">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onRepeatDown?.();
+              }}
+              className="px-2 text-xs text-neutral-300 hover:bg-neutral-700/60"
+              aria-label="Decrease repeats"
+            >
+              −
+            </button>
+            <div className="min-w-[44px] border-l border-r border-neutral-700 px-2 py-1 text-center text-xs text-white">
+              x{row.repeats}
+            </div>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onRepeatUp?.();
+              }}
+              className="px-2 text-xs text-neutral-300 hover:bg-neutral-700/60"
+              aria-label="Increase repeats"
+            >
+              +
+            </button>
+          </div>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onRemove?.();
+            }}
+            className="px-2 py-1 rounded border border-red-900 text-xs text-red-200 hover:bg-red-900/30"
+          >
+            Remove
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
