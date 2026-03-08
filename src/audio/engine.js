@@ -287,6 +287,15 @@ function trigger(instId, time, gainValue = 1) {
     onStep = fn;
   }
 
+  function getCurrentTime() {
+    if (!audioCtx) return 0;
+    return audioCtx.currentTime;
+  }
+
+  function getScheduleAheadTimeSec() {
+    return scheduleAheadTimeSec;
+  }
+
   return {
     ensureContext,
     getContext,
@@ -295,6 +304,8 @@ function trigger(instId, time, gainValue = 1) {
     setBuffers,
     setTransport,
     setOnStep,
+    getCurrentTime,
+    getScheduleAheadTimeSec,
     play,
     stop,
   };

@@ -106,6 +106,10 @@ const USER_PRESETS_STORAGE_KEY = "drum-grid-user-presets-v1";
 const LOCAL_BEAT_LIBRARY_STORAGE_KEY = "drum-grid-local-beat-library-v1";
 const PUBLIC_SUBMIT_COMPOSER_STORAGE_KEY = "drum-grid-public-submit-composer-v1";
 const SONG_ARRANGEMENT_STORAGE_KEY = "drum-grid-song-arrangement-v1";
+const ARRANGEMENT_BOUNDARY_COMP_SCALE_STORAGE_KEY = "drum-grid-arrangement-boundary-comp-scale-v1";
+const ARRANGEMENT_ADAPTIVE_COMP_ENABLED_STORAGE_KEY = "drum-grid-arrangement-adaptive-comp-enabled-v1";
+const LEGACY_SELECTION_ENABLED_STORAGE_KEY = "drum-grid-legacy-selection-enabled-v1";
+const MOVE_MODE_DEBUG_ENABLED_STORAGE_KEY = "drum-grid-move-mode-debug-enabled-v1";
 const BEAT_CATEGORY_OPTIONS = [
   "Groove",
   "Fill",
@@ -526,8 +530,51 @@ export default function App() {
   const [isPrintDialogOpen, setIsPrintDialogOpen] = useState(false);
   const [isMidiDialogOpen, setIsMidiDialogOpen] = useState(false);
   const [isLegalDialogOpen, setIsLegalDialogOpen] = useState(false);
+  const [isPreferencesDialogOpen, setIsPreferencesDialogOpen] = useState(false);
+  const [preferencesCategory, setPreferencesCategory] = useState("playback");
+  const [showPrefsPlaybackInfo, setShowPrefsPlaybackInfo] = useState(false);
   const [legalTab, setLegalTab] = useState("impressum"); // impressum | privacy
   const [showLegalEmail, setShowLegalEmail] = useState(false);
+  const [arrangementBoundaryCompScale, setArrangementBoundaryCompScale] = useState(() => {
+    try {
+      const raw = Number(window.localStorage.getItem(ARRANGEMENT_BOUNDARY_COMP_SCALE_STORAGE_KEY));
+      if (!Number.isFinite(raw)) return 0;
+      return Math.max(-40, Math.min(40, Math.round(raw)));
+    } catch (_) {
+      return 0;
+    }
+  });
+  const arrangementBoundaryCompMs = arrangementBoundaryCompScale - 40;
+  const [arrangementAdaptiveCompEnabled, setArrangementAdaptiveCompEnabled] = useState(() => {
+    try {
+      const raw = window.localStorage.getItem(ARRANGEMENT_ADAPTIVE_COMP_ENABLED_STORAGE_KEY);
+      if (raw == null) return true;
+      return raw === "1";
+    } catch (_) {
+      return true;
+    }
+  });
+  const [arrangementAdaptiveCurrentCompMs, setArrangementAdaptiveCurrentCompMs] = useState(
+    arrangementBoundaryCompMs
+  );
+  const [legacySelectionEnabled, setLegacySelectionEnabled] = useState(() => {
+    try {
+      const raw = window.localStorage.getItem(LEGACY_SELECTION_ENABLED_STORAGE_KEY);
+      if (raw == null) return false;
+      return raw === "1";
+    } catch (_) {
+      return false;
+    }
+  });
+  const [moveModeDebugEnabled, setMoveModeDebugEnabled] = useState(() => {
+    try {
+      const raw = window.localStorage.getItem(MOVE_MODE_DEBUG_ENABLED_STORAGE_KEY);
+      if (raw == null) return false;
+      return raw === "1";
+    } catch (_) {
+      return false;
+    }
+  });
   const [isBeatLibraryOpen, setIsBeatLibraryOpen] = useState(false);
   const [isArrangementOpen, setIsArrangementOpen] = useState(false);
   const [arrangementPlaybackEnabled, setArrangementPlaybackEnabled] = useState(false);
@@ -538,6 +585,7 @@ export default function App() {
   const [isPublicSubmitDialogOpen, setIsPublicSubmitDialogOpen] = useState(false);
   const [beatLibraryPos, setBeatLibraryPos] = useState({ x: 56, y: 80 });
   const [beatLibraryTab, setBeatLibraryTab] = useState("local"); // local | public
+  const [loadedLocalBeatId, setLoadedLocalBeatId] = useState(null);
   const [arrangementSourceTab, setArrangementSourceTab] = useState("local"); // local | public
   const [arrangementSourcesCollapsed, setArrangementSourcesCollapsed] = useState(false);
   const arrangementPanelWidth = arrangementSourcesCollapsed ? 576 : 1088; // max-w-[36rem] / max-w-[68rem]
@@ -619,7 +667,7 @@ export default function App() {
   const [barsPerLine, setBarsPerLine] = useState(4);
   const [gridBarsPerLine, setGridBarsPerLine] = useState(4);
   const [layout, setLayout] = useState("grid-top");
-  const [activeTab, setActiveTab] = useState("none"); // none | timing | notation | selection | layout
+  const [activeTab, setActiveTab] = useState("none"); // none | timing | notation | selection
   const [timeSig, setTimeSig] = useState({ n: 4, d: 4 });
   const [keepTiming, setKeepTiming] = useState(true);
   const [tupletOverridesByBar, setTupletOverridesByBar] = useState(() =>
@@ -650,9 +698,10 @@ export default function App() {
   const arrangementListRef = React.useRef(null);
   const applyImportedBeatPayloadRef = React.useRef(null);
   const playbackPlayRef = React.useRef(null);
-  const arrangementTransitionTimerRef = React.useRef(null);
   const arrangementStartedRef = React.useRef(false);
-  const arrangementSegmentRef = React.useRef({ key: "", endAt: 0 });
+  const arrangementNextSwitchAtRef = React.useRef(0);
+  const arrangementSchedulerRef = React.useRef(null);
+  const arrangementAdaptiveCompMsRef = React.useRef(0);
   const arrangementPlayableEntriesRef = React.useRef([]);
   const arrangementLoopRangeRef = React.useRef(null);
   const arrangementPlaybackIndexRef = React.useRef(0);
@@ -664,7 +713,6 @@ export default function App() {
   const gridMenuRowPrimaryRef = React.useRef(null);
   const gridMenuRowSecondaryRef = React.useRef(null);
   const notationMenuRowRef = React.useRef(null);
-  const layoutMenuRowRef = React.useRef(null);
   const selectionMenuRowRef = React.useRef(null);
 
   useEffect(() => {
@@ -684,6 +732,38 @@ export default function App() {
       window.localStorage.setItem(SONG_ARRANGEMENT_STORAGE_KEY, JSON.stringify(arrangementItems));
     } catch (_) {}
   }, [arrangementItems]);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        ARRANGEMENT_BOUNDARY_COMP_SCALE_STORAGE_KEY,
+        String(arrangementBoundaryCompScale)
+      );
+    } catch (_) {}
+  }, [arrangementBoundaryCompScale]);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        ARRANGEMENT_ADAPTIVE_COMP_ENABLED_STORAGE_KEY,
+        arrangementAdaptiveCompEnabled ? "1" : "0"
+      );
+    } catch (_) {}
+  }, [arrangementAdaptiveCompEnabled]);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        LEGACY_SELECTION_ENABLED_STORAGE_KEY,
+        legacySelectionEnabled ? "1" : "0"
+      );
+    } catch (_) {}
+  }, [legacySelectionEnabled]);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        MOVE_MODE_DEBUG_ENABLED_STORAGE_KEY,
+        moveModeDebugEnabled ? "1" : "0"
+      );
+    } catch (_) {}
+  }, [moveModeDebugEnabled]);
   useEffect(() => {
     if (isBeatLibraryOpen && !wasBeatLibraryOpenRef.current) {
       setLibraryBpmTarget(bpm);
@@ -765,11 +845,9 @@ export default function App() {
         ? [gridMenuRowPrimaryRef.current, gridMenuRowSecondaryRef.current]
         : currentTab === "notation"
           ? [notationMenuRowRef.current]
-          : currentTab === "layout"
-            ? [layoutMenuRowRef.current]
-            : currentTab === "selection"
-              ? [selectionMenuRowRef.current]
-              : [];
+          : currentTab === "selection"
+            ? [selectionMenuRowRef.current]
+            : [];
     if (rows.some((row) => rowHasWrapped(row))) {
       setActiveTab("none");
     }
@@ -812,6 +890,36 @@ export default function App() {
       }, 130);
     },
     [stopBpmRepeat]
+  );
+  const stepArrangementBoundaryCompMs = React.useCallback(
+    (delta) =>
+      setArrangementBoundaryCompScale((v) => Math.max(-40, Math.min(40, v + delta))),
+    []
+  );
+  const arrangementBoundaryCompRepeatRef = React.useRef({ timer: null, interval: null });
+  const stopArrangementBoundaryCompRepeat = React.useCallback(() => {
+    const r = arrangementBoundaryCompRepeatRef.current;
+    if (r.timer) window.clearTimeout(r.timer);
+    if (r.interval) window.clearInterval(r.interval);
+    r.timer = null;
+    r.interval = null;
+  }, []);
+  const startArrangementBoundaryCompRepeat = React.useCallback(
+    (delta) => {
+      stopArrangementBoundaryCompRepeat();
+      stepArrangementBoundaryCompMs(delta);
+      arrangementBoundaryCompRepeatRef.current.timer = window.setTimeout(() => {
+        arrangementBoundaryCompRepeatRef.current.interval = window.setInterval(
+          () => stepArrangementBoundaryCompMs(delta),
+          50
+        );
+      }, 130);
+    },
+    [stopArrangementBoundaryCompRepeat, stepArrangementBoundaryCompMs]
+  );
+  useEffect(
+    () => () => stopArrangementBoundaryCompRepeat(),
+    [stopArrangementBoundaryCompRepeat]
   );
 
 
@@ -892,7 +1000,8 @@ useEffect(() => {
         isPublicSubmitDialogOpen ||
         isPrintDialogOpen ||
         isMidiDialogOpen ||
-        isLegalDialogOpen
+        isLegalDialogOpen ||
+        isPreferencesDialogOpen
       ) return;
       const el = e.target;
       const tag = (el?.tagName || "").toLowerCase();
@@ -915,6 +1024,7 @@ useEffect(() => {
     isPrintDialogOpen,
     isMidiDialogOpen,
     isLegalDialogOpen,
+    isPreferencesDialogOpen,
   ]);
 
   useEffect(() => {
@@ -938,6 +1048,11 @@ useEffect(() => {
       window.removeEventListener("keydown", onKeyDown);
     };
   }, [isBeatLibraryOpen]);
+  useEffect(() => {
+    if (!loadedLocalBeatId) return;
+    const stillExists = localBeats.some((b) => String(b?.id || "") === String(loadedLocalBeatId));
+    if (!stillExists) setLoadedLocalBeatId(null);
+  }, [loadedLocalBeatId, localBeats]);
   useEffect(() => {
     if (!isArrangementOpen) return;
     const margin = 8;
@@ -1042,6 +1157,16 @@ useEffect(() => {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [isLegalDialogOpen]);
+  useEffect(() => {
+    if (!isPreferencesDialogOpen) return;
+    const onKeyDown = (e) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      setIsPreferencesDialogOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [isPreferencesDialogOpen]);
 
   useEffect(() => {
     if (!isMidiDialogOpen) return;
@@ -1062,6 +1187,7 @@ useEffect(() => {
   const [loopOverlapMode, setLoopOverlapMode] = useState("all-to-all");
   const [moveOverrideBehavior, setMoveOverrideBehavior] = useState("temporary");
   const lastNonAllLoopRepeats = React.useRef("1");
+  const lastNonOffGlobalTupletRef = React.useRef(3);
   React.useEffect(() => {
     // Remember the last non-"all" value so clicking the center can toggle all <-> last value.
     if (loopRepeats !== "all") lastNonAllLoopRepeats.current = loopRepeats;
@@ -1242,31 +1368,13 @@ useEffect(() => {
     setWrappedSelectionCells(null);
   }, [moveOverlapMode, moveOverrideBehavior]);
 
-  useEffect(() => {
-    if (!selection) return;
-    const onKey = (e) => {
-      const deltaByKey = {
-        ArrowUp: [-1, 0],
-        ArrowDown: [1, 0],
-        ArrowLeft: [0, -1],
-        ArrowRight: [0, 1],
-      };
-      const delta = deltaByKey[e.key];
-      if (!delta) return;
-
-      const el = e.target;
-      const tag = (el?.tagName || "").toLowerCase();
-      const isTyping = tag === "input" || tag === "textarea" || el?.isContentEditable;
-      if (isTyping) return;
-
-      e.preventDefault();
-      setLoopRule(null);
-
-      const [dr, dc] = delta;
+  const moveSelectionByDelta = React.useCallback(
+    (dr, dc) => {
+      if (!selection) return false;
       const width = selection.endExclusive - selection.start;
       const height = selection.rowEnd - selection.rowStart + 1;
       const rowCount = instruments.length;
-      if (rowCount < 1 || columns < 1) return;
+      if (rowCount < 1 || columns < 1) return false;
       const sourceRectCoords = Array.from({ length: height }, (_, rOff) =>
         Array.from({ length: width }, (_, cOff) => ({
           row: selection.rowStart + rOff,
@@ -1279,7 +1387,7 @@ useEffect(() => {
         const nextCol = col + dc;
         return nextRow < 0 || nextRow >= rowCount || nextCol < 0 || nextCol >= columns;
       });
-      if (outOfBounds && !wrapSelectionMoveEnabled) return;
+      if (outOfBounds && !wrapSelectionMoveEnabled) return false;
       const targetCoords = wrapSelectionMoveEnabled
         ? sourceCoords.map(({ row, col }) => ({
             row: (row + dr + rowCount) % rowCount,
@@ -1290,6 +1398,7 @@ useEffect(() => {
             col: col + dc,
           }));
 
+      setLoopRule(null);
       setBaseGridWithUndo((prev) => {
         const cloneGrid = (g) => {
           const out = {};
@@ -1299,8 +1408,6 @@ useEffect(() => {
         const isTemporaryOverride = moveOverrideBehavior === "temporary";
         if (isTemporaryOverride && !moveBaseGridRef.current) {
           const base = cloneGrid(prev);
-          // Remove the original selected cells from the temporary base layer.
-          // The moving payload is drawn on top, so this avoids a first-step tail.
           for (const { row, col } of sourceCoords) {
             const instId = instruments[row]?.id;
             if (!instId) continue;
@@ -1313,10 +1420,10 @@ useEffect(() => {
 
         if (!Array.isArray(moveInitialPayloadRef.current) || moveInitialPayloadRef.current.length !== sourceCoords.length) {
           moveInitialPayloadRef.current = sourceCoords.map(({ row, col }) => {
-              const instId = instruments[row]?.id;
-              if (!instId) return CELL.OFF;
-              return prev[instId]?.[col] ?? CELL.OFF;
-            });
+            const instId = instruments[row]?.id;
+            if (!instId) return CELL.OFF;
+            return prev[instId]?.[col] ?? CELL.OFF;
+          });
         }
         const payload = moveInitialPayloadRef.current;
 
@@ -1332,14 +1439,10 @@ useEffect(() => {
             shouldWrite = true;
             shouldClearSource = true;
           } else if (moveOverlapMode === "active-to-all") {
-            // "Empty won't override" => move only active payload cells.
             shouldWrite = movedVal !== CELL.OFF;
             shouldClearSource = movedVal !== CELL.OFF;
           } else if (moveOverlapMode === "active-to-empty") {
-            // "Fill in gaps" => move active payload cells only into empty targets.
             shouldWrite = movedVal !== CELL.OFF && targetVal === CELL.OFF;
-            // Keep payload composition strict across steps:
-            // active payload cells move every step even if this target is blocked now.
             shouldClearSource = movedVal !== CELL.OFF;
           }
 
@@ -1368,11 +1471,31 @@ useEffect(() => {
       if (moveOverrideBehavior !== "temporary") moveBaseGridRef.current = null;
       wrappedMoveCellsRef.current = targetCoords;
       setWrappedSelectionCells(targetCoords);
+      return true;
+    },
+    [selection, instruments, columns, wrapSelectionMoveEnabled, moveOverlapMode, moveOverrideBehavior]
+  );
+  useEffect(() => {
+    if (!selection) return;
+    const onKey = (e) => {
+      const deltaByKey = {
+        ArrowUp: [-1, 0],
+        ArrowDown: [1, 0],
+        ArrowLeft: [0, -1],
+        ArrowRight: [0, 1],
+      };
+      const delta = deltaByKey[e.key];
+      if (!delta) return;
+      const el = e.target;
+      const tag = (el?.tagName || "").toLowerCase();
+      const isTyping = tag === "input" || tag === "textarea" || el?.isContentEditable;
+      if (isTyping) return;
+      e.preventDefault();
+      moveSelectionByDelta(delta[0], delta[1]);
     };
-
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [selection, instruments, columns, wrapSelectionMoveEnabled, moveOverlapMode, moveOverrideBehavior]);
+  }, [selection, moveSelectionByDelta]);
 
   const clearAll = React.useCallback(() => {
     const currentGrid = baseGridRef.current || {};
@@ -1569,6 +1692,67 @@ useEffect(() => {
       remapGridBySubdivisions,
     ]
   );
+  const globalTupletValue = React.useMemo(() => {
+    const values = normalizedTupletOverridesByBar.flatMap((row) => row.map((v) => v ?? null));
+    if (values.length === 0) return null;
+    const first = values[0] ?? null;
+    return values.every((v) => (v ?? null) === first) ? first : "mixed";
+  }, [normalizedTupletOverridesByBar]);
+  React.useEffect(() => {
+    if (typeof globalTupletValue === "number" && globalTupletValue > 0) {
+      lastNonOffGlobalTupletRef.current = globalTupletValue;
+    }
+  }, [globalTupletValue]);
+  const setGlobalTupletValue = React.useCallback(
+    (nextVal) => {
+      const normalized = clampTupletValue(nextVal) ?? null;
+      const oldSubsByBar = quarterSubdivisionsByBar;
+      const nextOverridesByBar = Array.from({ length: bars }, () =>
+        Array.from({ length: quarterBeatsPerBar }, () => normalized)
+      );
+      const nextSubsByBar = nextOverridesByBar.map((row) =>
+        resolveQuarterSubdivisions(row, baseSubdivPerQuarter)
+      );
+      if (keepTiming) {
+        applyingTupletRemapRef.current = true;
+        setBaseGridWithUndo((prev) => remapGridBySubdivisions(prev, oldSubsByBar, nextSubsByBar));
+      } else {
+        tupletBaselineGridRef.current = null;
+        tupletBaselineSubsByBarRef.current = null;
+      }
+      setTupletOverridesByBar(nextOverridesByBar);
+    },
+    [
+      quarterSubdivisionsByBar,
+      bars,
+      quarterBeatsPerBar,
+      baseSubdivPerQuarter,
+      keepTiming,
+      remapGridBySubdivisions,
+    ]
+  );
+  const stepGlobalTupletValue = React.useCallback(
+    (dir = 1) => {
+      const idx = TUPLET_OPTIONS.findIndex((v) => v === globalTupletValue);
+      const startIdx = idx < 0 ? 0 : idx;
+      const nextIdx = (startIdx + dir + TUPLET_OPTIONS.length) % TUPLET_OPTIONS.length;
+      setGlobalTupletValue(TUPLET_OPTIONS[nextIdx]);
+    },
+    [globalTupletValue, setGlobalTupletValue]
+  );
+  const toggleGlobalTupletOffLast = React.useCallback(() => {
+    if (globalTupletValue == null) {
+      setGlobalTupletValue(lastNonOffGlobalTupletRef.current || 3);
+      return;
+    }
+    if (typeof globalTupletValue === "number" && globalTupletValue > 0) {
+      lastNonOffGlobalTupletRef.current = globalTupletValue;
+      setGlobalTupletValue(null);
+      return;
+    }
+    // Mixed -> off, then next click returns to last remembered value.
+    setGlobalTupletValue(null);
+  }, [globalTupletValue, setGlobalTupletValue]);
 
 
 
@@ -2959,10 +3143,6 @@ useEffect(() => {
     }
     return null;
   }, []);
-  const getArrangementSegmentKey = React.useCallback((entry) => {
-    if (!entry?.row) return "missing";
-    return `${entry.row.id}:${entry.row.beatId}:${entry.repeatIndex}`;
-  }, []);
   const arrangementPlaybackLoopRange = React.useMemo(
     () => computeArrangementLoopRange(arrangementPlayableEntries, normalizedArrangementSelection),
     [arrangementPlayableEntries, normalizedArrangementSelection, computeArrangementLoopRange]
@@ -2976,15 +3156,21 @@ useEffect(() => {
   useEffect(() => {
     arrangementPlaybackIndexRef.current = arrangementPlaybackIndex;
   }, [arrangementPlaybackIndex]);
+  useEffect(() => {
+    arrangementAdaptiveCompMsRef.current = arrangementBoundaryCompMs;
+    setArrangementAdaptiveCurrentCompMs(arrangementBoundaryCompMs);
+  }, [arrangementBoundaryCompMs, arrangementAdaptiveCompEnabled]);
   const startArrangementPlayback = React.useCallback(() => {
     if (!arrangementPlayableEntries.length) return;
     if (playback.isPlaying) playback.stop();
-    if (arrangementTransitionTimerRef.current) {
-      window.clearTimeout(arrangementTransitionTimerRef.current);
-      arrangementTransitionTimerRef.current = null;
+    if (arrangementSchedulerRef.current) {
+      window.clearInterval(arrangementSchedulerRef.current);
+      arrangementSchedulerRef.current = null;
     }
     arrangementStartedRef.current = false;
-    arrangementSegmentRef.current = { key: "", endAt: 0 };
+    arrangementNextSwitchAtRef.current = 0;
+    arrangementAdaptiveCompMsRef.current = arrangementBoundaryCompMs;
+    setArrangementAdaptiveCurrentCompMs(arrangementBoundaryCompMs);
     const queue = arrangementPlayableEntries;
     const loopRange = computeArrangementLoopRange(queue, normalizedArrangementSelection);
     const startIndex = loopRange ? loopRange.start : 0;
@@ -3000,18 +3186,21 @@ useEffect(() => {
   }, [
     arrangementPlayableEntries,
     normalizedArrangementSelection,
+    arrangementBoundaryCompMs,
     playback.isPlaying,
     playback.stop,
     computeArrangementLoopRange,
   ]);
   const stopArrangementPlayback = React.useCallback(() => {
     playback.stop();
-    if (arrangementTransitionTimerRef.current) {
-      window.clearTimeout(arrangementTransitionTimerRef.current);
-      arrangementTransitionTimerRef.current = null;
+    if (arrangementSchedulerRef.current) {
+      window.clearInterval(arrangementSchedulerRef.current);
+      arrangementSchedulerRef.current = null;
     }
     arrangementStartedRef.current = false;
-    arrangementSegmentRef.current = { key: "", endAt: 0 };
+    arrangementNextSwitchAtRef.current = 0;
+    arrangementAdaptiveCompMsRef.current = arrangementBoundaryCompMs;
+    setArrangementAdaptiveCurrentCompMs(arrangementBoundaryCompMs);
     setArrangementPlaybackEnabled(false);
     setArrangementPlaybackIndex(0);
   }, [playback.stop]);
@@ -3049,77 +3238,15 @@ useEffect(() => {
         playFn({ startStep: 0 })
           .then(() => {
             arrangementStartedRef.current = true;
+            arrangementNextSwitchAtRef.current = 0;
           })
           .catch(() => {
             stopArrangementPlayback();
           });
       }
-      const segmentKey = getArrangementSegmentKey(entry);
-      const now = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
-      let waitMs = 0;
-      if (
-        arrangementSegmentRef.current.key === segmentKey &&
-        Number.isFinite(arrangementSegmentRef.current.endAt)
-      ) {
-        waitMs = Math.max(0, arrangementSegmentRef.current.endAt - now);
-      } else {
-        const durationMs = getArrangementRowDurationMs(entry.row);
-        // Small early compensation for sample attack/padding so beat changes feel on-time.
-        const boundaryCompMs = -20;
-        const segmentMs = Math.max(40, durationMs + boundaryCompMs);
-        arrangementSegmentRef.current = {
-          key: segmentKey,
-          endAt: now + segmentMs,
-        };
-        waitMs = segmentMs;
-      }
-      if (arrangementTransitionTimerRef.current) {
-        window.clearTimeout(arrangementTransitionTimerRef.current);
-      }
-      arrangementTransitionTimerRef.current = window.setTimeout(() => {
-        const liveEntries = arrangementPlayableEntriesRef.current || [];
-        if (!liveEntries.length) {
-          stopArrangementPlayback();
-          return;
-        }
-        const currentKey = arrangementSegmentRef.current.key;
-        let currentIndex = liveEntries.findIndex(
-          (candidate) => getArrangementSegmentKey(candidate) === currentKey
-        );
-        if (currentIndex < 0) {
-          currentIndex = Math.max(
-            0,
-            Math.min(arrangementPlaybackIndexRef.current, liveEntries.length - 1)
-          );
-        }
-        let nextIndex = currentIndex + 1;
-        const liveLoopRange = arrangementLoopRangeRef.current;
-        if (liveLoopRange && nextIndex > liveLoopRange.end) {
-          nextIndex = liveLoopRange.start;
-        }
-        if (nextIndex >= liveEntries.length) {
-          stopArrangementPlayback();
-          return;
-        }
-        const nextEntry = liveEntries[nextIndex];
-        arrangementSegmentRef.current = { key: "", endAt: 0 };
-        setArrangementPlaybackIndex(nextIndex);
-        if (nextEntry?.row?.beat?.payload) {
-          applyImportedBeatPayloadRef.current?.(
-            nextEntry.row.beat.payload,
-            `arrangement-play:${nextIndex}:${nextEntry.row.id}:${nextEntry.row.beatId}`
-          );
-        } else {
-          stopArrangementPlayback();
-        }
-      }, waitMs);
     });
     return () => {
       window.cancelAnimationFrame(raf);
-      if (arrangementTransitionTimerRef.current) {
-        window.clearTimeout(arrangementTransitionTimerRef.current);
-        arrangementTransitionTimerRef.current = null;
-      }
     };
   }, [
     arrangementPlaybackEnabled,
@@ -3133,7 +3260,99 @@ useEffect(() => {
     playback.setPlayhead,
     stopArrangementPlayback,
     getArrangementRowDurationMs,
-    getArrangementSegmentKey,
+  ]);
+  useEffect(() => {
+    if (!arrangementPlaybackEnabled) return;
+    if (arrangementSchedulerRef.current) {
+      window.clearInterval(arrangementSchedulerRef.current);
+      arrangementSchedulerRef.current = null;
+    }
+    const tick = () => {
+      if (!arrangementStartedRef.current) return;
+      const liveEntries = arrangementPlayableEntriesRef.current || [];
+      if (!liveEntries.length) {
+        stopArrangementPlayback();
+        return;
+      }
+      const audioTime = playback.getAudioTime?.() || 0;
+      const scheduleAheadSec = playback.getScheduleAheadTimeSec?.() || 0.12;
+      if (!Number.isFinite(audioTime) || audioTime <= 0) return;
+      let currentIndex = Math.max(
+        0,
+        Math.min(arrangementPlaybackIndexRef.current, liveEntries.length - 1)
+      );
+      let currentEntry = liveEntries[currentIndex];
+      if (!currentEntry?.row?.beat?.payload) return;
+
+      if (!(arrangementNextSwitchAtRef.current > 0)) {
+        const currentDurSec = Math.max(0.04, getArrangementRowDurationMs(currentEntry.row) / 1000);
+        const boundaryCompSec = arrangementAdaptiveCompMsRef.current / 1000;
+        arrangementNextSwitchAtRef.current = audioTime + currentDurSec + boundaryCompSec;
+        return;
+      }
+
+      let safety = 0;
+      while (
+        arrangementNextSwitchAtRef.current > 0 &&
+        audioTime + scheduleAheadSec >= arrangementNextSwitchAtRef.current &&
+        safety < 4
+      ) {
+        if (arrangementAdaptiveCompEnabled) {
+          const latenessMs = Math.max(
+            0,
+            (audioTime + scheduleAheadSec - arrangementNextSwitchAtRef.current) * 1000
+          );
+          // Adapt compensation toward the observed scheduler latency, with light pull to user base value.
+          const corrected = arrangementAdaptiveCompMsRef.current - latenessMs * 0.35;
+          const pulled = corrected + (arrangementBoundaryCompMs - corrected) * 0.06;
+          arrangementAdaptiveCompMsRef.current = Math.max(-40, Math.min(40, pulled));
+        } else {
+          arrangementAdaptiveCompMsRef.current = arrangementBoundaryCompMs;
+        }
+        setArrangementAdaptiveCurrentCompMs((prev) => {
+          const next = Math.round(arrangementAdaptiveCompMsRef.current);
+          return prev === next ? prev : next;
+        });
+        let nextIndex = currentIndex + 1;
+        const liveLoopRange = arrangementLoopRangeRef.current;
+        if (liveLoopRange && nextIndex > liveLoopRange.end) nextIndex = liveLoopRange.start;
+        if (nextIndex >= liveEntries.length) {
+          stopArrangementPlayback();
+          return;
+        }
+        const nextEntry = liveEntries[nextIndex];
+        if (!nextEntry?.row?.beat?.payload) {
+          stopArrangementPlayback();
+          return;
+        }
+        setArrangementPlaybackIndex(nextIndex);
+        applyImportedBeatPayloadRef.current?.(
+          nextEntry.row.beat.payload,
+          `arrangement-play:${nextIndex}:${nextEntry.row.id}:${nextEntry.row.beatId}`
+        );
+        const nextDurSec = Math.max(0.04, getArrangementRowDurationMs(nextEntry.row) / 1000);
+        const boundaryCompSec = arrangementAdaptiveCompMsRef.current / 1000;
+        arrangementNextSwitchAtRef.current += nextDurSec + boundaryCompSec;
+        currentIndex = nextIndex;
+        currentEntry = nextEntry;
+        safety += 1;
+      }
+    };
+    arrangementSchedulerRef.current = window.setInterval(tick, 20);
+    return () => {
+      if (arrangementSchedulerRef.current) {
+        window.clearInterval(arrangementSchedulerRef.current);
+        arrangementSchedulerRef.current = null;
+      }
+    };
+  }, [
+    arrangementPlaybackEnabled,
+    arrangementAdaptiveCompEnabled,
+    arrangementBoundaryCompMs,
+    getArrangementRowDurationMs,
+    stopArrangementPlayback,
+    playback.getAudioTime,
+    playback.getScheduleAheadTimeSec,
   ]);
   useEffect(() => {
     if (!arrangementPlaybackEnabled) return;
@@ -3146,9 +3365,11 @@ useEffect(() => {
     if (!arrangementPlaybackEnabled) return;
     playback.stop();
     setArrangementPlaybackEnabled(false);
-    if (arrangementTransitionTimerRef.current) {
-      window.clearTimeout(arrangementTransitionTimerRef.current);
-      arrangementTransitionTimerRef.current = null;
+    arrangementStartedRef.current = false;
+    arrangementNextSwitchAtRef.current = 0;
+    if (arrangementSchedulerRef.current) {
+      window.clearInterval(arrangementSchedulerRef.current);
+      arrangementSchedulerRef.current = null;
     }
   }, [isArrangementOpen, arrangementPlaybackEnabled, playback.stop]);
 
@@ -3173,6 +3394,12 @@ useEffect(() => {
       alert(e?.message || "Failed to export PDF");
     }
   }, [printTitle, printComposer, printWatermarkEnabled]);
+  const bakeLoopPreview = React.useCallback(() => {
+    if (!loopRule) return;
+    setBaseGridWithUndo((prev) => bakeLoopInto(prev, loopRule, loopRepeats, loopOverlapMode));
+    setLoopRule(null);
+    setSelection(null);
+  }, [loopRule, loopRepeats, loopOverlapMode]);
   const buildCurrentBeatPayload = React.useCallback(() => {
     const grid = {};
     ALL_INSTRUMENTS.forEach((inst) => {
@@ -3207,6 +3434,55 @@ useEffect(() => {
     layout,
     normalizedTupletOverridesByBar,
   ]);
+  const loadedLocalBeat = React.useMemo(
+    () => localBeats.find((b) => String(b?.id || "") === String(loadedLocalBeatId || "")) || null,
+    [localBeats, loadedLocalBeatId]
+  );
+  const normalizedCurrentPayloadJson = React.useMemo(
+    () => JSON.stringify(buildCurrentBeatPayload()),
+    [buildCurrentBeatPayload]
+  );
+  const loadedLocalPayloadJson = React.useMemo(
+    () => JSON.stringify(loadedLocalBeat?.payload || {}),
+    [loadedLocalBeat]
+  );
+  const normalizedDraftName = React.useMemo(() => beatNameDraft.trim(), [beatNameDraft]);
+  const normalizedDraftCategory = React.useMemo(
+    () => (beatCategoryDraft === "all" ? "Groove" : beatCategoryDraft),
+    [beatCategoryDraft]
+  );
+  const normalizedDraftStyle = React.useMemo(
+    () => (beatStyleDraft === "all" ? undefined : beatStyleDraft.trim() || undefined),
+    [beatStyleDraft]
+  );
+  const isLoadedLocalBeatDirty = React.useMemo(() => {
+    if (!loadedLocalBeat) return false;
+    const savedName = String(loadedLocalBeat.name || "").trim();
+    const savedCategory = String(loadedLocalBeat.category || "Groove");
+    const savedStyle = loadedLocalBeat.style ? String(loadedLocalBeat.style).trim() : undefined;
+    const nameChanged = normalizedDraftName !== savedName;
+    const categoryChanged = normalizedDraftCategory !== savedCategory;
+    const styleChanged = (normalizedDraftStyle || undefined) !== (savedStyle || undefined);
+    const payloadChanged = normalizedCurrentPayloadJson !== loadedLocalPayloadJson;
+    return nameChanged || categoryChanged || styleChanged || payloadChanged;
+  }, [
+    loadedLocalBeat,
+    normalizedDraftName,
+    normalizedDraftCategory,
+    normalizedDraftStyle,
+    normalizedCurrentPayloadJson,
+    loadedLocalPayloadJson,
+  ]);
+  const isLoadedLocalBeatNameChanged = React.useMemo(() => {
+    if (!loadedLocalBeat) return false;
+    const savedName = String(loadedLocalBeat.name || "").trim();
+    return normalizedDraftName !== savedName;
+  }, [loadedLocalBeat, normalizedDraftName]);
+  const canUpdateLoadedLocalBeat =
+    beatLibraryTab === "local" &&
+    Boolean(loadedLocalBeat) &&
+    isLoadedLocalBeatDirty &&
+    !isLoadedLocalBeatNameChanged;
 
   const applyImportedBeatPayload = React.useCallback(
     (payload, sourceKey) => {
@@ -3256,6 +3532,7 @@ useEffect(() => {
       setLoopRule(null);
       setActiveTab("none");
       setLoopRepeats("off");
+      setLoadedLocalBeatId(null);
       setKitInstrumentIds(nextKitIds);
       setBars(nextBars);
       setResolution(nextResolution);
@@ -3324,6 +3601,7 @@ useEffect(() => {
       source: "local",
     };
     setLocalBeatsWithUndo((prev) => [item, ...prev].slice(0, 500));
+    setLoadedLocalBeatId(item.id);
   }, [
     beatNameDraft,
     beatCategoryDraft,
@@ -3333,6 +3611,39 @@ useEffect(() => {
     buildCurrentBeatPayload,
     localBeats.length,
     setLocalBeatsWithUndo,
+  ]);
+  const updateCurrentLoadedBeatLocal = React.useCallback(() => {
+    if (!loadedLocalBeatId) return;
+    const name = beatNameDraft.trim() || String(loadedLocalBeat?.name || "Untitled Beat");
+    const payload = buildCurrentBeatPayload();
+    const category = beatCategoryDraft === "all" ? "Groove" : beatCategoryDraft;
+    const style = beatStyleDraft === "all" ? undefined : beatStyleDraft.trim() || undefined;
+    setLocalBeatsWithUndo((prev) =>
+      prev.map((beat) =>
+        String(beat?.id || "") === String(loadedLocalBeatId)
+          ? {
+              ...beat,
+              name,
+              category,
+              style,
+              timeSigCategory: `${timeSig.n}/${timeSig.d}`,
+              bpm,
+              payload,
+            }
+          : beat
+      )
+    );
+  }, [
+    loadedLocalBeatId,
+    loadedLocalBeat,
+    beatNameDraft,
+    buildCurrentBeatPayload,
+    beatCategoryDraft,
+    beatStyleDraft,
+    setLocalBeatsWithUndo,
+    timeSig.n,
+    timeSig.d,
+    bpm,
   ]);
 
   const submitCurrentBeatPublic = React.useCallback(async (opts = null) => {
@@ -3634,11 +3945,47 @@ useEffect(() => {
     <div
       className={`${isEmbedMode ? "min-h-full bg-neutral-900 text-white p-3" : "min-h-screen bg-neutral-900 text-white p-6"}`}
       onMouseDown={(e) => {
+        if (!legacySelectionEnabled && selection) {
+          const el = e.target;
+          if (el && el.closest && el.closest("[data-loopui='1']")) return;
+          if (el && el.closest && el.closest("[data-gridsurface='1']")) {
+            const cellEl = el?.closest?.("[data-gridcell='1']");
+            if (cellEl) {
+              const row = Number(cellEl.getAttribute("data-row"));
+              const col = Number(cellEl.getAttribute("data-col"));
+              const inSelection = Array.isArray(wrappedSelectionCells) && wrappedSelectionCells.length > 0
+                ? wrappedSelectionCells.some((c) => c.row === row && c.col === col)
+                : row >= selection.rowStart &&
+                  row <= selection.rowEnd &&
+                  col >= selection.start &&
+                  col < selection.endExclusive;
+              if (inSelection) return;
+            }
+            if (loopRule) {
+              setBaseGridWithUndo((prev) => bakeLoopInto(prev, loopRule, loopRepeats, loopOverlapMode));
+              setLoopRule(null);
+              setSelection(null);
+            } else {
+              setLoopRule(null);
+              setSelection(null);
+            }
+            return;
+          }
+        }
         if (!loopRule) return;
         const el = e.target;
-        // If click is NOT on a grid cell, dismiss looping (no bake)
-        if (el && el.closest && el.closest("[data-gridcell='1']")) return;
         if (el && el.closest && el.closest("[data-loopui='1']")) return;
+        // Cell clicks are handled in-cell (source edit or bake depending on role).
+        if (el && el.closest && el.closest("[data-gridcell='1']")) return;
+        // Clicking anywhere on the grid surface (including bar gaps and spaces between cells)
+        // should bake the loop, same as clicking a non-source cell.
+        if (el && el.closest && el.closest("[data-gridsurface='1']")) {
+          setBaseGridWithUndo((prev) => bakeLoopInto(prev, loopRule, loopRepeats, loopOverlapMode));
+          setLoopRule(null);
+          setSelection(null);
+          return;
+        }
+        // Non-grid click: dismiss looping without baking.
         setLoopRule(null);
         setSelection(null);
       }}
@@ -3947,20 +4294,40 @@ useEffect(() => {
                     +
                   </button>
                 </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-neutral-300 whitespace-nowrap">Tuplets</span>
+                  <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
+                    <button
+                      type="button"
+                      onClick={() => stepGlobalTupletValue(-1)}
+                      className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                      aria-label="Previous global tuplet value"
+                    >
+                      −
+                    </button>
+                    <button
+                      type="button"
+                      onClick={toggleGlobalTupletOffLast}
+                      className="min-w-[64px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700 hover:bg-neutral-700/50"
+                      title="Toggle off / last tuplet"
+                    >
+                      {globalTupletValue === "mixed"
+                        ? "Mixed"
+                        : globalTupletValue == null
+                          ? "Off"
+                          : String(globalTupletValue)}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => stepGlobalTupletValue(1)}
+                      className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                      aria-label="Next global tuplet value"
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
               </div>
-
-              <button
-                type="button"
-                onClick={() => setKeepTiming((v) => !v)}
-                className={`touch-none select-none px-3 py-[5px] rounded border text-sm ${
-                  keepTiming
-                    ? "bg-neutral-800 border-neutral-700 text-white"
-                    : "bg-neutral-900 border-neutral-800 text-neutral-600"
-                }`}
-                title="Keep timing when changing resolution (remap steps)"
-              >
-                Keep timing
-              </button>
 
               <div className="flex items-center gap-2">
                 <span className="text-sm text-neutral-300 whitespace-nowrap">Time</span>
@@ -4374,6 +4741,10 @@ useEffect(() => {
                 setLoopRule={setLoopRule}
                 wrappedSelectionCells={wrappedSelectionCells}
                 playhead={playback.playhead}
+                moveSelectionByDelta={moveSelectionByDelta}
+                legacySelectionEnabled={legacySelectionEnabled}
+                moveModeDebugEnabled={moveModeDebugEnabled}
+                bakeLoopPreview={bakeLoopPreview}
       />
             </div>
             </div>
@@ -4404,6 +4775,10 @@ useEffect(() => {
                 setLoopRule={setLoopRule}
                 wrappedSelectionCells={wrappedSelectionCells}
                 playhead={playback.playhead}
+                moveSelectionByDelta={moveSelectionByDelta}
+                legacySelectionEnabled={legacySelectionEnabled}
+                moveModeDebugEnabled={moveModeDebugEnabled}
+                bakeLoopPreview={bakeLoopPreview}
               />
             </div>
             </div>
@@ -4431,69 +4806,6 @@ useEffect(() => {
 
       <footer className={`${isEmbedMode ? "hidden" : "mt-6 pt-1"}`} data-loopui='1'>
         <div className="flex flex-wrap items-center justify-end gap-3">
-          {activeTab === "layout" && (
-          <div ref={layoutMenuRowRef} className="flex flex-wrap items-center gap-4">
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-neutral-300 whitespace-nowrap">Bars/line</span>
-              <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
-                <button
-                  type="button"
-                  onClick={() => setBarsPerLine((v) => Math.max(1, v - 1))}
-                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                >
-                  −
-                </button>
-                <div className="min-w-[44px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700">
-                  {barsPerLine}
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setBarsPerLine((v) => Math.min(bars, v + 1))}
-                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                >
-                  +
-                </button>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-neutral-300 whitespace-nowrap">Grid bars/line</span>
-              <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
-                <button
-                  type="button"
-                  onClick={() => setGridBarsPerLine((v) => Math.max(1, v - 1))}
-                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                >
-                  −
-                </button>
-                <div className="min-w-[44px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700">
-                  {gridBarsPerLine}
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setGridBarsPerLine((v) => Math.min(bars, v + 1))}
-                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                >
-                  +
-                </button>
-              </div>
-            </div>
-
-            <label className="text-sm text-neutral-300 flex items-center gap-2">
-              <span className="whitespace-nowrap">Layout</span>
-              <select
-                value={layout}
-                onChange={(e) => setLayout(e.target.value)}
-                className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1"
-              >
-                <option value="grid-top">Grid top / Notation bottom</option>
-                <option value="notation-top">Notation top / Grid bottom</option>
-                <option value="grid-right">Grid left / Notation right</option>
-                <option value="notation-right">Notation left / Grid right</option>
-              </select>
-            </label>
-          </div>
-        )}
           <div className="flex items-center gap-2 text-xs text-neutral-500">
             <a
               href="/how-to-write-drum-notation.html"
@@ -4531,14 +4843,12 @@ useEffect(() => {
             Legal
           </button>
           <button
-            onClick={() => setActiveTab((t) => (t === "layout" ? "none" : "layout"))}
-            className={`touch-none select-none px-3 py-1.5 rounded border text-sm capitalize ${
-              activeTab === "layout"
-                ? "bg-neutral-800 border-neutral-600 text-white"
-                : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
-            }`}
+            type="button"
+            onClick={() => setIsPreferencesDialogOpen(true)}
+            className="text-xs text-neutral-500 hover:text-neutral-300 underline underline-offset-2"
+            title="Preferences"
           >
-            layout
+            Preferences
           </button>
           <div className="flex items-center gap-2">
             <button
@@ -4693,7 +5003,8 @@ useEffect(() => {
                     openPublicSubmitDialog();
                     return;
                   }
-                  saveCurrentBeatLocal();
+                  if (canUpdateLoadedLocalBeat) updateCurrentLoadedBeatLocal();
+                  else saveCurrentBeatLocal();
                   setIsBeatLibraryOpen(false);
                 }}
                 placeholder="Beat name"
@@ -4730,6 +5041,25 @@ useEffect(() => {
                 title="Save to local beat library"
               >
                 Save
+              </button>
+              <button
+                type="button"
+                onClick={updateCurrentLoadedBeatLocal}
+                disabled={!canUpdateLoadedLocalBeat}
+                className={`px-2.5 py-1 rounded border text-sm ${
+                  canUpdateLoadedLocalBeat
+                    ? "border-cyan-700 text-cyan-100 bg-cyan-900/20 hover:bg-cyan-800/30"
+                    : "border-neutral-800 text-neutral-500 bg-neutral-900/60 cursor-not-allowed"
+                }`}
+                title={
+                  canUpdateLoadedLocalBeat
+                    ? "Update loaded local beat"
+                    : isLoadedLocalBeatNameChanged
+                      ? "Rename detected: use Save to create a new beat"
+                      : "Load a local beat and change it to enable update"
+                }
+              >
+                Update
               </button>
               <button
                 type="button"
@@ -4856,6 +5186,14 @@ useEffect(() => {
                           type="button"
                           onClick={() => {
                             applyImportedBeatPayload(beat.payload, `${beatLibraryTab}:${beat.id}:${beat.createdAt || ""}`);
+                            if (beatLibraryTab === "local") {
+                              setLoadedLocalBeatId(beat.id);
+                              setBeatNameDraft(String(beat.name || ""));
+                              setBeatCategoryDraft(String(beat.category || "Groove"));
+                              setBeatStyleDraft(String(beat.style || "all"));
+                            } else {
+                              setLoadedLocalBeatId(null);
+                            }
                           }}
                           className="px-2.5 py-1 rounded border border-neutral-700 text-sm text-neutral-200 hover:bg-neutral-800/60"
                         >
@@ -5798,6 +6136,260 @@ useEffect(() => {
           </div>
         </div>
       )}
+      {isPreferencesDialogOpen && (
+        <div
+          className="fixed inset-0 z-[92] bg-black/60 p-4 flex items-center justify-center"
+          onMouseDown={() => setIsPreferencesDialogOpen(false)}
+        >
+          <div
+            className="w-full max-w-3xl rounded-xl border border-neutral-700 bg-neutral-900 p-4 md:p-5"
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="text-base font-semibold">Preferences</h3>
+              <button
+                type="button"
+                onClick={() => setIsPreferencesDialogOpen(false)}
+                className="px-2 py-1 rounded border border-neutral-700 text-xs text-neutral-300 hover:bg-neutral-800/60"
+              >
+                Close
+              </button>
+            </div>
+            <div className="mt-4 grid grid-cols-[8.5rem_minmax(0,1fr)] gap-0 rounded border border-neutral-700 overflow-hidden">
+              <aside className="bg-neutral-950/40">
+                <div className="flex flex-col">
+                  {[
+                    { id: "playback", label: "Playback" },
+                    { id: "timing", label: "Timing" },
+                    { id: "editor", label: "Editor" },
+                    { id: "library", label: "Library" },
+                    { id: "appearance", label: "Appearance" },
+                  ].map((cat) => (
+                    <button
+                      key={`pref-cat-${cat.id}`}
+                      type="button"
+                      onClick={() => setPreferencesCategory(cat.id)}
+                      className={`w-full text-left px-3 py-2 text-sm ${
+                        preferencesCategory === cat.id
+                          ? "bg-neutral-900 text-white"
+                          : "text-neutral-300 hover:bg-neutral-800/50"
+                      }`}
+                    >
+                      {cat.label}
+                    </button>
+                  ))}
+                </div>
+              </aside>
+              <section className="bg-neutral-900 p-3">
+                {preferencesCategory === "playback" ? (
+                  <>
+                    <div className="flex items-center gap-2">
+                      <div className="text-sm font-normal text-neutral-200">Arrangement timing</div>
+                    </div>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <div className="relative">
+                        <button
+                          type="button"
+                          onMouseEnter={() => setShowPrefsPlaybackInfo(true)}
+                          onMouseLeave={() => setShowPrefsPlaybackInfo(false)}
+                          onFocus={() => setShowPrefsPlaybackInfo(true)}
+                          onBlur={() => setShowPrefsPlaybackInfo(false)}
+                          onClick={() => setShowPrefsPlaybackInfo((v) => !v)}
+                          className="h-5 w-5 rounded-full border border-neutral-700 text-[11px] text-neutral-300 hover:bg-neutral-800/60"
+                          aria-label="Playback timing info"
+                        >
+                          i
+                        </button>
+                        {showPrefsPlaybackInfo && (
+                          <div className="absolute left-0 top-6 z-10 w-72 rounded border border-neutral-700 bg-neutral-900 px-2 py-1.5 text-[11px] leading-relaxed text-neutral-300 shadow-lg">
+                            Boundary compensation scale: 0 maps to effective -40 ms. Adaptive correction nudges timing live to reduce jitter.
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
+                        <button
+                          type="button"
+                          onPointerDown={() => startArrangementBoundaryCompRepeat(-1)}
+                          onPointerUp={stopArrangementBoundaryCompRepeat}
+                          onPointerCancel={stopArrangementBoundaryCompRepeat}
+                          onPointerLeave={stopArrangementBoundaryCompRepeat}
+                          className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                          aria-label="Decrease boundary compensation"
+                        >
+                          −
+                        </button>
+                        <div className="min-w-[72px] px-2 py-1 text-center text-sm text-white border-l border-r border-neutral-700 bg-neutral-800 tabular-nums">
+                          {arrangementBoundaryCompScale > 0 ? `+${arrangementBoundaryCompScale}` : arrangementBoundaryCompScale}
+                        </div>
+                        <button
+                          type="button"
+                          onPointerDown={() => startArrangementBoundaryCompRepeat(1)}
+                          onPointerUp={stopArrangementBoundaryCompRepeat}
+                          onPointerCancel={stopArrangementBoundaryCompRepeat}
+                          onPointerLeave={stopArrangementBoundaryCompRepeat}
+                          className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                          aria-label="Increase boundary compensation"
+                        >
+                          +
+                        </button>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setArrangementBoundaryCompScale(0)}
+                        className="px-2 py-1 rounded border border-neutral-700 text-xs text-neutral-300 hover:bg-neutral-800/60"
+                      >
+                        Reset
+                      </button>
+                      <label className="inline-flex items-center gap-2 text-xs text-neutral-300 select-none">
+                        <input
+                          type="checkbox"
+                          checked={arrangementAdaptiveCompEnabled}
+                          onChange={(e) => setArrangementAdaptiveCompEnabled(e.target.checked)}
+                          className="h-3.5 w-3.5 rounded border-neutral-700 bg-neutral-800"
+                        />
+                        Adaptive correction
+                      </label>
+                      <div className="text-[11px] text-neutral-500 tabular-nums">
+                        Effective: {arrangementBoundaryCompMs > 0 ? `+${arrangementBoundaryCompMs}` : arrangementBoundaryCompMs} ms
+                      </div>
+                      {arrangementAdaptiveCompEnabled && (
+                        <div className="text-[11px] text-neutral-500 tabular-nums">
+                          Current correction: {arrangementAdaptiveCurrentCompMs > 0 ? `+${arrangementAdaptiveCurrentCompMs}` : arrangementAdaptiveCurrentCompMs} ms
+                        </div>
+                      )}
+                    </div>
+                  </>
+                ) : preferencesCategory === "timing" ? (
+                  <>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-sm font-normal text-neutral-200">Grid timing</div>
+                    </div>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setKeepTiming((v) => !v)}
+                        className={`touch-none select-none px-3 py-[5px] rounded border text-sm ${
+                          keepTiming
+                            ? "bg-neutral-800 border-neutral-700 text-white"
+                            : "bg-neutral-900 border-neutral-800 text-neutral-600"
+                        }`}
+                        title="Keep timing when changing resolution or tuplets (remap steps)"
+                      >
+                        Keep timing
+                      </button>
+                    </div>
+                  </>
+                ) : preferencesCategory === "editor" ? (
+                  <>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-sm font-normal text-neutral-200">Editor interaction</div>
+                    </div>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <label className="inline-flex items-center gap-2 text-xs text-neutral-300 select-none">
+                        <input
+                          type="checkbox"
+                          checked={legacySelectionEnabled}
+                          onChange={(e) => setLegacySelectionEnabled(e.target.checked)}
+                          className="h-3.5 w-3.5 rounded border-neutral-700 bg-neutral-800"
+                        />
+                        Legacy selection
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => setMoveModeDebugEnabled((v) => !v)}
+                        className={`px-2 py-1 rounded border text-xs ${
+                          moveModeDebugEnabled
+                            ? "border-amber-500/70 text-amber-200 bg-amber-500/10"
+                            : "border-neutral-700 text-neutral-400 hover:bg-neutral-800/50"
+                        }`}
+                      >
+                        Move mode debug
+                      </button>
+                    </div>
+                  </>
+                ) : preferencesCategory === "appearance" ? (
+                  <>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-sm font-normal text-neutral-200">Layout</div>
+                    </div>
+                    <div className="mt-2 flex flex-wrap items-center gap-4">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm text-neutral-300 whitespace-nowrap">Bars/line</span>
+                        <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
+                          <button
+                            type="button"
+                            onClick={() => setBarsPerLine((v) => Math.max(1, v - 1))}
+                            className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                          >
+                            −
+                          </button>
+                          <div className="min-w-[44px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700">
+                            {barsPerLine}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setBarsPerLine((v) => Math.min(bars, v + 1))}
+                            className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                          >
+                            +
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm text-neutral-300 whitespace-nowrap">Grid bars/line</span>
+                        <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
+                          <button
+                            type="button"
+                            onClick={() => setGridBarsPerLine((v) => Math.max(1, v - 1))}
+                            className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                          >
+                            −
+                          </button>
+                          <div className="min-w-[44px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700">
+                            {gridBarsPerLine}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setGridBarsPerLine((v) => Math.min(bars, v + 1))}
+                            className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                          >
+                            +
+                          </button>
+                        </div>
+                      </div>
+
+                      <label className="text-sm text-neutral-300 flex items-center gap-2">
+                        <span className="whitespace-nowrap">Layout</span>
+                        <select
+                          value={layout}
+                          onChange={(e) => setLayout(e.target.value)}
+                          className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1"
+                        >
+                          <option value="grid-top">Grid top / Notation bottom</option>
+                          <option value="notation-top">Notation top / Grid bottom</option>
+                          <option value="grid-right">Grid left / Notation right</option>
+                          <option value="notation-right">Notation left / Grid right</option>
+                        </select>
+                      </label>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="text-sm text-neutral-200">Coming soon</div>
+                    <div className="mt-1 text-xs text-neutral-500">
+                      This category will contain additional preferences.
+                    </div>
+                    <div className="mt-3 border-t border-neutral-800 pt-3 text-xs text-neutral-500">
+                      No settings yet.
+                    </div>
+                  </>
+                )}
+              </section>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );
@@ -5987,7 +6579,7 @@ function Grid({
   grid, columns, bars, stepsPerBar, resolution, timeSig, quarterSubdivisionsByBar, normalizedTupletOverridesByBar, barStepOffsets, cycleTupletAt, gridBarsPerLine,
   cycleVelocity, toggleGhost, selection, setSelection, loopRule,
     loopRepeats,
-  setLoopRule, wrappedSelectionCells, playhead
+  setLoopRule, wrappedSelectionCells, playhead, moveSelectionByDelta, legacySelectionEnabled, moveModeDebugEnabled, bakeLoopPreview
 }) {
 
   const notifySelectionFinalized = React.useCallback(() => {
@@ -6005,6 +6597,26 @@ function Grid({
     anchorCol: 0,
   });
   const skipNextGlobalMouseUpFinalizeRef = React.useRef(false);
+  const skipNextWrappedSelectionClearRef = React.useRef(false);
+  const suppressNextCellClickToggleRef = React.useRef(false);
+  const stepMoveFromPointerDeltaRef = React.useRef(() => false);
+  const maybeClearSingleCellSelectionAfterMove = React.useCallback(() => {
+    if (press.current.mode !== "move") return;
+    const selectedCount =
+      Array.isArray(wrappedSelectionCells) && wrappedSelectionCells.length > 0
+        ? wrappedSelectionCells.length
+        : selection
+          ? Math.max(
+              1,
+              (selection.rowEnd - selection.rowStart + 1) *
+                Math.max(1, selection.endExclusive - selection.start)
+            )
+          : 0;
+    if (selectedCount === 1) {
+      setLoopRule(null);
+      setSelection(null);
+    }
+  }, [selection, wrappedSelectionCells, setLoopRule, setSelection]);
 
   // Ensure pending long-press timers don't leak across clicks (desktop).
   useEffect(() => {
@@ -6049,6 +6661,7 @@ function Grid({
         const dx = e.clientX - md.startX;
         const dy = e.clientY - md.startY;
         if (dx * dx + dy * dy < 36) return; // < 6px: treat as click, not selection drag
+        if (!legacySelectionEnabled) return;
         md.phase = "selecting";
         setDrag({ row: md.anchorRow, col: md.anchorCol });
       }
@@ -6089,10 +6702,9 @@ function Grid({
       window.removeEventListener("mousemove", onMouseMove);
       window.removeEventListener("mouseup", onMouseUp);
     };
-  }, [notifySelectionFinalized]);
+  }, [notifySelectionFinalized, legacySelectionEnabled, moveModeDebugEnabled]);
 
-  // Desktop: allow long-press ghost on active cells, but if the user moves away while holding,
-  // start a selection instead and revert the ghost toggle.
+  // Desktop long-press interactions: ghost / move / selection.
   useEffect(() => {
     const onMove = (e) => {
       if (!press.current.active) return;
@@ -6102,9 +6714,13 @@ function Grid({
       if ((e.buttons & 1) !== 1) return;
 
       // Require a small movement threshold to avoid accidental selection from small cursor drift.
+      // For move interactions, use a very small threshold so dragging a selected region feels immediate.
       const dx = e.clientX - press.current.startX;
       const dy = e.clientY - press.current.startY;
-      if (dx * dx + dy * dy < 36) return; // < 6px
+      const isMoveInteraction =
+        press.current.mode === "moveArmed" || press.current.mode === "move";
+      const thresholdSq = isMoveInteraction ? 1 : 36; // ~1px for move, 6px otherwise
+      if (dx * dx + dy * dy < thresholdSq) return;
 
       const el = document.elementFromPoint(e.clientX, e.clientY);
       const cell = el?.closest?.("[data-gridcell='1']");
@@ -6116,36 +6732,128 @@ function Grid({
 
       const r0 = press.current.startRow;
       const c0 = press.current.startCol;
+      const isMoveComparison =
+        press.current.mode === "moveArmed" || press.current.mode === "move";
+      const refRow = isMoveComparison ? press.current.moveLastRow : r0;
+      const refCol = isMoveComparison ? press.current.moveLastCol : c0;
+      if (r1 === refRow && c1 === refCol) return;
 
-      if (r1 === r0 && c1 === c0) return;
-
-      if (press.current.mode === "ghostArmed" || press.current.mode === "ghostDone") {
+      if (press.current.mode === "ghostArmed") {
         if (longPress.current.timer) {
           window.clearTimeout(longPress.current.timer);
           longPress.current.timer = null;
         }
-        if (press.current.mode === "ghostDone" && press.current.ghostToggled && press.current.instId) {
+        longPress.current.did = false;
+        if (press.current.startWasSelected || press.current.startVal !== CELL.OFF) {
+          if (legacySelectionEnabled) {
+            if (!press.current.startWasSelected) {
+              setSelection({ rowStart: r0, rowEnd: r0, start: c0, endExclusive: c0 + 1 });
+            }
+            press.current.mode = "selectArmed";
+          } else {
+            if (!press.current.startWasSelected) {
+              setSelection({ rowStart: r0, rowEnd: r0, start: c0, endExclusive: c0 + 1 });
+            }
+            press.current.mode = "move";
+            if (moveModeDebugEnabled) setShowMoveDebugCue(true);
+            press.current.moveLastRow = r0;
+            press.current.moveLastCol = c0;
+            const movedNow = stepMoveFromPointerDeltaRef.current?.(r1, c1);
+            if (!movedNow) {
+              window.requestAnimationFrame(() => {
+                if (!press.current.active || press.current.pointerId !== "mouse") return;
+                if (press.current.mode !== "move") return;
+                stepMoveFromPointerDeltaRef.current?.(r1, c1);
+              });
+            }
+          }
+        } else {
+          press.current.mode = "selectArmed";
+        }
+      } else if (press.current.mode === "ghostDone") {
+        if (press.current.ghostToggled && press.current.instId) {
           try { toggleGhost(press.current.instId, c0); } catch (_) {}
         }
-        // Hand off cleanly into the normal desktop drag-selection flow,
-        // so dragging can continue across multiple cells from ghost-enabled starts.
-        longPress.current.did = false;
-        press.current.active = false;
-        press.current.pointerId = null;
-        press.current.mode = "none";
-        press.current.didSelect = false;
-        mouseDragRef.current.phase = "selecting";
-        mouseDragRef.current.anchorRow = r0;
-        mouseDragRef.current.anchorCol = c0;
-        mouseDragRef.current.startX = press.current.startX;
-        mouseDragRef.current.startY = press.current.startY;
-        setDrag({ row: r0, col: c0 });
-        setSelection({
-          rowStart: Math.min(r0, r1),
-          rowEnd: Math.max(r0, r1),
-          start: Math.min(c0, c1),
-          endExclusive: Math.max(c0, c1) + 1,
-        });
+        if (legacySelectionEnabled || !press.current.startWasSelected) {
+          press.current.mode = "select";
+          mouseDragRef.current.phase = "selecting";
+          mouseDragRef.current.anchorRow = r0;
+          mouseDragRef.current.anchorCol = c0;
+          mouseDragRef.current.startX = press.current.startX;
+          mouseDragRef.current.startY = press.current.startY;
+          setDrag({ row: r0, col: c0 });
+          setSelection({
+            rowStart: Math.min(r0, r1),
+            rowEnd: Math.max(r0, r1),
+            start: Math.min(c0, c1),
+            endExclusive: Math.max(c0, c1) + 1,
+          });
+        } else {
+          if (!press.current.startWasSelected) {
+            setSelection({ rowStart: r0, rowEnd: r0, start: c0, endExclusive: c0 + 1 });
+          }
+          press.current.mode = "move";
+          if (moveModeDebugEnabled) setShowMoveDebugCue(true);
+          press.current.moveLastRow = r0;
+          press.current.moveLastCol = c0;
+          stepMoveFromPointerDeltaRef.current?.(r1, c1);
+        }
+      } else if (press.current.mode === "moveArmed" || press.current.mode === "move") {
+        // Modern mode: distinguish quick drag (move) vs long-press drag (selection for looping)
+        // for single-cell starts. Existing multi-cell selection dragging still uses move mode.
+        const heldMs = Date.now() - (press.current.startTime || 0);
+        const shouldLongPressSelect =
+          !legacySelectionEnabled &&
+          press.current.mode === "moveArmed" &&
+          !press.current.startWasSelected &&
+          heldMs >= 130;
+        if (shouldLongPressSelect) {
+          press.current.mode = "select";
+          mouseDragRef.current.phase = "selecting";
+          mouseDragRef.current.anchorRow = r0;
+          mouseDragRef.current.anchorCol = c0;
+          mouseDragRef.current.startX = press.current.startX;
+          mouseDragRef.current.startY = press.current.startY;
+          setDrag({ row: r0, col: c0 });
+          setSelection({
+            rowStart: Math.min(r0, r1),
+            rowEnd: Math.max(r0, r1),
+            start: Math.min(c0, c1),
+            endExclusive: Math.max(c0, c1) + 1,
+          });
+          return;
+        }
+        if (press.current.mode === "moveArmed") {
+          if (!press.current.startWasSelected) {
+            setSelection({ rowStart: r0, rowEnd: r0, start: c0, endExclusive: c0 + 1 });
+          }
+          press.current.mode = "move";
+          if (moveModeDebugEnabled) setShowMoveDebugCue(true);
+        }
+        const movedNow = stepMoveFromPointerDeltaRef.current?.(r1, c1);
+        if (!movedNow) {
+          window.requestAnimationFrame(() => {
+            if (!press.current.active || press.current.pointerId !== "mouse") return;
+            if (press.current.mode !== "move") return;
+            stepMoveFromPointerDeltaRef.current?.(r1, c1);
+          });
+        }
+      } else if (press.current.mode === "selectArmed") {
+        if (legacySelectionEnabled) {
+          press.current.mode = "select";
+          mouseDragRef.current.phase = "selecting";
+          mouseDragRef.current.anchorRow = r0;
+          mouseDragRef.current.anchorCol = c0;
+          mouseDragRef.current.startX = press.current.startX;
+          mouseDragRef.current.startY = press.current.startY;
+          setDrag({ row: r0, col: c0 });
+          setSelection({
+            rowStart: Math.min(r0, r1),
+            rowEnd: Math.max(r0, r1),
+            start: Math.min(c0, c1),
+            endExclusive: Math.max(c0, c1) + 1,
+          });
+        }
       } else if (press.current.mode === "select") {
         setSelection({ rowStart: Math.min(r0, r1), rowEnd: Math.max(r0, r1), start: Math.min(c0, c1), endExclusive: Math.max(c0, c1) + 1 });
       }
@@ -6166,6 +6874,7 @@ function Grid({
         setDrag(null);
         notifySelectionFinalized();
       }
+      maybeClearSingleCellSelectionAfterMove();
 
       press.current.active = false;
       press.current.pointerId = null;
@@ -6179,6 +6888,7 @@ function Grid({
       press.current.startX = 0;
       press.current.startY = 0;
       press.current.startTime = 0;
+      setShowMoveDebugCue(false);
     };
 
     window.addEventListener("mousemove", onMove);
@@ -6187,19 +6897,24 @@ function Grid({
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
     };
-  }, [notifySelectionFinalized]);
+  }, [notifySelectionFinalized, legacySelectionEnabled, maybeClearSingleCellSelectionAfterMove]);
   const press = React.useRef({
     active: false,
     pointerId: null,
     startX: 0,
     startY: 0,
-    mode: "none", // none | ghostArmed | ghostDone | select
+    mode: "none", // none | ghostArmed | ghostDone | selectArmed | select | moveArmed | move
     startRow: 0,
     startCol: 0,
+    moveLastRow: 0,
+    moveLastCol: 0,
+    startVal: CELL.OFF,
+    startWasSelected: false,
     instId: null,
     ghostToggled: false,
     didSelect: false,
   });
+  const [showMoveDebugCue, setShowMoveDebugCue] = useState(false);
   const [drag, setDrag] = useState(null); // { row, col }
   const stepMetaByBar = React.useMemo(
     () => quarterSubdivisionsByBar.map((subs) => buildStepMeta(subs)),
@@ -6282,11 +6997,59 @@ function Grid({
 
     return "none";
   };
+  const isCellInSelection = React.useCallback(
+    (row, col) => {
+      if (!Number.isFinite(row) || !Number.isFinite(col)) return false;
+      if (wrappedSelectionCells && wrappedSelectionCells.length > 0) {
+        return wrappedSelectionCells.some((cell) => cell.row === row && cell.col === col);
+      }
+      if (!selection) return false;
+      return (
+        row >= selection.rowStart &&
+        row <= selection.rowEnd &&
+        col >= selection.start &&
+        col < selection.endExclusive
+      );
+    },
+    [selection, wrappedSelectionCells]
+  );
+  const stepMoveFromPointerDelta = React.useCallback(
+    (toRow, toCol) => {
+      if (!moveSelectionByDelta) return;
+      const fromRow = press.current.moveLastRow;
+      const fromCol = press.current.moveLastCol;
+      let dRow = toRow - fromRow;
+      let dCol = toCol - fromCol;
+      let movedAny = false;
+      while (dRow !== 0) {
+        const step = dRow > 0 ? 1 : -1;
+        const moved = moveSelectionByDelta(step, 0);
+        if (moved) movedAny = true;
+        dRow -= step;
+      }
+      while (dCol !== 0) {
+        const step = dCol > 0 ? 1 : -1;
+        const moved = moveSelectionByDelta(0, step);
+        if (moved) movedAny = true;
+        dCol -= step;
+      }
+      if (movedAny) {
+        press.current.moveLastRow = toRow;
+        press.current.moveLastCol = toCol;
+      }
+      return movedAny;
+    },
+    [moveSelectionByDelta]
+  );
+  stepMoveFromPointerDeltaRef.current = stepMoveFromPointerDelta;
 
 
 
   return (
-    <div className="flex flex-col gap-6">
+    <div
+      className={`flex flex-col gap-6 ${showMoveDebugCue ? "outline outline-2 outline-amber-500/80 rounded-sm" : ""}`}
+      data-gridsurface="1"
+    >
       {Array.from({ length: Math.ceil(bars / Math.max(1, Math.min(bars, Number(gridBarsPerLine) || 1))) }).map((_, lineIdx) => {
         const perLine = Math.max(1, Math.min(bars, Number(gridBarsPerLine) || 1));
         const barStart = lineIdx * perLine;
@@ -6431,6 +7194,27 @@ function Grid({
 
                         const r = instruments.findIndex((x) => x.id === inst.id);
                         const c = t.stepIndex;
+                        // If loop preview is active and user starts on the current selection,
+                        // exit looping so long-press / drag can enter move interaction.
+                        if (loopRule) {
+                          if (!legacySelectionEnabled) {
+                            if (isCellInSelection(r, c)) {
+                              // Keep loop active on simple press/click.
+                              // Move mode will take over only after actual drag movement.
+                            } else {
+                              suppressNextCellClickToggleRef.current = true;
+                              bakeLoopPreview?.();
+                              return;
+                            }
+                          } else if (isCellInSelection(r, c)) {
+                            setLoopRule(null);
+                            skipNextWrappedSelectionClearRef.current = true;
+                          } else {
+                            // In legacy mode, clicking outside source should bake the loop.
+                            bakeLoopPreview?.();
+                            return;
+                          }
+                        }
 
                         press.current.active = true;
                         press.current.pointerId = e.pointerId;
@@ -6442,11 +7226,22 @@ function Grid({
                         longPress.current.did = false;
                         press.current.startRow = r;
                         press.current.startCol = c;
+                        press.current.moveLastRow = r;
+                        press.current.moveLastCol = c;
+                        press.current.startVal = val;
+                        press.current.startWasSelected = isCellInSelection(r, c);
                         press.current.instId = inst.id;
 
-                        // Ghost long-press on active cells (ghost-enabled instruments)
-                        if (val !== CELL.OFF && GHOST_ENABLED.has(inst.id)) {
+                        // Movement takes priority when starting from current selection.
+                        if (press.current.startWasSelected) {
+                          press.current.mode = legacySelectionEnabled ? "selectArmed" : "moveArmed";
+                        } else if (val !== CELL.OFF && GHOST_ENABLED.has(inst.id)) {
+                          // Ghost long-press on active cells (ghost-enabled instruments)
                           press.current.mode = "ghostArmed";
+                        } else if (val !== CELL.OFF) {
+                          // Single active cell can be moved with long-press + drag (modern mode).
+                          // Legacy mode keeps selection-first behavior.
+                          press.current.mode = legacySelectionEnabled ? "selectArmed" : "moveArmed";
                         }
 
                         if (longPress.current.timer) window.clearTimeout(longPress.current.timer);
@@ -6460,6 +7255,10 @@ function Grid({
                             toggleGhost(inst.id, c);
                             press.current.mode = "ghostDone";
                             press.current.ghostToggled = true;
+                            return;
+                          }
+                          if (press.current.mode === "moveArmed") {
+                            // Enter move mode only when pointer actually moves.
                             return;
                           }
 
@@ -6478,7 +7277,7 @@ function Grid({
 
 
                         // If we long-pressed an active ghost-enabled cell and then move away,
-                        // switch into selection mode and revert the ghost toggle.
+                        // switch into move/selection mode and revert the ghost toggle when needed.
                         const el0 = document.elementFromPoint(e.clientX, e.clientY);
                         const cell0 = el0?.closest?.("[data-gridcell='1']");
                         if (cell0) {
@@ -6492,25 +7291,57 @@ function Grid({
                               if (longPress.current.timer) window.clearTimeout(longPress.current.timer);
                               longPress.current.timer = null;
                               longPress.current.did = false;
-                              press.current.active = false;
-                              press.current.pointerId = null;
-                              longPress.current.did = false;
-                              press.current.mode = "none";
-                              setDrag({ row: r0, col: c0 });
-        press.current.didSelect = true;
-                              setSelection({ rowStart: Math.min(r0, r1), rowEnd: Math.max(r0, r1), start: Math.min(c0, c1), endExclusive: Math.max(c0, c1) + 1 });
+                              if (press.current.startWasSelected || press.current.startVal !== CELL.OFF) {
+                                if (!press.current.startWasSelected) {
+                                  setSelection({ rowStart: r0, rowEnd: r0, start: c0, endExclusive: c0 + 1 });
+                                }
+                                press.current.mode = "move";
+                                if (moveModeDebugEnabled) setShowMoveDebugCue(true);
+                                press.current.moveLastRow = r0;
+                                press.current.moveLastCol = c0;
+                                stepMoveFromPointerDelta(r1, c1);
+                              } else {
+                                press.current.mode = "select";
+                                setDrag({ row: r0, col: c0 });
+                                press.current.didSelect = true;
+                                setSelection({ rowStart: Math.min(r0, r1), rowEnd: Math.max(r0, r1), start: Math.min(c0, c1), endExclusive: Math.max(c0, c1) + 1 });
+                              }
                             } else if (press.current.mode === "ghostDone") {
                               longPress.current.did = false;
                               if (press.current.ghostToggled && press.current.instId) {
                                 try { toggleGhost(press.current.instId, c0); } catch (_) {}
                               }
-                              press.current.active = false;
-                              press.current.pointerId = null;
-                              longPress.current.did = false;
-                              press.current.mode = "none";
-                              setDrag({ row: r0, col: c0 });
-        press.current.didSelect = true;
-                              setSelection({ rowStart: Math.min(r0, r1), rowEnd: Math.max(r0, r1), start: Math.min(c0, c1), endExclusive: Math.max(c0, c1) + 1 });
+                              if (legacySelectionEnabled || !press.current.startWasSelected) {
+                                press.current.mode = "select";
+                                setDrag({ row: r0, col: c0 });
+                                press.current.didSelect = true;
+                                setSelection({
+                                  rowStart: Math.min(r0, r1),
+                                  rowEnd: Math.max(r0, r1),
+                                  start: Math.min(c0, c1),
+                                  endExclusive: Math.max(c0, c1) + 1,
+                                });
+                              } else {
+                                if (!press.current.startWasSelected) {
+                                  setSelection({ rowStart: r0, rowEnd: r0, start: c0, endExclusive: c0 + 1 });
+                                }
+                                press.current.mode = "move";
+                                if (moveModeDebugEnabled) setShowMoveDebugCue(true);
+                                press.current.moveLastRow = r0;
+                                press.current.moveLastCol = c0;
+                                stepMoveFromPointerDelta(r1, c1);
+                              }
+                            } else if (press.current.mode === "moveArmed") {
+                              if (!press.current.startWasSelected) {
+                                setSelection({ rowStart: r0, rowEnd: r0, start: c0, endExclusive: c0 + 1 });
+                              }
+                              press.current.mode = "move";
+                              if (moveModeDebugEnabled) setShowMoveDebugCue(true);
+                              press.current.moveLastRow = r0;
+                              press.current.moveLastCol = c0;
+                              stepMoveFromPointerDelta(r1, c1);
+                            } else if (press.current.mode === "move") {
+                              stepMoveFromPointerDelta(r1, c1);
                             } else if (press.current.mode === "select") {
                               setSelection({ rowStart: Math.min(r0, r1), rowEnd: Math.max(r0, r1), start: Math.min(c0, c1), endExclusive: Math.max(c0, c1) + 1 });
                             }
@@ -6518,7 +7349,7 @@ function Grid({
                         }
 
                         // Only drag after selection mode has begun (after long-press).
-                        if (press.current.mode !== "select") return;
+                        if (press.current.mode !== "select" && press.current.mode !== "move") return;
 
                         const el = document.elementFromPoint(e.clientX, e.clientY);
                         const cell = el?.closest?.("[data-gridcell='1']");
@@ -6530,20 +7361,25 @@ function Grid({
                         const r0 = press.current.startRow;
                         const c0 = press.current.startCol;
 
-                        const rowStart = Math.min(r0, r1);
-                        const rowEnd = Math.max(r0, r1);
-                        const start = Math.min(c0, c1);
-                        const endExclusive = Math.max(c0, c1) + 1;
-
-                        setSelection({ rowStart, rowEnd, start, endExclusive });
+                        if (press.current.mode === "move") {
+                          stepMoveFromPointerDelta(r1, c1);
+                        } else {
+                          const rowStart = Math.min(r0, r1);
+                          const rowEnd = Math.max(r0, r1);
+                          const start = Math.min(c0, c1);
+                          const endExclusive = Math.max(c0, c1) + 1;
+                          setSelection({ rowStart, rowEnd, start, endExclusive });
+                        }
                       }}
                       onPointerUp={(e) => {
                         if (e.pointerType === "mouse") return;
                         if (longPress.current.timer) window.clearTimeout(longPress.current.timer);
                         longPress.current.timer = null;
 
+                        maybeClearSingleCellSelectionAfterMove();
                         press.current.active = false;
                         press.current.pointerId = null;
+                        setShowMoveDebugCue(false);
                         setDrag(null);
                         notifySelectionFinalized();
                       }}
@@ -6552,8 +7388,10 @@ function Grid({
                         if (longPress.current.timer) window.clearTimeout(longPress.current.timer);
                         longPress.current.timer = null;
 
+                        maybeClearSingleCellSelectionAfterMove();
                         press.current.active = false;
                         press.current.pointerId = null;
+                        setShowMoveDebugCue(false);
                         setDrag(null);
                         notifySelectionFinalized();
                       }}
@@ -6573,8 +7411,27 @@ function Grid({
                           longPress.current.did = false;
                           return;
                         }
+                        if (suppressNextCellClickToggleRef.current) {
+                          suppressNextCellClickToggleRef.current = false;
+                          return;
+                        }
                         if (Date.now() < (mouseDragRef.current.suppressClickUntil || 0)) {
                           return;
+                        }
+                        const clickRow = instruments.findIndex((x) => x.id === inst.id);
+                        const clickCol = t.stepIndex;
+                        const clickedInSelection = isCellInSelection(clickRow, clickCol);
+                        if (!legacySelectionEnabled && selection) {
+                          if (skipNextWrappedSelectionClearRef.current) {
+                            skipNextWrappedSelectionClearRef.current = false;
+                            if (clickedInSelection) return;
+                          }
+                          if (!clickedInSelection) {
+                            setLoopRule(null);
+                            setSelection(null);
+                            return;
+                          }
+                          if (!loopRule) return;
                         }
                         if (wrappedSelectionCells && wrappedSelectionCells.length > 0) {
                           setLoopRule(null);
@@ -6585,7 +7442,28 @@ function Grid({
                       }}
                       onMouseDown={(e) => {
                         e.stopPropagation();
-                        if (loopRule) return;
+                        const r = instruments.findIndex((x) => x.id === inst.id);
+                        const c = t.stepIndex;
+                        if (loopRule) {
+                          if (!legacySelectionEnabled) {
+                            if (isCellInSelection(r, c)) {
+                              // Keep loop active on simple press/click.
+                              // Move mode will take over only after actual drag movement.
+                            } else {
+                              suppressNextCellClickToggleRef.current = true;
+                              bakeLoopPreview?.();
+                              return;
+                            }
+                          } else if (isCellInSelection(r, c)) {
+                            setLoopRule(null);
+                            skipNextWrappedSelectionClearRef.current = true;
+                          } else {
+                            // In legacy mode, clicking outside source should bake the loop.
+                            suppressNextCellClickToggleRef.current = true;
+                            bakeLoopPreview?.();
+                            return;
+                          }
+                        }
                         // Guard against stale ghost press state leaking into a new interaction.
                         if (press.current.pointerId === "mouse" && press.current.mode === "ghostDone") {
                           if (longPress.current.timer) {
@@ -6600,46 +7478,70 @@ function Grid({
                           longPress.current.did = false;
                         }
 
-                        const r = instruments.findIndex((x) => x.id === inst.id);
-                        const c = t.stepIndex;
-
-                        // Desktop long-press ghost toggle (130ms) on eligible active cells.
-                        // If the user moves away while holding, we switch into selection mode and revert the ghost toggle.
                         const val = grid[inst.id][c];
                         const ghostAllowed = GHOST_ENABLED.has(inst.id);
-                        if (ghostAllowed && (val === CELL.ON || val === CELL.GHOST)) {
-                          press.current.active = true;
-                          press.current.pointerId = "mouse";
-                          press.current.startRow = r;
-                          press.current.startCol = c;
-                          press.current.startX = e.clientX;
-                          press.current.startY = e.clientY;
-                          press.current.startTime = Date.now();
-                          press.current.instId = inst.id;
-                          press.current.mode = "ghostArmed";
-                          press.current.ghostToggled = false;
-                          press.current.didSelect = false;
-                          longPress.current.did = false;
+                        press.current.active = true;
+                        press.current.pointerId = "mouse";
+                        press.current.startRow = r;
+                        press.current.startCol = c;
+                        press.current.moveLastRow = r;
+                        press.current.moveLastCol = c;
+                        press.current.startVal = val;
+                        press.current.startWasSelected = isCellInSelection(r, c);
+                        press.current.startX = e.clientX;
+                        press.current.startY = e.clientY;
+                        press.current.startTime = Date.now();
+                        press.current.instId = inst.id;
+                        press.current.ghostToggled = false;
+                        press.current.didSelect = false;
+                        longPress.current.did = false;
 
-                          if (longPress.current.timer) window.clearTimeout(longPress.current.timer);
-                          longPress.current.did = false;
-                          longPress.current.timer = window.setTimeout(() => {
-                            if (!press.current.active || press.current.pointerId !== "mouse") return;
-                            if (press.current.mode !== "ghostArmed") return;
+                        // Mode priority:
+                        // 1) moving existing selection
+                        // 2) ghost toggle on active ghost-capable cell
+                        // 3) move single active cell
+                        // 4) selection (legacy immediate-drag or long-press-drag)
+                        if (press.current.startWasSelected) {
+                          press.current.mode = legacySelectionEnabled ? "selectArmed" : "moveArmed";
+                        } else if (ghostAllowed && (val === CELL.ON || val === CELL.GHOST)) {
+                          press.current.mode = "ghostArmed";
+                        } else if (val !== CELL.OFF) {
+                          press.current.mode = legacySelectionEnabled ? "selectArmed" : "moveArmed";
+                        } else {
+                          press.current.mode = "selectArmed";
+                        }
+
+                        if (legacySelectionEnabled && press.current.mode === "selectArmed") {
+                          mouseDragRef.current.phase = "pending";
+                          mouseDragRef.current.startX = e.clientX;
+                          mouseDragRef.current.startY = e.clientY;
+                          mouseDragRef.current.anchorRow = r;
+                          mouseDragRef.current.anchorCol = c;
+                        }
+
+                        if (longPress.current.timer) window.clearTimeout(longPress.current.timer);
+                        longPress.current.did = false;
+                        longPress.current.timer = window.setTimeout(() => {
+                          if (!press.current.active || press.current.pointerId !== "mouse") return;
+                          if (press.current.mode === "ghostArmed") {
                             longPress.current.did = true;
                             toggleGhost(inst.id, c);
                             press.current.mode = "ghostDone";
                             press.current.ghostToggled = true;
-                          }, 130);
-                          return; // wait: either long-press becomes ghost, or movement turns into selection
-                        }
-
-                        // Default desktop behavior: click-drag to select
-                        mouseDragRef.current.phase = "pending";
-                        mouseDragRef.current.startX = e.clientX;
-                        mouseDragRef.current.startY = e.clientY;
-                        mouseDragRef.current.anchorRow = r;
-                        mouseDragRef.current.anchorCol = c;
+                            return;
+                          }
+                          if (press.current.mode === "moveArmed") {
+                            // Enter move mode only when pointer actually moves.
+                            return;
+                          }
+                          if (press.current.mode === "selectArmed") {
+                            longPress.current.did = true;
+                            press.current.mode = "select";
+                            setDrag({ row: r, col: c });
+                            setSelection({ rowStart: r, rowEnd: r, start: c, endExclusive: c + 1 });
+                            return;
+                          }
+                        }, 130);
                       }}
                       className={`w-7 h-7 border cursor-pointer ${CELL_COLOR[val]} ${(() => {
                         const role = getCellRole(inst.id, t.stepIndex);
@@ -6663,6 +7565,9 @@ function Grid({
           </div>
         );
       })}
+      {showMoveDebugCue && (
+        <div className="text-[10px] uppercase tracking-wide text-amber-300">Move mode (debug)</div>
+      )}
     </div>
   );
 }
