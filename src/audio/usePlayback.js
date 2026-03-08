@@ -112,6 +112,8 @@ export function usePlayback({ instruments, grid, columns, bpm, resolution, stepQ
     pendingPlayStartTsRef.current = null;
     firstStepSeenForPlayRef.current = false;
   }, [engine]);
+  const getAudioTime = useCallback(() => engine.getCurrentTime(), [engine]);
+  const getScheduleAheadTimeSec = useCallback(() => engine.getScheduleAheadTimeSec(), [engine]);
 
   return {
     isReady,
@@ -124,5 +126,7 @@ export function usePlayback({ instruments, grid, columns, bpm, resolution, stepQ
     stop,
     initSamples,
     setPlayhead,
+    getAudioTime,
+    getScheduleAheadTimeSec,
   };
 }
