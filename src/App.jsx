@@ -139,6 +139,7 @@ const CELL = {
   OFF: "off",
   ON: "on",
   GHOST: "ghost",
+  ACCENT: "accent",
 };
 
 const GHOST_NOTATION_ENABLED = new Set(["snare", "tom1", "tom2", "floorTom", "hihat"]);
@@ -385,7 +386,7 @@ function buildNotationStateFromPayload(payload) {
         if (!Number.isFinite(idx)) return;
         if (idx < 0 || idx >= columns) return;
         const valRaw = Number(Array.isArray(event) ? event[1] : 1);
-        row[idx] = valRaw === 2 ? CELL.GHOST : CELL.ON;
+        row[idx] = valRaw === 3 ? CELL.ACCENT : valRaw === 2 ? CELL.GHOST : CELL.ON;
       });
     }
     grid[inst.id] = row;
@@ -787,6 +788,7 @@ const CELL_COLOR = {
   [CELL.OFF]: "bg-neutral-800",
   [CELL.ON]: "bg-[#00b3ba]",
   [CELL.GHOST]: "bg-[#00b3ba]/35",
+  [CELL.ACCENT]: "bg-[#00b3ba]",
 };
 
 // Ghost note support (MVP)
@@ -1022,7 +1024,7 @@ export default function App() {
   const [isBeatLibraryOpen, setIsBeatLibraryOpen] = useState(false);
   const [isArrangementOpen, setIsArrangementOpen] = useState(false);
   const [isArrangementNotationOpen, setIsArrangementNotationOpen] = useState(false);
-  const [arrangementNotationViewMode, setArrangementNotationViewMode] = useState("sections"); // sections | sheet
+  const [arrangementNotationViewMode, setArrangementNotationViewMode] = useState("sheet"); // sections | sheet
   const [arrangementPlaybackEnabled, setArrangementPlaybackEnabled] = useState(false);
   const [arrangementPlaybackIndex, setArrangementPlaybackIndex] = useState(0);
   const [arrangementSelection, setArrangementSelection] = useState(null); // {start,end} row indices
@@ -1625,9 +1627,8 @@ useEffect(() => {
   }, [isArrangementOpen, arrangementPanelWidth]);
   useEffect(() => {
     if (!isArrangementNotationOpen) return;
-    const panelWidth = 1040;
     const margin = 8;
-    const nextX = Math.max(margin, window.innerWidth - panelWidth - margin);
+    const nextX = margin;
     setArrangementNotationPos((prev) => ({ ...prev, x: nextX }));
     const onKeyDown = (e) => {
       if (e.key !== "Escape") return;
@@ -1724,14 +1725,11 @@ useEffect(() => {
       const drag = arrangementNotationDragRef.current;
       if (!drag.dragging) return;
       const width = 1040;
-      const panelHeight = arrangementNotationPanelRef.current?.offsetHeight || 860;
-      const height = Math.min(window.innerHeight - 20, panelHeight);
       const minX = 8;
       const minY = 8;
       const maxX = Math.max(minX, window.innerWidth - width - 8);
-      const maxY = Math.max(minY, window.innerHeight - height - 8);
       const nextX = Math.max(minX, Math.min(maxX, e.clientX - drag.offsetX));
-      const nextY = Math.max(minY, Math.min(maxY, e.clientY - drag.offsetY));
+      const nextY = Math.max(minY, e.clientY - drag.offsetY);
       setArrangementNotationPos({ x: nextX, y: nextY });
     };
     const stopDrag = () => {
@@ -2141,7 +2139,7 @@ useEffect(() => {
     setSelection(null);
   }, [selection, selectionCellCount, instruments]);
 
-  const rankCell = React.useCallback((v) => (v === CELL.ON ? 2 : v === CELL.GHOST ? 1 : 0), []);
+  const rankCell = React.useCallback((v) => (v === CELL.ACCENT ? 3 : v === CELL.ON ? 2 : v === CELL.GHOST ? 1 : 0), []);
   const cloneGridState = React.useCallback((g) => {
     const out = {};
     ALL_INSTRUMENTS.forEach((inst) => {
@@ -2370,6 +2368,14 @@ useEffect(() => {
   const [gridFuture, setGridFuture] = useState([]);
 
   const localBeatsRef = React.useRef(localBeats);
+  const arrangementItemsRef = React.useRef(arrangementItems);
+  const savedArrangementsRef = React.useRef(savedArrangements);
+  const arrangementNameDraftRef = React.useRef(arrangementNameDraft);
+  const loadedArrangementIdRef = React.useRef(loadedArrangementId);
+  const loadedLocalBeatIdRef = React.useRef(loadedLocalBeatId);
+  const beatNameDraftRef = React.useRef(beatNameDraft);
+  const beatCategoryDraftRef = React.useRef(beatCategoryDraft);
+  const beatStyleDraftRef = React.useRef(beatStyleDraft);
   const localBeatPastRef = React.useRef([]);
   const localBeatFutureRef = React.useRef([]);
   const gridPastRef = React.useRef([]);
@@ -2380,6 +2386,30 @@ useEffect(() => {
   React.useEffect(() => {
     localBeatsRef.current = localBeats;
   }, [localBeats]);
+  React.useEffect(() => {
+    arrangementItemsRef.current = arrangementItems;
+  }, [arrangementItems]);
+  React.useEffect(() => {
+    savedArrangementsRef.current = savedArrangements;
+  }, [savedArrangements]);
+  React.useEffect(() => {
+    arrangementNameDraftRef.current = arrangementNameDraft;
+  }, [arrangementNameDraft]);
+  React.useEffect(() => {
+    loadedArrangementIdRef.current = loadedArrangementId;
+  }, [loadedArrangementId]);
+  React.useEffect(() => {
+    loadedLocalBeatIdRef.current = loadedLocalBeatId;
+  }, [loadedLocalBeatId]);
+  React.useEffect(() => {
+    beatNameDraftRef.current = beatNameDraft;
+  }, [beatNameDraft]);
+  React.useEffect(() => {
+    beatCategoryDraftRef.current = beatCategoryDraft;
+  }, [beatCategoryDraft]);
+  React.useEffect(() => {
+    beatStyleDraftRef.current = beatStyleDraft;
+  }, [beatStyleDraft]);
 
   React.useEffect(() => {
     baseGridRef.current = baseGrid;
@@ -2518,6 +2548,57 @@ useEffect(() => {
       }
     });
   }, []);
+  const cloneSavedArrangementList = React.useCallback((items) => {
+    if (!Array.isArray(items)) return [];
+    return items.map((entry) => {
+      try {
+        return structuredClone(entry);
+      } catch (_) {
+        try {
+          return JSON.parse(JSON.stringify(entry));
+        } catch (_) {
+          return entry;
+        }
+      }
+    });
+  }, []);
+  const snapshotLibraryState = React.useCallback(() => {
+    return {
+      localBeats: cloneLocalBeatList(localBeatsRef.current),
+      arrangementItems: normalizeArrangementItems(arrangementItemsRef.current),
+      savedArrangements: cloneSavedArrangementList(savedArrangementsRef.current),
+      arrangementNameDraft: String(arrangementNameDraftRef.current || ""),
+      loadedArrangementId: loadedArrangementIdRef.current || null,
+      loadedLocalBeatId: loadedLocalBeatIdRef.current || null,
+      beatNameDraft: String(beatNameDraftRef.current || ""),
+      beatCategoryDraft: String(beatCategoryDraftRef.current || "all"),
+      beatStyleDraft: String(beatStyleDraftRef.current || "all"),
+    };
+  }, [cloneLocalBeatList, cloneSavedArrangementList]);
+  const applyLibraryState = React.useCallback((snapshot) => {
+    if (!snapshot || typeof snapshot !== "object") return;
+    const nextLocalBeats = cloneLocalBeatList(snapshot.localBeats);
+    const nextArrangementItems = normalizeArrangementItems(snapshot.arrangementItems);
+    const nextSavedArrangements = cloneSavedArrangementList(snapshot.savedArrangements);
+    localBeatsRef.current = nextLocalBeats;
+    arrangementItemsRef.current = nextArrangementItems;
+    savedArrangementsRef.current = nextSavedArrangements;
+    loadedArrangementIdRef.current = snapshot.loadedArrangementId || null;
+    loadedLocalBeatIdRef.current = snapshot.loadedLocalBeatId || null;
+    arrangementNameDraftRef.current = String(snapshot.arrangementNameDraft || "");
+    beatNameDraftRef.current = String(snapshot.beatNameDraft || "");
+    beatCategoryDraftRef.current = String(snapshot.beatCategoryDraft || "all");
+    beatStyleDraftRef.current = String(snapshot.beatStyleDraft || "all");
+    setLocalBeats(nextLocalBeats);
+    setArrangementItems(nextArrangementItems);
+    setSavedArrangements(nextSavedArrangements);
+    setLoadedArrangementId(snapshot.loadedArrangementId || null);
+    setLoadedLocalBeatId(snapshot.loadedLocalBeatId || null);
+    setArrangementNameDraft(String(snapshot.arrangementNameDraft || ""));
+    setBeatNameDraft(String(snapshot.beatNameDraft || ""));
+    setBeatCategoryDraft(String(snapshot.beatCategoryDraft || "all"));
+    setBeatStyleDraft(String(snapshot.beatStyleDraft || "all"));
+  }, [cloneLocalBeatList, cloneSavedArrangementList]);
 
   const syncLocalBeatHistoryState = React.useCallback(() => {
     setLocalBeatPast([...localBeatPastRef.current]);
@@ -2527,14 +2608,14 @@ useEffect(() => {
   const pushLocalBeatHistory = React.useCallback(() => {
     localBeatPastRef.current = [
       ...localBeatPastRef.current,
-      cloneLocalBeatList(localBeatsRef.current),
+      snapshotLibraryState(),
     ];
     localBeatFutureRef.current = [];
     if (localBeatPastRef.current.length > 200) {
       localBeatPastRef.current = localBeatPastRef.current.slice(localBeatPastRef.current.length - 200);
     }
     syncLocalBeatHistoryState();
-  }, [cloneLocalBeatList, syncLocalBeatHistoryState]);
+  }, [snapshotLibraryState, syncLocalBeatHistoryState]);
 
   const setLocalBeatsWithUndo = React.useCallback(
     (updater) => {
@@ -2554,14 +2635,12 @@ useEffect(() => {
     const prev = localBeatPastRef.current[localBeatPastRef.current.length - 1];
     localBeatPastRef.current = localBeatPastRef.current.slice(0, -1);
     localBeatFutureRef.current = [
-      cloneLocalBeatList(localBeatsRef.current),
+      snapshotLibraryState(),
       ...localBeatFutureRef.current,
     ];
-    const nextBeats = cloneLocalBeatList(prev);
-    localBeatsRef.current = nextBeats;
-    setLocalBeats(nextBeats);
+    applyLibraryState(prev);
     syncLocalBeatHistoryState();
-  }, [cloneLocalBeatList, syncLocalBeatHistoryState]);
+  }, [snapshotLibraryState, applyLibraryState, syncLocalBeatHistoryState]);
 
   const redoLocalBeatHistory = React.useCallback(() => {
     if (localBeatFutureRef.current.length === 0) return;
@@ -2569,13 +2648,23 @@ useEffect(() => {
     localBeatFutureRef.current = localBeatFutureRef.current.slice(1);
     localBeatPastRef.current = [
       ...localBeatPastRef.current,
-      cloneLocalBeatList(localBeatsRef.current),
+      snapshotLibraryState(),
     ];
-    const nextBeats = cloneLocalBeatList(next);
-    localBeatsRef.current = nextBeats;
-    setLocalBeats(nextBeats);
+    applyLibraryState(next);
     syncLocalBeatHistoryState();
-  }, [cloneLocalBeatList, syncLocalBeatHistoryState]);
+  }, [snapshotLibraryState, applyLibraryState, syncLocalBeatHistoryState]);
+  const setArrangementItemsWithUndo = React.useCallback(
+    (updater) => {
+      pushLocalBeatHistory();
+      setArrangementItems((prev) => {
+        const next = typeof updater === "function" ? updater(prev) : updater;
+        const normalized = normalizeArrangementItems(next);
+        arrangementItemsRef.current = normalized;
+        return normalized;
+      });
+    },
+    [pushLocalBeatHistory]
+  );
 
   useEffect(() => {
     const tupletsMatchFor = (overridesByBar) =>
@@ -2605,7 +2694,7 @@ useEffect(() => {
           const idx = Number(event[0]);
           const code = Number(event[1]);
           if (!Number.isFinite(idx) || idx < 0 || idx >= columns) return;
-          const nextVal = code === 2 ? CELL.GHOST : code === 1 ? CELL.ON : CELL.OFF;
+          const nextVal = code === 3 ? CELL.ACCENT : code === 2 ? CELL.GHOST : code === 1 ? CELL.ON : CELL.OFF;
           if (nextVal !== CELL.OFF) nextGrid[instId][Math.floor(idx)] = nextVal;
         });
       });
@@ -2625,7 +2714,7 @@ useEffect(() => {
     if (timeSig.n !== example.timeSig.n || timeSig.d !== example.timeSig.d) return;
     if (!tupletsMatchFor(example.tupletsByBar)) return;
 
-    const rank = (v) => (v === CELL.ON ? 2 : v === CELL.GHOST ? 1 : 0);
+    const rank = (v) => (v === CELL.ACCENT ? 3 : v === CELL.ON ? 2 : v === CELL.GHOST ? 1 : 0);
     const nextGrid = {};
     ALL_INSTRUMENTS.forEach((inst) => {
       nextGrid[inst.id] = Array(columns).fill(CELL.OFF);
@@ -3185,6 +3274,7 @@ useEffect(() => {
   const arrangementNotationSections = React.useMemo(() => {
     const out = [];
     let globalBarOffset = 0;
+    let prevBpm = null;
     arrangementRows.forEach((row, idx) => {
       const baseNotationState = buildNotationStateFromPayload(row?.beat?.payload);
       const notationState = expandNotationStateForRepeats(baseNotationState, row?.repeats);
@@ -3194,6 +3284,8 @@ useEffect(() => {
         stickingLeadHand,
         stickingKeepQuarterLeadHand,
       });
+      const bpmNum = Number.isFinite(row?.beatBpm) ? Math.round(Number(row.beatBpm)) : null;
+      const showTempoAtStart = bpmNum != null && (globalBarOffset === 0 || prevBpm !== bpmNum);
       out.push({
         id: row.id || `${idx}`,
         index: idx,
@@ -3206,8 +3298,11 @@ useEffect(() => {
         notation: notationState,
         stickingAssignments,
         startBarOffset: globalBarOffset,
+        sectionMarkers: [{ bar: 0, text: row?.beat?.name || "Untitled Beat" }],
+        tempoMarkers: showTempoAtStart ? [{ bar: 0, text: `♩ = ${bpmNum}` }] : [],
       });
       globalBarOffset += Math.max(1, Number(row?.sectionBars) || 1);
+      prevBpm = bpmNum;
     });
     return out;
   }, [arrangementRows, stickingHandedness, stickingLeadHand, stickingKeepQuarterLeadHand]);
@@ -3222,16 +3317,29 @@ useEffect(() => {
       const key = `${Number(section?.notation?.resolution) || 0}:${Number(ts.n) || 0}/${Number(ts.d) || 0}`;
       if (!current.length || key === currentKey) {
         if (!current.length) currentStartBarOffset = barCursor;
-        current.push(section.notation);
+        current.push(section);
         currentKey = key;
         barCursor += Math.max(1, Number(section?.sectionBars) || 1);
         return;
       }
-      const merged = mergeNotationStates(current);
+      const merged = mergeNotationStates(current.map((s) => s.notation));
       if (merged) {
+        const sectionMarkers = [];
+        const tempoMarkers = [];
+        current.forEach((s) => {
+          const localBar = Math.max(0, (s.startBarOffset || 0) - currentStartBarOffset);
+          (s.sectionMarkers || []).forEach((m) => {
+            sectionMarkers.push({ bar: localBar + (Number(m?.bar) || 0), text: String(m?.text || "") });
+          });
+          (s.tempoMarkers || []).forEach((m) => {
+            tempoMarkers.push({ bar: localBar + (Number(m?.bar) || 0), text: String(m?.text || "") });
+          });
+        });
         chunks.push({
           ...merged,
           startBarOffset: currentStartBarOffset,
+          sectionMarkers,
+          tempoMarkers,
           stickingAssignments: computeStickingAssignmentsForNotationState(merged, {
             stickingHandedness,
             stickingLeadHand,
@@ -3239,17 +3347,30 @@ useEffect(() => {
           }),
         });
       }
-      current = [section.notation];
+      current = [section];
       currentKey = key;
       currentStartBarOffset = barCursor;
       barCursor += Math.max(1, Number(section?.sectionBars) || 1);
     });
     if (current.length) {
-      const merged = mergeNotationStates(current);
+      const merged = mergeNotationStates(current.map((s) => s.notation));
       if (merged) {
+        const sectionMarkers = [];
+        const tempoMarkers = [];
+        current.forEach((s) => {
+          const localBar = Math.max(0, (s.startBarOffset || 0) - currentStartBarOffset);
+          (s.sectionMarkers || []).forEach((m) => {
+            sectionMarkers.push({ bar: localBar + (Number(m?.bar) || 0), text: String(m?.text || "") });
+          });
+          (s.tempoMarkers || []).forEach((m) => {
+            tempoMarkers.push({ bar: localBar + (Number(m?.bar) || 0), text: String(m?.text || "") });
+          });
+        });
         chunks.push({
           ...merged,
           startBarOffset: currentStartBarOffset,
+          sectionMarkers,
+          tempoMarkers,
           stickingAssignments: computeStickingAssignmentsForNotationState(merged, {
             stickingHandedness,
             stickingLeadHand,
@@ -3286,7 +3407,7 @@ useEffect(() => {
     return { totalBars, totalSeconds };
   }, [arrangementRows]);
   const arrangementAddBeat = React.useCallback((source, beatId) => {
-    setArrangementItems((prev) => {
+    setArrangementItemsWithUndo((prev) => {
       const normalizedSource = source === "public" ? "public" : "local";
       const normalizedBeatId = String(beatId);
       const last = prev[prev.length - 1];
@@ -3311,9 +3432,9 @@ useEffect(() => {
         },
       ];
     });
-  }, []);
+  }, [setArrangementItemsWithUndo]);
   const arrangementMoveRow = React.useCallback((rowId, delta) => {
-    setArrangementItems((prev) => {
+    setArrangementItemsWithUndo((prev) => {
       const idx = prev.findIndex((row) => row.id === rowId);
       if (idx < 0) return prev;
       const nextIdx = idx + delta;
@@ -3323,19 +3444,19 @@ useEffect(() => {
       out.splice(nextIdx, 0, row);
       return out;
     });
-  }, []);
+  }, [setArrangementItemsWithUndo]);
   const arrangementNudgeRepeats = React.useCallback((rowId, delta) => {
-    setArrangementItems((prev) =>
+    setArrangementItemsWithUndo((prev) =>
       prev.map((row) =>
         row.id === rowId
           ? { ...row, repeats: Math.max(1, Math.min(64, (Number(row.repeats) || 1) + delta)) }
           : row
       )
     );
-  }, []);
+  }, [setArrangementItemsWithUndo]);
   const arrangementRemoveRow = React.useCallback((rowId) => {
-    setArrangementItems((prev) => prev.filter((row) => row.id !== rowId));
-  }, []);
+    setArrangementItemsWithUndo((prev) => prev.filter((row) => row.id !== rowId));
+  }, [setArrangementItemsWithUndo]);
   const saveArrangementSnapshot = React.useCallback(() => {
     const normalizedItems = normalizeArrangementItems(arrangementItems);
     if (!normalizedItems.length) return;
@@ -3357,6 +3478,7 @@ useEffect(() => {
       updatedAt: now,
       items: normalizedItems,
     };
+    pushLocalBeatHistory();
     setSavedArrangements((prev) => {
       const idx = prev.findIndex((entry) => entry.id === nextId);
       if (idx < 0) return [nextEntry, ...prev];
@@ -3366,7 +3488,7 @@ useEffect(() => {
     });
     setArrangementNameDraft(name);
     setLoadedArrangementId(nextId);
-  }, [arrangementItems, arrangementNameDraft, savedArrangements, loadedArrangementId]);
+  }, [arrangementItems, arrangementNameDraft, savedArrangements, loadedArrangementId, pushLocalBeatHistory]);
   const loadSavedArrangement = React.useCallback(
     (entry) => {
       if (!entry || !Array.isArray(entry.items) || entry.items.length < 1) return;
@@ -3374,18 +3496,20 @@ useEffect(() => {
         setArrangementPlaybackEnabled(false);
         setArrangementPlaybackIndex(0);
       }
+      pushLocalBeatHistory();
       setArrangementItems(normalizeArrangementItems(entry.items));
       setArrangementSelection(null);
       setArrangementSelectionAnchor(null);
       setArrangementNameDraft(String(entry.name || ""));
       setLoadedArrangementId(entry.id || null);
     },
-    [arrangementPlaybackEnabled]
+    [arrangementPlaybackEnabled, pushLocalBeatHistory]
   );
   const deleteSavedArrangement = React.useCallback((entryId) => {
+    pushLocalBeatHistory();
     setSavedArrangements((prev) => prev.filter((entry) => entry.id !== entryId));
     setLoadedArrangementId((prev) => (prev === entryId ? null : prev));
-  }, []);
+  }, [pushLocalBeatHistory]);
   const handleArrangementRowSelect = React.useCallback((rowIndex) => {
     if (!Number.isFinite(rowIndex) || rowIndex < 0) return;
     const sel = normalizedArrangementSelection;
@@ -3431,6 +3555,13 @@ useEffect(() => {
     setArrangementSelectionAnchor(rowIndex);
     setArrangementSelection({ start: rowIndex, end: rowIndex });
   }, [normalizedArrangementSelection]);
+  const selectedSavedArrangementEntry = React.useMemo(() => {
+    if (!savedArrangements.length) return null;
+    if (loadedArrangementId) {
+      return savedArrangements.find((entry) => entry.id === loadedArrangementId) || null;
+    }
+    return savedArrangements[0] || null;
+  }, [savedArrangements, loadedArrangementId]);
   const arrangementSourceBeats =
     arrangementSourceTab === "public" ? filteredPublicBeats : filteredLocalBeats;
   const openBeatLibraryWindow = React.useCallback(() => {
@@ -3455,23 +3586,23 @@ useEffect(() => {
       setArrangementSelectionAnchor(null);
     }
   }, [arrangementRows.length, arrangementSelection]);
-  const isLocalLibraryHistoryActive = isBeatLibraryOpen && beatLibraryTab === "local";
-  const canUndoTop = isLocalLibraryHistoryActive ? localBeatPast.length > 0 : gridPast.length > 0;
-  const canRedoTop = isLocalLibraryHistoryActive ? localBeatFuture.length > 0 : gridFuture.length > 0;
+  const isLibraryHistoryActive = isArrangementOpen || (isBeatLibraryOpen && beatLibraryTab === "local");
+  const canUndoTop = isLibraryHistoryActive ? localBeatPast.length > 0 : gridPast.length > 0;
+  const canRedoTop = isLibraryHistoryActive ? localBeatFuture.length > 0 : gridFuture.length > 0;
   const handleTopUndo = React.useCallback(() => {
-    if (isLocalLibraryHistoryActive) {
+    if (isLibraryHistoryActive) {
       undoLocalBeatHistory();
       return;
     }
     undoGrid();
-  }, [isLocalLibraryHistoryActive, undoLocalBeatHistory, undoGrid]);
+  }, [isLibraryHistoryActive, undoLocalBeatHistory, undoGrid]);
   const handleTopRedo = React.useCallback(() => {
-    if (isLocalLibraryHistoryActive) {
+    if (isLibraryHistoryActive) {
       redoLocalBeatHistory();
       return;
     }
     redoGrid();
-  }, [isLocalLibraryHistoryActive, redoLocalBeatHistory, redoGrid]);
+  }, [isLibraryHistoryActive, redoLocalBeatHistory, redoGrid]);
 
   useEffect(() => {
     setPresetNameInlineDraft(selectedSavedPreset ? selectedSavedPreset.label : selectedPresetLabel);
@@ -3533,7 +3664,7 @@ useEffect(() => {
       const next = { ...prev };
       const src = [...(prev[srcId] || Array(columns).fill(CELL.OFF))];
       const dst = [...(prev[dstId] || Array(columns).fill(CELL.OFF))];
-      const rank = (v) => (v === CELL.ON ? 2 : v === CELL.GHOST ? 1 : 0);
+      const rank = (v) => (v === CELL.ACCENT ? 3 : v === CELL.ON ? 2 : v === CELL.GHOST ? 1 : 0);
       for (let c = 0; c < columns; c++) {
         const from = src[c] ?? CELL.OFF;
         if (from === CELL.OFF) continue;
@@ -3645,13 +3776,13 @@ useEffect(() => {
   const onArrangementOrderDragEnd = React.useCallback((event) => {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
-    setArrangementItems((prev) => {
+    setArrangementItemsWithUndo((prev) => {
       const oldIndex = prev.findIndex((row) => row.id === String(active.id));
       const newIndex = prev.findIndex((row) => row.id === String(over.id));
       if (oldIndex < 0 || newIndex < 0) return prev;
       return arrayMove(prev, oldIndex, newIndex);
     });
-  }, []);
+  }, [setArrangementItemsWithUndo]);
   const restrictArrangementDragToList = React.useCallback(({ transform, activeNodeRect }) => {
     const listEl = arrangementListRef.current;
     if (!listEl || !transform || !activeNodeRect) {
@@ -4502,7 +4633,8 @@ useEffect(() => {
       const events = [];
       for (let idx = 0; idx < Math.min(columns, row.length); idx++) {
         const cell = row[idx];
-        if (cell === CELL.ON) events.push([idx, 1]);
+        if (cell === CELL.ACCENT) events.push([idx, 3]);
+        else if (cell === CELL.ON) events.push([idx, 1]);
         else if (cell === CELL.GHOST) events.push([idx, 2]);
       }
       if (events.length) grid[inst.id] = events;
@@ -4978,8 +5110,8 @@ useEffect(() => {
     setBaseGridWithUndo((prev) => {
       const next = { ...prev };
       const current = prev[inst][idx];
-      // Ghost behaves like "on" for regular toggling.
-      const normalized = current === CELL.GHOST ? CELL.ON : current;
+      // Articulated hits behave like "on" for regular click toggling.
+      const normalized = current === CELL.GHOST || current === CELL.ACCENT ? CELL.ON : current;
       const nextVal = normalized === CELL.OFF ? CELL.ON : CELL.OFF;
       next[inst] = [...prev[inst]];
       next[inst][idx] = nextVal;
@@ -5055,7 +5187,7 @@ useEffect(() => {
     return true;
   }, [computedGrid, autoStickingAssignmentsByStep, stickingAssignmentsByStep, instruments, selection, stickingLeadHand]);
 
-  const toggleGhost = (inst, idx) => {
+  const cycleArticulation = (inst, idx, forceValue = null) => {
     if (!GHOST_ENABLED.has(inst)) return;
 
     if (loopRule) {
@@ -5077,11 +5209,18 @@ useEffect(() => {
     setBaseGridWithUndo((prev) => {
       const next = { ...prev };
       const current = prev[inst][idx];
+      if (forceValue && (forceValue === CELL.ON || forceValue === CELL.GHOST || forceValue === CELL.ACCENT)) {
+        next[inst] = [...prev[inst]];
+        next[inst][idx] = forceValue;
+        return next;
+      }
 
       // Only toggle ghost on active cells.
       if (current === CELL.OFF) return prev;
-
-      const nextVal = current === CELL.GHOST ? CELL.ON : CELL.GHOST;
+      const nextVal =
+        current === CELL.ON ? CELL.GHOST :
+        current === CELL.GHOST ? CELL.ACCENT :
+        CELL.ON;
 
       next[inst] = [...prev[inst]];
       next[inst][idx] = nextVal;
@@ -5246,7 +5385,7 @@ useEffect(() => {
               className={`touch-none select-none px-3 py-1.5 rounded border text-sm bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60 ${
                 !canUndoTop ? "opacity-40 cursor-not-allowed" : ""
               }`}
-              title={isLocalLibraryHistoryActive ? "Undo beat library change" : "Undo (grid only)"}
+              title={isLibraryHistoryActive ? "Undo library change" : "Undo (grid only)"}
             >
               ←
             </button>
@@ -5257,7 +5396,7 @@ useEffect(() => {
               className={`touch-none select-none px-3 py-1.5 rounded border text-sm bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60 ${
                 !canRedoTop ? "opacity-40 cursor-not-allowed" : ""
               }`}
-              title={isLocalLibraryHistoryActive ? "Redo beat library change" : "Redo (grid only)"}
+              title={isLibraryHistoryActive ? "Redo library change" : "Redo (grid only)"}
             >
               →
             </button>
@@ -5879,7 +6018,7 @@ useEffect(() => {
                 cycleTupletAt={cycleTupletAt}
                 gridBarsPerLine={gridBarsPerLine}
                 cycleVelocity={cycleVelocity}
-                toggleGhost={toggleGhost}
+                toggleGhost={cycleArticulation}
                 selection={selection}
                 setSelection={setSelection}
                 loopRule={loopRule}
@@ -5922,7 +6061,7 @@ useEffect(() => {
                 cycleTupletAt={cycleTupletAt}
                 gridBarsPerLine={gridBarsPerLine}
                 cycleVelocity={cycleVelocity}
-                toggleGhost={toggleGhost}
+                toggleGhost={cycleArticulation}
                 selection={selection}
                 setSelection={setSelection}
                 loopRule={loopRule}
@@ -6465,7 +6604,16 @@ useEffect(() => {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setIsArrangementNotationOpen((v) => !v)}
+                  onClick={() =>
+                    setIsArrangementNotationOpen((v) => {
+                      const next = !v;
+                      if (next) {
+                        setArrangementSourcesCollapsed(true);
+                        setArrangementDetailsCollapsed(false);
+                      }
+                      return next;
+                    })
+                  }
                   className={`px-3 py-1.5 rounded border text-sm ${
                     isArrangementNotationOpen
                       ? "border-neutral-700 text-white bg-neutral-800 hover:bg-neutral-700/60"
@@ -6773,7 +6921,7 @@ useEffect(() => {
                     </button>
                     <button
                       type="button"
-                      onClick={() => setArrangementItems([])}
+                      onClick={() => setArrangementItemsWithUndo([])}
                       className="px-2 py-1 rounded border border-neutral-800 text-xs text-neutral-400 hover:bg-neutral-800/50"
                     >
                       Clear
@@ -6804,42 +6952,57 @@ useEffect(() => {
                   </button>
                 </div>
                 {savedArrangements.length > 0 && (
-                  <div className="mt-2 max-h-28 overflow-auto space-y-1 pr-1">
-                    {savedArrangements.map((entry) => (
-                      <div
-                        key={`arr-save-${entry.id}`}
-                        className={`flex items-center justify-between gap-2 rounded border px-2 py-1 ${
-                          loadedArrangementId === entry.id
-                            ? "border-cyan-700/70 bg-cyan-950/20"
-                            : "border-neutral-800 bg-neutral-900/40"
+                  <div className="mt-2 space-y-1.5">
+                    <div className="flex items-center gap-2">
+                      <select
+                        value={selectedSavedArrangementEntry?.id || ""}
+                        onChange={(e) => setLoadedArrangementId(e.target.value || null)}
+                        className="min-w-0 flex-1 bg-neutral-900 border border-neutral-700 rounded px-2 py-1 text-xs text-white"
+                      >
+                        {savedArrangements.map((entry) => (
+                          <option key={`arr-save-opt-${entry.id}`} value={entry.id}>
+                            {entry.name}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!selectedSavedArrangementEntry) return;
+                          loadSavedArrangement(selectedSavedArrangementEntry);
+                        }}
+                        disabled={!selectedSavedArrangementEntry}
+                        className={`px-2 py-1 rounded border text-[11px] ${
+                          selectedSavedArrangementEntry
+                            ? "border-neutral-700 text-neutral-200 hover:bg-neutral-800/60"
+                            : "border-neutral-800 text-neutral-500 bg-neutral-900/60 cursor-not-allowed"
                         }`}
                       >
-                        <div className="min-w-0">
-                          <div className="truncate text-xs text-neutral-200">{entry.name}</div>
-                          <div className="truncate text-[10px] text-neutral-500">
-                            {entry.updatedAt ? `Updated ${new Date(entry.updatedAt).toLocaleDateString()}` : ""}
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-1.5">
-                          <button
-                            type="button"
-                            onClick={() => loadSavedArrangement(entry)}
-                            className="px-2 py-0.5 rounded border border-neutral-700 text-[11px] text-neutral-200 hover:bg-neutral-800/60"
-                          >
-                            Load
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => deleteSavedArrangement(entry.id)}
-                            className="px-2 py-0.5 rounded border border-red-900 text-[11px] text-red-200 hover:bg-red-900/30"
-                            aria-label="Delete arrangement"
-                            title="Delete arrangement"
-                          >
-                            ×
-                          </button>
-                        </div>
-                      </div>
-                    ))}
+                        Load
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!selectedSavedArrangementEntry) return;
+                          deleteSavedArrangement(selectedSavedArrangementEntry.id);
+                        }}
+                        disabled={!selectedSavedArrangementEntry}
+                        className={`px-2 py-1 rounded border text-[11px] ${
+                          selectedSavedArrangementEntry
+                            ? "border-red-900 text-red-200 hover:bg-red-900/30"
+                            : "border-neutral-800 text-neutral-500 bg-neutral-900/60 cursor-not-allowed"
+                        }`}
+                        aria-label="Delete arrangement"
+                        title="Delete arrangement"
+                      >
+                        ×
+                      </button>
+                    </div>
+                    <div className="text-[10px] text-neutral-500">
+                      {selectedSavedArrangementEntry?.updatedAt
+                        ? `Updated ${new Date(selectedSavedArrangementEntry.updatedAt).toLocaleDateString()}`
+                        : ""}
+                    </div>
                   </div>
                 )}
                 <div className="mt-2 text-[11px] text-neutral-500">Click rows to build a contiguous loop block. Click selected rows again to shrink/clear. Play loops selected range.</div>
@@ -6945,6 +7108,23 @@ useEffect(() => {
                 </div>
                 <button
                   type="button"
+                  onClick={() => {
+                    if (arrangementPlaybackEnabled && playback.isPlaying) stopArrangementPlayback();
+                    else startArrangementPlayback();
+                  }}
+                  disabled={arrangementPlayableEntries.length < 1}
+                  className={`px-3 py-1.5 rounded border text-sm ${
+                    arrangementPlaybackEnabled && playback.isPlaying
+                      ? "border-neutral-600 text-white bg-neutral-800"
+                      : arrangementPlayableEntries.length > 0
+                        ? "border-neutral-700 text-white bg-neutral-800 hover:bg-neutral-700/60"
+                        : "border-neutral-800 text-neutral-500 bg-neutral-900/60 cursor-not-allowed"
+                  }`}
+                >
+                  {arrangementPlaybackEnabled && playback.isPlaying ? "Stop" : "Play"}
+                </button>
+                <button
+                  type="button"
                   onClick={() => setIsArrangementNotationOpen(false)}
                   className="px-3 py-1.5 rounded border border-neutral-700 text-sm text-neutral-300 hover:bg-neutral-800/60"
                 >
@@ -6954,6 +7134,9 @@ useEffect(() => {
             </div>
 
             <div className="mt-3 w-full max-w-none aspect-[210/297] rounded border border-neutral-800 bg-neutral-950/40 overflow-visible p-3">
+              <div className="mb-3 text-center text-base font-semibold text-neutral-100">
+                {arrangementNameDraft.trim() || "Arrangement"}
+              </div>
               {arrangementNotationViewMode === "sections" ? (
                 <div className="space-y-4">
                   {arrangementNotationSections.map((section) => (
@@ -6988,6 +7171,10 @@ useEffect(() => {
                           flatBeams={flatBeams}
                           justifySystems={true}
                           targetContentWidth={816}
+                          sectionMarkers={section.sectionMarkers || []}
+                          tempoMarkers={section.tempoMarkers || []}
+                          showSystemBarNumbers={true}
+                          barNumberOffset={section.startBarOffset || 0}
                           activeBarIndices={
                             activeArrangementGlobalBarIndex >= section.startBarOffset &&
                             activeArrangementGlobalBarIndex < section.startBarOffset + section.sectionBars
@@ -7030,6 +7217,10 @@ useEffect(() => {
                         flatBeams={flatBeams}
                         justifySystems={true}
                         targetContentWidth={816}
+                        sectionMarkers={chunk.sectionMarkers || []}
+                        tempoMarkers={chunk.tempoMarkers || []}
+                        showSystemBarNumbers={true}
+                        barNumberOffset={chunk.startBarOffset || 0}
                         activeBarIndices={
                           activeArrangementGlobalBarIndex >= chunk.startBarOffset &&
                           activeArrangementGlobalBarIndex < chunk.startBarOffset + chunk.bars
@@ -8563,7 +8754,7 @@ function Grid({
         }
       } else if (press.current.mode === "ghostDone") {
         if (press.current.ghostToggled && press.current.instId) {
-          try { toggleGhost(press.current.instId, c0); } catch (_) {}
+          try { toggleGhost(press.current.instId, c0, press.current.startVal); } catch (_) {}
         }
         if (legacySelectionEnabled || !press.current.startWasSelected) {
           press.current.mode = "select";
@@ -8971,7 +9162,7 @@ function Grid({
                               longPress.current.did = false;
                             } else if (press.current.mode === "ghostDone") {
                               if (press.current.ghostToggled && press.current.instId) {
-                                try { toggleGhost(press.current.instId, c0); } catch (_) {}
+                                try { toggleGhost(press.current.instId, c0, press.current.startVal); } catch (_) {}
                               }
                               longPress.current.did = false;
                             }
@@ -9115,7 +9306,7 @@ function Grid({
                             } else if (press.current.mode === "ghostDone") {
                               longPress.current.did = false;
                               if (press.current.ghostToggled && press.current.instId) {
-                                try { toggleGhost(press.current.instId, c0); } catch (_) {}
+                                try { toggleGhost(press.current.instId, c0, press.current.startVal); } catch (_) {}
                               }
                               if (legacySelectionEnabled || !press.current.startWasSelected) {
                                 press.current.mode = "select";
@@ -9320,7 +9511,7 @@ function Grid({
                         // 4) selection (legacy immediate-drag or long-press-drag)
                         if (press.current.startWasSelected) {
                           press.current.mode = legacySelectionEnabled ? "selectArmed" : "moveArmed";
-                        } else if (ghostAllowed && (val === CELL.ON || val === CELL.GHOST)) {
+                        } else if (ghostAllowed && (val === CELL.ON || val === CELL.GHOST || val === CELL.ACCENT)) {
                           press.current.mode = "ghostArmed";
                         } else if (val !== CELL.OFF) {
                           press.current.mode = legacySelectionEnabled ? "selectArmed" : "moveArmed";
@@ -9360,7 +9551,7 @@ function Grid({
                           }
                         }, 130);
                       }}
-                      className={`w-7 h-7 border cursor-pointer ${CELL_COLOR[val]} ${(() => {
+                      className={`w-7 h-7 border cursor-pointer ${CELL_COLOR[val]} ${val === CELL.ACCENT ? "shadow-[inset_0_0_0_1px_rgba(255,255,255,0.98)]" : ""} ${(() => {
                         const role = getCellRole(inst.id, t.stepIndex);
                         if (role === "source") return "border-cyan-300 ring-2 ring-cyan-300/40";
                         if (role === "generated") return "border-neutral-600 opacity-70";
@@ -9419,6 +9610,10 @@ function Notation({
   justifySystems = false,
   targetContentWidth = null,
   activeBarIndices = [],
+  sectionMarkers = [],
+  tempoMarkers = [],
+  showSystemBarNumbers = false,
+  barNumberOffset = 0,
 }) {
   const VF = Vex.Flow;
   const ref = useRef(null);
@@ -9430,6 +9625,55 @@ function Notation({
         .map((v) => Number(v))
         .filter((v) => Number.isFinite(v) && v >= 0)
     );
+    const sectionMarkerMap = new Map(
+      (Array.isArray(sectionMarkers) ? sectionMarkers : [])
+        .map((m) => [Number(m?.bar), String(m?.text || "").trim()])
+        .filter(([bar, text]) => Number.isFinite(bar) && bar >= 0 && text)
+    );
+    const tempoMarkerMap = new Map(
+      (Array.isArray(tempoMarkers) ? tempoMarkers : [])
+        .map((m) => [Number(m?.bar), String(m?.text || "").trim()])
+        .filter(([bar, text]) => Number.isFinite(bar) && bar >= 0 && text)
+    );
+    const drawArrangementTextMarkers = (staves, perLine) => {
+      if (!Array.isArray(staves) || staves.length < 1) return;
+      ctx.save();
+      for (let b = 0; b < staves.length; b++) {
+        const stave = staves[b];
+        const x = Number(stave?.getX?.()) || 0;
+        const yTop = Number(stave?.getYForLine?.(0)) || 0;
+        if (showSystemBarNumbers && b % Math.max(1, Number(perLine) || 1) === 0) {
+          const barNo = Math.max(1, Number(barNumberOffset) + b + 1);
+          ctx.setFont("Arial", 11, "normal");
+          ctx.fillStyle = "#d4d4d4";
+          ctx.fillText(String(barNo), x + 2, yTop - 44);
+        }
+        const sectionText = sectionMarkerMap.get(b);
+        if (sectionText) {
+          ctx.setFont("Arial", 11, "bold");
+          ctx.fillStyle = "#e5e5e5";
+          ctx.fillText(sectionText, x + 18, yTop - 44);
+        }
+        const tempoText = tempoMarkerMap.get(b);
+        if (tempoText) {
+          ctx.fillStyle = "#d4d4d4";
+          const tx = x + 18;
+          const ty = yTop - 30;
+          const m = /^♩\s*=\s*(.+)$/.exec(tempoText);
+          if (m) {
+            ctx.setFont("Arial", 14, "normal");
+            ctx.fillText("♩", tx, ty);
+            const noteWidth = ctx.measureText("♩").width || 8;
+            ctx.setFont("Arial", 10, "normal");
+            ctx.fillText(` = ${m[1]}`, tx + noteWidth + 1, ty);
+          } else {
+            ctx.setFont("Arial", 10, "normal");
+            ctx.fillText(tempoText, tx, ty);
+          }
+        }
+      }
+      ctx.restore();
+    };
     const paintActiveBarHighlights = (svg, staves) => {
       if (!svg || !Array.isArray(staves) || !activeBarSet.size) return;
       staves.forEach((stave, barIndex) => {
@@ -9505,6 +9749,19 @@ function Notation({
         // Stabilize ghost stem geometry when custom notehead metrics differ.
         // Value is in px and intentionally close to VexFlow default stem size.
         if (typeof note.setStemLength === "function") note.setStemLength(35);
+      } catch (_) {}
+    };
+    const applyAccentArticulation = (note, accentKeyIndices) => {
+      if (!note || !accentKeyIndices || accentKeyIndices.length === 0) return;
+      try {
+        const art = new Flow.Articulation("a>");
+        art.setPosition(Flow.Modifier.Position.ABOVE);
+        if (art?.render_options && Number.isFinite(art.render_options.font_scale)) {
+          art.render_options.font_scale = art.render_options.font_scale * 0.88;
+          if (typeof art.reset === "function") art.reset();
+        }
+        if (typeof art.setXShift === "function") art.setXShift(2);
+        note.addModifier(art, 0);
       } catch (_) {}
     };
     const getStickingSpecForStep = (stepIdx) => {
@@ -9730,9 +9987,9 @@ function Notation({
         const y = 30 + row * systemHeight;
         const stave = new Stave(x, y, barWidths[b]);
         if (col > 0) stave.setBegBarType(Barline.type.NONE);
-        if (b === 0) {
+        if (col === 0) {
           stave.addClef("percussion");
-          stave.addTimeSignature(`${timeSig.n}/${timeSig.d}`);
+          if (b === 0) stave.addTimeSignature(`${timeSig.n}/${timeSig.d}`);
         }
         stave.setContext(ctx).draw();
         staves.push(stave);
@@ -9756,16 +10013,18 @@ function Notation({
             const keys = [];
             const ghostKeyIndices = [];
             const circledXLargeKeyIndices = [];
+            const accentKeyIndices = [];
             instruments.forEach((inst) => {
               const val = grid[inst.id]?.[globalIdx] ?? CELL.OFF;
               if (val === CELL.OFF) return;
               keys.push(NOTATION_MAP[inst.id].key);
               const keyIndex = keys.length - 1;
               if (val === CELL.GHOST && GHOST_NOTATION_ENABLED.has(inst.id)) ghostKeyIndices.push(keyIndex);
+              if (val === CELL.ACCENT) accentKeyIndices.push(keyIndex);
               if (inst.id === "china" || inst.id === "hihatOpen") circledXLargeKeyIndices.push(keyIndex);
             });
             const stickingSpec = getStickingSpecForStep(globalIdx);
-            stepData.push({ keys, ghostKeyIndices, circledXLargeKeyIndices, stickingSpec, globalIdx });
+            stepData.push({ keys, ghostKeyIndices, circledXLargeKeyIndices, accentKeyIndices, stickingSpec, globalIdx });
           }
 
           const canUseMergedQuarterLogic = subdiv === baseSubdivPerQuarter && (mergeNotes || mergeRests);
@@ -9816,6 +10075,7 @@ function Notation({
                 applyGhostStyling(note, entry.ghostKeyIndices);
                 applyGhostStemOverride(note, entry.ghostKeyIndices);
                 applyCircledXLargeStyling(note, entry.circledXLargeKeyIndices);
+                applyAccentArticulation(note, entry.accentKeyIndices);
                 applyStickingAnnotation(note, entry.stickingSpec, entry.globalIdx);
                 notes.push(note);
                 quarterNotes.push(note);
@@ -9860,6 +10120,7 @@ function Notation({
               applyGhostStyling(note, entry.ghostKeyIndices);
               applyGhostStemOverride(note, entry.ghostKeyIndices);
               applyCircledXLargeStyling(note, entry.circledXLargeKeyIndices);
+              applyAccentArticulation(note, entry.accentKeyIndices);
               applyStickingAnnotation(note, entry.stickingSpec, entry.globalIdx);
               notes.push(note);
               quarterNotes.push(note);
@@ -9937,6 +10198,7 @@ function Notation({
           try { tuplet.setContext(ctx).draw(); } catch (_) {}
         });
       }
+      drawArrangementTextMarkers(staves, perLine);
       const svg = ref.current.querySelector("svg");
       if (svg) {
         svg.style.background = "transparent";
@@ -10078,9 +10340,9 @@ function Notation({
       // Remove repeated left barline so bars connect visually
       if (col > 0) stave.setBegBarType(Barline.type.NONE);
 
-      if (b === 0) {
+      if (col === 0) {
         stave.addClef("percussion");
-        stave.addTimeSignature(`${timeSig.n}/${timeSig.d}`);
+        if (b === 0) stave.addTimeSignature(`${timeSig.n}/${timeSig.d}`);
       }
 
       stave.setContext(ctx).draw();
@@ -10088,10 +10350,11 @@ function Notation({
 
       const notes = [];
       const noteStarts = [];
-      const pushNote = (n, ghostKeyIndices, circledXLargeKeyIndices, stickingSpec = [], stepIdx = -1) => {
+      const pushNote = (n, ghostKeyIndices, circledXLargeKeyIndices, accentKeyIndices, stickingSpec = [], stepIdx = -1) => {
         applyGhostStyling(n, ghostKeyIndices);
         applyGhostStemOverride(n, ghostKeyIndices);
         applyCircledXLargeStyling(n, circledXLargeKeyIndices);
+        applyAccentArticulation(n, accentKeyIndices);
         applyStickingAnnotation(n, stickingSpec, stepIdx);
         notes.push(n);
         noteStarts.push(s);
@@ -10105,6 +10368,7 @@ function Notation({
         const keys = [];
         const ghostKeyIndices = [];
         const circledXLargeKeyIndices = [];
+        const accentKeyIndices = [];
 
         instruments.forEach((inst) => {
           const val = grid[inst.id][globalIdx];
@@ -10113,6 +10377,9 @@ function Notation({
             const keyIndex = keys.length - 1;
             if (val === CELL.GHOST && GHOST_NOTATION_ENABLED.has(inst.id)) {
               ghostKeyIndices.push(keyIndex);
+            }
+            if (val === CELL.ACCENT) {
+              accentKeyIndices.push(keyIndex);
             }
             if (inst.id === "china" || inst.id === "hihatOpen") {
               circledXLargeKeyIndices.push(keyIndex);
@@ -10157,7 +10424,7 @@ const isRest = keys.length === 0;
             if (isStepEmpty(b * stepsPerBar + (s + 1))) {
               const noteQ = new StaveNote({ keys, duration: "q", clef: "percussion" });
               noteQ.setStemDirection(1);
-              pushNote(noteQ, ghostKeyIndices, circledXLargeKeyIndices, stickingSpec, globalIdx);
+              pushNote(noteQ, ghostKeyIndices, circledXLargeKeyIndices, accentKeyIndices, stickingSpec, globalIdx);
                 if (allowDotted && mergeNotes) {
                   const after = b * stepsPerBarN + (s + 2);
                   if (s + 2 < stepsPerBar && isStepEmpty(after) && inSameBeamGroup(s, s + 3)) {
@@ -10183,7 +10450,7 @@ const isRest = keys.length === 0;
               if (isStepEmpty(a) && isStepEmpty(b2) && isStepEmpty(c)) {
                 const noteQ = new StaveNote({ keys, duration: "q", clef: "percussion" });
                 noteQ.setStemDirection(1);
-                pushNote(noteQ, ghostKeyIndices, circledXLargeKeyIndices, stickingSpec, globalIdx);
+                pushNote(noteQ, ghostKeyIndices, circledXLargeKeyIndices, accentKeyIndices, stickingSpec, globalIdx);
                 s += 4;
                 continue;
               }
@@ -10193,7 +10460,7 @@ const isRest = keys.length === 0;
               if (isStepEmpty(next)) {
                 const note8 = new StaveNote({ keys, duration: "8", clef: "percussion" });
                 note8.setStemDirection(1);
-                pushNote(note8, ghostKeyIndices, circledXLargeKeyIndices, stickingSpec, globalIdx);
+                pushNote(note8, ghostKeyIndices, circledXLargeKeyIndices, accentKeyIndices, stickingSpec, globalIdx);
                 if (allowDotted && mergeNotes) {
                   const after = b * stepsPerBarN + (s + 2);
                   if (s + 2 < stepsPerBar && isStepEmpty(after) && inSameBeamGroup(s, s + 3)) {
@@ -10261,7 +10528,7 @@ const isRest = keys.length === 0;
             const note = new StaveNote({ keys, duration: dur, clef: "percussion" });
             note.setStemDirection(1);
             if (dotted) attachDot(note);
-            pushNote(note, ghostKeyIndices, circledXLargeKeyIndices, stickingSpec, globalIdx);
+            pushNote(note, ghostKeyIndices, circledXLargeKeyIndices, accentKeyIndices, stickingSpec, globalIdx);
 
             s += dotted ? (len + len / 2) : len;
             continue;
@@ -10279,7 +10546,7 @@ const isRest = keys.length === 0;
             if (isStepEmpty(b * stepsPerBar + (s + 1))) {
               const note8 = new StaveNote({ keys, duration: "8", clef: "percussion" });
               note8.setStemDirection(1);
-              pushNote(note8, ghostKeyIndices, circledXLargeKeyIndices, stickingSpec, globalIdx);
+              pushNote(note8, ghostKeyIndices, circledXLargeKeyIndices, accentKeyIndices, stickingSpec, globalIdx);
                 if (allowDotted && mergeNotes) {
                   const after = b * stepsPerBarN + (s + 2);
                   if (s + 2 < stepsPerBar && isStepEmpty(after) && inSameBeamGroup(s, s + 3)) {
@@ -10411,7 +10678,7 @@ const isRest = keys.length === 0;
         // MVP: if any cymbal is present in this slice, use X noteheads for the chord.
         // Next upgrade: per-key notehead types.
 
-        pushNote(note, ghostKeyIndices, circledXLargeKeyIndices, stickingSpec, globalIdx);
+        pushNote(note, ghostKeyIndices, circledXLargeKeyIndices, accentKeyIndices, stickingSpec, globalIdx);
         s += 1;
       }
 
@@ -10522,6 +10789,7 @@ for (let i = 0; i < notes.length; i++) {
       barBeams.forEach((beam) => beam.setContext(ctx).draw());
     }
 
+    drawArrangementTextMarkers(staves, perLine);
 
 
     // White notation on dark UI
@@ -10537,7 +10805,7 @@ for (let i = 0; i < notes.length; i++) {
       });
       paintActiveBarHighlights(svg, staves);
     }
-  }, [instruments, grid, stickingAssignmentsByStep, showNotationSticking, notationStickingView, resolution, bars, barsPerLine, stepsPerBar, timeSig, quarterSubdivisionsByBar, barStepOffsets, mergeRests, mergeNotes, dottedNotes, flatBeams, justifySystems, targetContentWidth, activeBarIndices]);
+  }, [instruments, grid, stickingAssignmentsByStep, showNotationSticking, notationStickingView, resolution, bars, barsPerLine, stepsPerBar, timeSig, quarterSubdivisionsByBar, barStepOffsets, mergeRests, mergeNotes, dottedNotes, flatBeams, justifySystems, targetContentWidth, activeBarIndices, sectionMarkers, tempoMarkers, showSystemBarNumbers, barNumberOffset]);
 
   return <div ref={ref} />;
 
