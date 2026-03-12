@@ -107,6 +107,7 @@ const LOCAL_BEAT_LIBRARY_STORAGE_KEY = "drum-grid-local-beat-library-v1";
 const PUBLIC_SUBMIT_COMPOSER_STORAGE_KEY = "drum-grid-public-submit-composer-v1";
 const SONG_ARRANGEMENT_STORAGE_KEY = "drum-grid-song-arrangement-v1";
 const SONG_ARRANGEMENT_LIBRARY_STORAGE_KEY = "drum-grid-song-arrangement-library-v1";
+const LAST_USED_ARRANGEMENT_ID_STORAGE_KEY = "drum-grid-last-used-arrangement-id-v1";
 const ARRANGEMENT_BOUNDARY_COMP_SCALE_STORAGE_KEY = "drum-grid-arrangement-boundary-comp-scale-v1";
 const ARRANGEMENT_ADAPTIVE_COMP_ENABLED_STORAGE_KEY = "drum-grid-arrangement-adaptive-comp-enabled-v1";
 const LEGACY_SELECTION_ENABLED_STORAGE_KEY = "drum-grid-legacy-selection-enabled-v1";
@@ -1068,7 +1069,14 @@ export default function App() {
     }
   });
   const [arrangementNameDraft, setArrangementNameDraft] = useState("");
-  const [loadedArrangementId, setLoadedArrangementId] = useState(null);
+  const [loadedArrangementId, setLoadedArrangementId] = useState(() => {
+    try {
+      return String(window.localStorage.getItem(LAST_USED_ARRANGEMENT_ID_STORAGE_KEY) || "").trim() || null;
+    } catch (_) {
+      return null;
+    }
+  });
+  const [arrangementSaveAsOpen, setArrangementSaveAsOpen] = useState(false);
   const [beatNameDraft, setBeatNameDraft] = useState("");
   const [publicSubmitTitle, setPublicSubmitTitle] = useState("");
   const [publicSubmitComposer, setPublicSubmitComposer] = useState("");
@@ -1102,6 +1110,7 @@ export default function App() {
   const [publicBeats, setPublicBeats] = useState([]);
   const [publicLibraryLoading, setPublicLibraryLoading] = useState(false);
   const [publicLibraryError, setPublicLibraryError] = useState("");
+  const [libraryFiltersOpen, setLibraryFiltersOpen] = useState(false);
   const [savedPresets, setSavedPresets] = useState(() => {
     try {
       const raw = window.localStorage.getItem(USER_PRESETS_STORAGE_KEY);
@@ -1214,6 +1223,15 @@ export default function App() {
       );
     } catch (_) {}
   }, [savedArrangements]);
+  useEffect(() => {
+    try {
+      if (loadedArrangementId) {
+        window.localStorage.setItem(LAST_USED_ARRANGEMENT_ID_STORAGE_KEY, loadedArrangementId);
+      } else {
+        window.localStorage.removeItem(LAST_USED_ARRANGEMENT_ID_STORAGE_KEY);
+      }
+    } catch (_) {}
+  }, [loadedArrangementId]);
   useEffect(() => {
     try {
       window.localStorage.setItem(
@@ -1627,6 +1645,14 @@ useEffect(() => {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [isArrangementOpen, arrangementPanelWidth]);
   useEffect(() => {
+    if (!isArrangementOpen || arrangementSourcesCollapsed || arrangementSourceTab !== "local") return;
+    const raf = window.requestAnimationFrame(() => {
+      beatNameInputRef.current?.focus();
+      beatNameInputRef.current?.select?.();
+    });
+    return () => window.cancelAnimationFrame(raf);
+  }, [isArrangementOpen, arrangementSourcesCollapsed, arrangementSourceTab]);
+  useEffect(() => {
     if (!isArrangementNotationOpen) return;
     const margin = 8;
     const nextX = margin;
@@ -1782,6 +1808,7 @@ useEffect(() => {
   const [wrapSelectionMoveEnabled, setWrapSelectionMoveEnabled] = useState(true);
   const [moveOverlapMode, setMoveOverlapMode] = useState("active-to-empty");
   const [loopOverlapMode, setLoopOverlapMode] = useState("all-to-all");
+  const [loopRespectPlayability, setLoopRespectPlayability] = useState(true);
   const [moveOverrideBehavior, setMoveOverrideBehavior] = useState("temporary");
   const lastNonAllLoopRepeats = React.useRef("1");
   const lastNonOffGlobalTupletRef = React.useRef(3);
@@ -3473,23 +3500,32 @@ useEffect(() => {
   const arrangementRemoveRow = React.useCallback((rowId) => {
     setArrangementItemsWithUndo((prev) => prev.filter((row) => row.id !== rowId));
   }, [setArrangementItemsWithUndo]);
-  const saveArrangementSnapshot = React.useCallback(() => {
+  const saveArrangementSnapshot = React.useCallback((options = {}) => {
     const normalizedItems = normalizeArrangementItems(arrangementItems);
     if (!normalizedItems.length) return;
+    const { mode = "auto" } = options;
     const now = new Date().toISOString();
     const trimmed = arrangementNameDraft.trim();
     const fallbackName = `Arrangement ${savedArrangements.length + 1}`;
     const name = trimmed || fallbackName;
     const lower = name.toLowerCase();
+    const loadedEntry = loadedArrangementId
+      ? savedArrangements.find((entry) => entry.id === loadedArrangementId) || null
+      : null;
+    const isSameNameAsLoaded =
+      !!loadedEntry && trimmed.length > 0 && loadedEntry.name.trim().toLowerCase() === lower;
     const byId = loadedArrangementId
       ? savedArrangements.find((entry) => entry.id === loadedArrangementId)
       : null;
     const byName = savedArrangements.find((entry) => entry.name.toLowerCase() === lower);
-    const target = byId || byName || null;
+    const target =
+      mode === "update"
+        ? byId || null
+        : (isSameNameAsLoaded ? byId : null) || byName || null;
     const nextId = target?.id || `arrlib-${Math.random().toString(36).slice(2, 10)}`;
     const nextEntry = {
       id: nextId,
-      name,
+      name: mode === "update" ? String(target?.name || name) : name,
       createdAt: target?.createdAt || now,
       updatedAt: now,
       items: normalizedItems,
@@ -3502,8 +3538,9 @@ useEffect(() => {
       out[idx] = nextEntry;
       return out;
     });
-    setArrangementNameDraft(name);
+    setArrangementNameDraft(nextEntry.name);
     setLoadedArrangementId(nextId);
+    setArrangementSaveAsOpen(false);
   }, [arrangementItems, arrangementNameDraft, savedArrangements, loadedArrangementId, pushLocalBeatHistory]);
   const loadSavedArrangement = React.useCallback(
     (entry) => {
@@ -3518,6 +3555,7 @@ useEffect(() => {
       setArrangementSelectionAnchor(null);
       setArrangementNameDraft(String(entry.name || ""));
       setLoadedArrangementId(entry.id || null);
+      setArrangementSaveAsOpen(false);
     },
     [arrangementPlaybackEnabled, pushLocalBeatHistory]
   );
@@ -3525,7 +3563,24 @@ useEffect(() => {
     pushLocalBeatHistory();
     setSavedArrangements((prev) => prev.filter((entry) => entry.id !== entryId));
     setLoadedArrangementId((prev) => (prev === entryId ? null : prev));
+    setArrangementSaveAsOpen(false);
   }, [pushLocalBeatHistory]);
+  const loadBeatIntoEditor = React.useCallback((source, beat) => {
+    if (!beat?.payload) return;
+    const normalizedSource = source === "public" ? "public" : "local";
+    applyImportedBeatPayloadRef.current?.(
+      beat.payload,
+      `${normalizedSource}:${beat.id}:${beat.createdAt || ""}`
+    );
+    if (normalizedSource === "local") {
+      setLoadedLocalBeatId(beat.id);
+      setBeatNameDraft(String(beat.name || ""));
+      setBeatCategoryDraft(String(beat.category || "Groove"));
+      setBeatStyleDraft(String(beat.style || "all"));
+    } else {
+      setLoadedLocalBeatId(null);
+    }
+  }, []);
   const handleArrangementRowSelect = React.useCallback((rowIndex) => {
     if (!Number.isFinite(rowIndex) || rowIndex < 0) return;
     const sel = normalizedArrangementSelection;
@@ -3572,12 +3627,15 @@ useEffect(() => {
     setArrangementSelection({ start: rowIndex, end: rowIndex });
   }, [normalizedArrangementSelection]);
   const selectedSavedArrangementEntry = React.useMemo(() => {
-    if (!savedArrangements.length) return null;
-    if (loadedArrangementId) {
-      return savedArrangements.find((entry) => entry.id === loadedArrangementId) || null;
-    }
-    return savedArrangements[0] || null;
+    if (!savedArrangements.length || !loadedArrangementId) return null;
+    return savedArrangements.find((entry) => entry.id === loadedArrangementId) || null;
   }, [savedArrangements, loadedArrangementId]);
+  const arrangementHasPendingUpdate = React.useMemo(() => {
+    if (!selectedSavedArrangementEntry) return false;
+    const currentItems = normalizeArrangementItems(arrangementItems);
+    const savedItems = normalizeArrangementItems(selectedSavedArrangementEntry.items || []);
+    return JSON.stringify(currentItems) !== JSON.stringify(savedItems);
+  }, [arrangementItems, selectedSavedArrangementEntry]);
   const arrangementSourceBeats =
     arrangementSourceTab === "public" ? filteredPublicBeats : filteredLocalBeats;
   const openBeatLibraryWindow = React.useCallback(() => {
@@ -3589,6 +3647,28 @@ useEffect(() => {
   const openArrangementWindow = React.useCallback(() => {
     setIsArrangementOpen((v) => !v);
   }, []);
+  useEffect(() => {
+    if (!savedArrangements.length) {
+      if (loadedArrangementId !== null) setLoadedArrangementId(null);
+      setArrangementSaveAsOpen(true);
+      return;
+    }
+    const activeEntry =
+      (loadedArrangementId &&
+        savedArrangements.find((entry) => entry.id === loadedArrangementId)) ||
+      null;
+    if (!activeEntry) {
+      const fallbackEntry = savedArrangements[0] || null;
+      if (fallbackEntry) {
+        setLoadedArrangementId(fallbackEntry.id);
+        setArrangementNameDraft(String(fallbackEntry.name || ""));
+        setArrangementSaveAsOpen(false);
+      }
+      return;
+    }
+    setArrangementNameDraft(String(activeEntry.name || ""));
+    setArrangementSaveAsOpen(false);
+  }, [loadedArrangementId, savedArrangements]);
   useEffect(() => {
     if (!arrangementSelection) return;
     if (!arrangementRows.length) {
@@ -3834,9 +3914,10 @@ useEffect(() => {
   }, []);
 
 
-  const bakeLoopInto = (prevGrid, rule, repeats = "all", overlapMode = "all-to-all") => {
+  const applyLoopWrites = React.useCallback((gridState, rule, repeats = "all", overlapMode = "all-to-all", respectPlayability = false) => {
     const next = {};
-    ALL_INSTRUMENTS.forEach((inst) => (next[inst.id] = [...(prevGrid[inst.id] || [])]));
+    ALL_INSTRUMENTS.forEach((inst) => (next[inst.id] = [...(gridState[inst.id] || [])]));
+    if (!rule || rule.length < 1) return next;
 
     const { rowStart, rowEnd, start, length } = rule;
     const srcByRow = {};
@@ -3846,8 +3927,6 @@ useEffect(() => {
       srcByRow[instId] = next[instId].slice(start, start + length);
     }
 
-    // Repeat the loop pattern after the selected region.
-    // repeats: "all" or 1..8 (number of repeats after the original selection)
     const maxRepeats =
       repeats === "off"
         ? 0
@@ -3861,6 +3940,19 @@ useEffect(() => {
           ? columns
           : Math.min(columns, start + length * (1 + maxRepeats));
 
+    const wouldStayPlayable = (instId, idx, nextVal) => {
+      if (!respectPlayability || FOOT_INSTRUMENTS.has(instId) || nextVal === CELL.OFF) return true;
+      let handHits = 0;
+      for (const inst of instruments) {
+        const checkId = inst?.id;
+        if (!checkId || FOOT_INSTRUMENTS.has(checkId)) continue;
+        const val = checkId === instId ? nextVal : (next[checkId]?.[idx] ?? CELL.OFF);
+        if (val !== CELL.OFF) handHits += 1;
+        if (handHits > 2) return false;
+      }
+      return true;
+    };
+
     for (let idx = start + length; idx < endExclusive; idx++) {
       const i = (idx - start) % length;
       for (let r = rowStart; r <= rowEnd; r++) {
@@ -3869,21 +3961,30 @@ useEffect(() => {
         const movedVal = srcByRow[instId]?.[i] ?? CELL.OFF;
         const targetVal = next[instId]?.[idx] ?? CELL.OFF;
         if (overlapMode === "all-to-all") {
+          if (!wouldStayPlayable(instId, idx, movedVal)) continue;
           next[instId][idx] = movedVal;
           continue;
         }
         if (overlapMode === "active-to-all") {
-          if (movedVal !== CELL.OFF) next[instId][idx] = movedVal;
+          if (movedVal !== CELL.OFF && wouldStayPlayable(instId, idx, movedVal)) next[instId][idx] = movedVal;
           continue;
         }
         if (overlapMode === "active-to-empty") {
-          if (movedVal !== CELL.OFF && targetVal === CELL.OFF) next[instId][idx] = movedVal;
+          if (movedVal !== CELL.OFF && targetVal === CELL.OFF && wouldStayPlayable(instId, idx, movedVal)) {
+            next[instId][idx] = movedVal;
+          }
           continue;
         }
       }
     }
     return next;
-  };
+  }, [columns, instruments]);
+
+  const bakeLoopInto = React.useCallback(
+    (prevGrid, rule, repeats = "all", overlapMode = "all-to-all", respectPlayability = false) =>
+      applyLoopWrites(prevGrid, rule, repeats, overlapMode, respectPlayability),
+    [applyLoopWrites]
+  );
 
   useEffect(() => {
     if (!loopRule) return;
@@ -3895,7 +3996,7 @@ useEffect(() => {
       const isTyping = tag === "input" || tag === "textarea" || el?.isContentEditable;
       if (isTyping) return;
       e.preventDefault();
-      setBaseGridWithUndo((prev) => bakeLoopInto(prev, loopRule, loopRepeats, loopOverlapMode));
+      setBaseGridWithUndo((prev) => bakeLoopInto(prev, loopRule, loopRepeats, loopOverlapMode, loopRespectPlayability));
       setLoopRule(null);
       setSelection(null);
     };
@@ -3905,6 +4006,7 @@ useEffect(() => {
     loopRule,
     loopRepeats,
     loopOverlapMode,
+    loopRespectPlayability,
     pendingPresetChange,
     isKitEditorOpen,
     isArrangementOpen,
@@ -3915,64 +4017,13 @@ useEffect(() => {
   ]);
 
   const computedGrid = React.useMemo(() => {
-    const g = {};
-    instruments.forEach((inst) => (g[inst.id] = [...(baseGrid[inst.id] || [])]));
-
-    if (!loopRule || loopRule.length < 2) return g;
-
-    const { rowStart, rowEnd, start, length } = loopRule;
-    const srcByRow = {};
-    for (let r = rowStart; r <= rowEnd; r++) {
-      const instId = instruments[r]?.id;
-      if (!instId) continue;
-      srcByRow[instId] = (baseGrid[instId] || []).slice(start, start + length);
+    if (!loopRule || loopRule.length < 2) {
+      const g = {};
+      instruments.forEach((inst) => (g[inst.id] = [...(baseGrid[inst.id] || [])]));
+      return g;
     }
-
-    const maxRepeats =
-      loopRepeats === "off"
-        ? 0
-        : loopRepeats === "all"
-          ? Infinity
-          : Math.max(1, Math.min(8, Number(loopRepeats) || 1));
-
-    // Repeat the loop pattern starting right after the selected region.
-    // If maxRepeats is finite, only apply that many repeats (1..8).
-    let repeatsApplied = 0;
-    if (maxRepeats === 0) return g;
-
-    for (let idx = start + length; idx < columns; idx++) {
-      const repeatIndex = Math.floor((idx - start) / length) - 0; // 1 for first repeat
-      if (repeatIndex > 0) {
-        if (repeatIndex > maxRepeats) break;
-        // Only count when we enter a new repeat block
-        // (repeatIndex is 1..)
-      }
-
-      const currentRepeat = Math.floor((idx - start) / length);
-      if (currentRepeat >= 1 && currentRepeat > maxRepeats) break;
-
-      const i = (idx - start) % length;
-      for (let r = rowStart; r <= rowEnd; r++) {
-        const instId = instruments[r]?.id;
-        if (!instId) continue;
-        const movedVal = srcByRow[instId]?.[i] ?? CELL.OFF;
-        const targetVal = g[instId]?.[idx] ?? CELL.OFF;
-        if (loopOverlapMode === "all-to-all") {
-          g[instId][idx] = movedVal;
-          continue;
-        }
-        if (loopOverlapMode === "active-to-all") {
-          if (movedVal !== CELL.OFF) g[instId][idx] = movedVal;
-          continue;
-        }
-        if (loopOverlapMode === "active-to-empty") {
-          if (movedVal !== CELL.OFF && targetVal === CELL.OFF) g[instId][idx] = movedVal;
-          continue;
-        }
-      }
-    }
-    return g;
-  }, [baseGrid, loopRule, columns, loopRepeats, loopOverlapMode, instruments]);
+    return applyLoopWrites(baseGrid, loopRule, loopRepeats, loopOverlapMode, loopRespectPlayability);
+  }, [baseGrid, loopRule, loopRepeats, loopOverlapMode, loopRespectPlayability, applyLoopWrites, instruments]);
   const quarterDownbeatStepSet = React.useMemo(() => {
     const out = new Set();
     const byBar = Array.isArray(quarterSubdivisionsByBar) ? quarterSubdivisionsByBar : [];
@@ -4445,12 +4496,14 @@ useEffect(() => {
         first.row.beat.payload,
         `arrangement-play:${startIndex}:${first.row.id}:${first.row.beatId}`
       );
+      playback.setTransportStep(0);
     }
   }, [
     arrangementPlayableEntries,
     normalizedArrangementSelection,
     arrangementBoundaryCompMs,
     playback.isPlaying,
+    playback.setTransportStep,
     playback.stop,
     computeArrangementLoopRange,
   ]);
@@ -4593,6 +4646,7 @@ useEffect(() => {
           nextEntry.row.beat.payload,
           `arrangement-play:${nextIndex}:${nextEntry.row.id}:${nextEntry.row.beatId}`
         );
+        playback.setTransportStep(0);
         const nextDurSec = Math.max(0.04, getArrangementRowDurationMs(nextEntry.row) / 1000);
         const boundaryCompSec = arrangementAdaptiveCompMsRef.current / 1000;
         arrangementNextSwitchAtRef.current += nextDurSec + boundaryCompSec;
@@ -4616,6 +4670,7 @@ useEffect(() => {
     stopArrangementPlayback,
     playback.getAudioTime,
     playback.getScheduleAheadTimeSec,
+    playback.setTransportStep,
   ]);
   useEffect(() => {
     if (!arrangementPlaybackEnabled) return;
@@ -4660,10 +4715,10 @@ useEffect(() => {
   }, [printTitle, printComposer, printWatermarkEnabled, showNotationSticking]);
   const bakeLoopPreview = React.useCallback(() => {
     if (!loopRule) return;
-    setBaseGridWithUndo((prev) => bakeLoopInto(prev, loopRule, loopRepeats, loopOverlapMode));
+    setBaseGridWithUndo((prev) => bakeLoopInto(prev, loopRule, loopRepeats, loopOverlapMode, loopRespectPlayability));
     setLoopRule(null);
     setSelection(null);
-  }, [loopRule, loopRepeats, loopOverlapMode]);
+  }, [loopRule, loopRepeats, loopOverlapMode, loopRespectPlayability]);
   const buildCurrentBeatPayload = React.useCallback(() => {
     const grid = {};
     ALL_INSTRUMENTS.forEach((inst) => {
@@ -5137,7 +5192,7 @@ useEffect(() => {
       // - Click inside source: edit source live (no bake)
       // - Click anywhere else (including generated area): bake loop and exit loop mode (NO toggle on this click)
       if (!inSource || inGenerated) {
-        setBaseGridWithUndo((prev) => bakeLoopInto(prev, loopRule, loopRepeats, loopOverlapMode));
+        setBaseGridWithUndo((prev) => bakeLoopInto(prev, loopRule, loopRepeats, loopOverlapMode, loopRespectPlayability));
         setLoopRule(null);
         setSelection(null);
         return;
@@ -5237,7 +5292,7 @@ useEffect(() => {
 
       // Match click behavior: long-pressing outside the source bakes & exits without toggling.
       if (!inSource || inGenerated) {
-        setBaseGridWithUndo((prev) => bakeLoopInto(prev, loopRule, loopRepeats, loopOverlapMode));
+        setBaseGridWithUndo((prev) => bakeLoopInto(prev, loopRule, loopRepeats, loopOverlapMode, loopRespectPlayability));
         setLoopRule(null);
         setSelection(null);
         return;
@@ -5288,7 +5343,7 @@ useEffect(() => {
               if (inSelection) return;
             }
             if (loopRule) {
-              setBaseGridWithUndo((prev) => bakeLoopInto(prev, loopRule, loopRepeats, loopOverlapMode));
+              setBaseGridWithUndo((prev) => bakeLoopInto(prev, loopRule, loopRepeats, loopOverlapMode, loopRespectPlayability));
               setLoopRule(null);
               setSelection(null);
             } else {
@@ -5306,7 +5361,7 @@ useEffect(() => {
         // Clicking anywhere on the grid surface (including bar gaps and spaces between cells)
         // should bake the loop, same as clicking a non-source cell.
         if (el && el.closest && el.closest("[data-gridsurface='1']")) {
-          setBaseGridWithUndo((prev) => bakeLoopInto(prev, loopRule, loopRepeats, loopOverlapMode));
+          setBaseGridWithUndo((prev) => bakeLoopInto(prev, loopRule, loopRepeats, loopOverlapMode, loopRespectPlayability));
           setLoopRule(null);
           setSelection(null);
           return;
@@ -5882,6 +5937,18 @@ useEffect(() => {
                 </button>
               </div>
             </div>
+            <button
+              type="button"
+              onClick={() => setLoopRespectPlayability((v) => !v)}
+              className={`touch-none select-none px-3 py-[5px] rounded border text-sm ${
+                loopRespectPlayability
+                  ? "bg-neutral-800 border-neutral-700 text-white"
+                  : "bg-neutral-900 border-neutral-800 text-neutral-600"
+              }`}
+              title="Skip looped hand hits where they would create an unplayable overlap"
+            >
+              Respect playability
+            </button>
             <div className="flex items-center gap-2">
               <span className="text-sm text-neutral-300">Move overlap</span>
               <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
@@ -6330,6 +6397,18 @@ useEffect(() => {
                   >
                     Public
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => setLibraryFiltersOpen((v) => !v)}
+                    className={`px-2 py-1 rounded border text-xs leading-none ${
+                      libraryFiltersOpen
+                        ? "border-neutral-700 text-white bg-neutral-800"
+                        : "border-neutral-800 text-neutral-400 bg-neutral-900/60"
+                    }`}
+                    title={libraryFiltersOpen ? "Hide beat filters" : "Show beat filters"}
+                  >
+                    ...
+                  </button>
                 </div>
               </div>
               <button
@@ -6422,71 +6501,75 @@ useEffect(() => {
               </button>
             </div>
 
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              <span className="text-xs text-neutral-400">Sort</span>
-              <button
-                type="button"
-                onClick={cycleLibrarySort}
-                className="px-2 py-0.5 rounded border border-neutral-700 text-xs text-neutral-300 hover:bg-neutral-800/50"
-              >
-                {getLibrarySortLabel(librarySort)}
-              </button>
-              <span className="text-xs text-neutral-400">Time sig</span>
-              <select
-                value={libraryTimeSigFilter}
-                onChange={(e) => setLibraryTimeSigFilter(e.target.value)}
-                className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs"
-              >
-                <option value="all">All</option>
-                {allTimeSigCategories.map((ts) => (
-                  <option key={`ts-${ts}`} value={ts}>
-                    {ts}
-                  </option>
-                ))}
-              </select>
-              <span className="text-xs text-neutral-400">BPM</span>
-              <div className="flex items-stretch overflow-hidden rounded border border-neutral-700 bg-neutral-800">
-                <button
-                  type="button"
-                  onPointerDown={() => startLibraryBpmRepeat(-1)}
-                  onPointerUp={stopLibraryBpmRepeat}
-                  onPointerCancel={stopLibraryBpmRepeat}
-                  onPointerLeave={stopLibraryBpmRepeat}
-                  className="px-2 text-xs text-neutral-300 hover:bg-neutral-700/60 active:bg-neutral-700"
-                  aria-label="Decrease BPM filter value"
-                >
-                  −
-                </button>
-                <button
-                  type="button"
-                  onClick={cycleLibraryBpmFilterMode}
-                  className="min-w-[64px] border-l border-r border-neutral-700 px-2 py-1 text-xs text-white hover:bg-neutral-700/60"
-                  title="Cycle BPM filter mode"
-                >
-                  {getBpmFilterLabel()}
-                </button>
-                <button
-                  type="button"
-                  onPointerDown={() => startLibraryBpmRepeat(1)}
-                  onPointerUp={stopLibraryBpmRepeat}
-                  onPointerCancel={stopLibraryBpmRepeat}
-                  onPointerLeave={stopLibraryBpmRepeat}
-                  className="px-2 text-xs text-neutral-300 hover:bg-neutral-700/60 active:bg-neutral-700"
-                  aria-label="Increase BPM filter value"
-                >
-                  +
-                </button>
+            {libraryFiltersOpen && (
+              <div className="mt-3 rounded border border-neutral-800 bg-neutral-900/40 p-2.5">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs text-neutral-400">Sort</span>
+                  <button
+                    type="button"
+                    onClick={cycleLibrarySort}
+                    className="px-2 py-0.5 rounded border border-neutral-700 text-xs text-neutral-300 hover:bg-neutral-800/50"
+                  >
+                    {getLibrarySortLabel(librarySort)}
+                  </button>
+                  <span className="text-xs text-neutral-400">Time sig</span>
+                  <select
+                    value={libraryTimeSigFilter}
+                    onChange={(e) => setLibraryTimeSigFilter(e.target.value)}
+                    className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs"
+                  >
+                    <option value="all">All</option>
+                    {allTimeSigCategories.map((ts) => (
+                      <option key={`ts-${ts}`} value={ts}>
+                        {ts}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="text-xs text-neutral-400">BPM</span>
+                  <div className="flex items-stretch overflow-hidden rounded border border-neutral-700 bg-neutral-800">
+                    <button
+                      type="button"
+                      onPointerDown={() => startLibraryBpmRepeat(-1)}
+                      onPointerUp={stopLibraryBpmRepeat}
+                      onPointerCancel={stopLibraryBpmRepeat}
+                      onPointerLeave={stopLibraryBpmRepeat}
+                      className="px-2 text-xs text-neutral-300 hover:bg-neutral-700/60 active:bg-neutral-700"
+                      aria-label="Decrease BPM filter value"
+                    >
+                      −
+                    </button>
+                    <button
+                      type="button"
+                      onClick={cycleLibraryBpmFilterMode}
+                      className="min-w-[64px] border-l border-r border-neutral-700 px-2 py-1 text-xs text-white hover:bg-neutral-700/60"
+                      title="Cycle BPM filter mode"
+                    >
+                      {getBpmFilterLabel()}
+                    </button>
+                    <button
+                      type="button"
+                      onPointerDown={() => startLibraryBpmRepeat(1)}
+                      onPointerUp={stopLibraryBpmRepeat}
+                      onPointerCancel={stopLibraryBpmRepeat}
+                      onPointerLeave={stopLibraryBpmRepeat}
+                      className="px-2 text-xs text-neutral-300 hover:bg-neutral-700/60 active:bg-neutral-700"
+                      aria-label="Increase BPM filter value"
+                    >
+                      +
+                    </button>
+                  </div>
+                  {beatLibraryTab === "public" && (
+                    <button
+                      type="button"
+                      onClick={refreshPublicLibrary}
+                      className="px-2 py-0.5 rounded border border-neutral-700 text-xs text-neutral-300 hover:bg-neutral-800/50"
+                    >
+                      Refresh
+                    </button>
+                  )}
+                </div>
               </div>
-              {beatLibraryTab === "public" && (
-                <button
-                  type="button"
-                  onClick={refreshPublicLibrary}
-                  className="px-2 py-0.5 rounded border border-neutral-700 text-xs text-neutral-300 hover:bg-neutral-800/50"
-                >
-                  Refresh
-                </button>
-              )}
-            </div>
+            )}
 
             {publicLibraryError && (
               <div className="mt-3 rounded border border-amber-700/70 bg-amber-950/30 px-2 py-1 text-xs text-amber-100 flex items-center justify-between gap-2">
@@ -6506,8 +6589,28 @@ useEffect(() => {
             <div className="mt-4 space-y-2">
               {(beatLibraryTab === "local" ? filteredLocalBeats : filteredPublicBeats).map((beat) => {
                 const beatBpm = getBeatBpm(beat);
+                const isLoadedTrackedBeat =
+                  beatLibraryTab === "local" &&
+                  String(loadedLocalBeatId || "") === String(beat.id) &&
+                  !isLoadedLocalBeatNameChanged;
                 return (
-                  <div key={`beat-${beat.id}`} className="rounded border border-neutral-800 bg-neutral-950/40 px-3 py-2">
+                  <div
+                    key={`beat-${beat.id}`}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => loadBeatIntoEditor(beatLibraryTab, beat)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        loadBeatIntoEditor(beatLibraryTab, beat);
+                      }
+                    }}
+                    className={`rounded border px-3 py-2 cursor-pointer ${
+                      isLoadedTrackedBeat
+                        ? "border-cyan-500/80 bg-cyan-900/20 shadow-[0_0_0_1px_rgba(6,182,212,0.35)]"
+                        : "border-neutral-800 bg-neutral-950/40 hover:bg-neutral-900/60"
+                    }`}
+                  >
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div>
                         <div className="text-sm text-white">
@@ -6533,29 +6636,13 @@ useEffect(() => {
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            applyImportedBeatPayload(beat.payload, `${beatLibraryTab}:${beat.id}:${beat.createdAt || ""}`);
-                            if (beatLibraryTab === "local") {
-                              setLoadedLocalBeatId(beat.id);
-                              setBeatNameDraft(String(beat.name || ""));
-                              setBeatCategoryDraft(String(beat.category || "Groove"));
-                              setBeatStyleDraft(String(beat.style || "all"));
-                            } else {
-                              setLoadedLocalBeatId(null);
-                            }
-                          }}
-                          className="px-2.5 py-1 rounded border border-neutral-700 text-sm text-neutral-200 hover:bg-neutral-800/60"
-                        >
-                          Load
-                        </button>
                         {beatLibraryTab === "local" && (
                           <button
                             type="button"
-                            onClick={() =>
+                            onClick={(e) => {
+                              e.stopPropagation();
                               setLocalBeatsWithUndo((prev) => prev.filter((b) => b.id !== beat.id))
-                            }
+                            }}
                             className="px-2.5 py-1 rounded border border-red-900 text-sm text-red-200 hover:bg-red-900/30"
                             aria-label="Delete beat"
                             title="Delete beat"
@@ -6614,12 +6701,13 @@ useEffect(() => {
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() =>
-                    setArrangementSourcesCollapsed((v) => {
-                      if (!v && arrangementDetailsCollapsed) return v;
-                      return !v;
-                    })
-                  }
+                  onClick={() => {
+                    if (!arrangementSourcesCollapsed && arrangementDetailsCollapsed) {
+                      setIsArrangementOpen(false);
+                      return;
+                    }
+                    setArrangementSourcesCollapsed((v) => !v);
+                  }}
                   className={`px-3 py-1.5 rounded border text-sm ${
                     arrangementSourcesCollapsed
                       ? "border-neutral-800 text-neutral-500 bg-neutral-900/60"
@@ -6631,12 +6719,13 @@ useEffect(() => {
                 </button>
                 <button
                   type="button"
-                  onClick={() =>
-                    setArrangementDetailsCollapsed((v) => {
-                      if (!v && arrangementSourcesCollapsed) return v;
-                      return !v;
-                    })
-                  }
+                  onClick={() => {
+                    if (!arrangementDetailsCollapsed && arrangementSourcesCollapsed) {
+                      setIsArrangementOpen(false);
+                      return;
+                    }
+                    setArrangementDetailsCollapsed((v) => !v);
+                  }}
                   className={`px-3 py-1.5 rounded border text-sm ${
                     arrangementDetailsCollapsed
                       ? "border-neutral-800 text-neutral-500 bg-neutral-900/60"
@@ -6667,30 +6756,8 @@ useEffect(() => {
                 >
                   Notation
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setIsArrangementOpen(false)}
-                  className="px-3 py-1.5 rounded border border-neutral-700 text-sm text-neutral-300 hover:bg-neutral-800/60"
-                >
-                  Close
-                </button>
               </div>
             </div>
-
-            <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-neutral-300">
-              <span className="rounded border border-neutral-700 px-2 py-1">{`Total bars: ${arrangementTotals.totalBars}`}</span>
-              <span className="rounded border border-neutral-700 px-2 py-1">
-                {`Est. length: ${Math.floor(Math.max(0, Math.round(arrangementTotals.totalSeconds)) / 60)}:${String(
-                  Math.max(0, Math.round(arrangementTotals.totalSeconds)) % 60
-                ).padStart(2, "0")}`}
-              </span>
-              {normalizedArrangementSelection ? (
-                <span className="rounded border border-emerald-700/70 px-2 py-1 text-emerald-200">
-                  {`Loop selection: ${normalizedArrangementSelection.start + 1}-${normalizedArrangementSelection.end + 1}`}
-                </span>
-              ) : null}
-            </div>
-
             <div className={`mt-4 grid grid-cols-1 ${!arrangementSourcesCollapsed && !arrangementDetailsCollapsed ? "lg:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)]" : ""} gap-4`}>
               {!arrangementSourcesCollapsed && (
               <div
@@ -6723,10 +6790,23 @@ useEffect(() => {
                     >
                       Public
                     </button>
+                    <button
+                      type="button"
+                      onClick={() => setLibraryFiltersOpen((v) => !v)}
+                      className={`px-2 py-1 rounded border text-xs leading-none ${
+                        libraryFiltersOpen
+                          ? "border-neutral-700 text-white bg-neutral-800"
+                          : "border-neutral-800 text-neutral-400 bg-neutral-900/60"
+                      }`}
+                      title={libraryFiltersOpen ? "Hide beat filters" : "Show beat filters"}
+                    >
+                      ...
+                    </button>
                   </div>
                 </div>
                 <div className="mt-3 flex flex-wrap items-end gap-2">
                   <input
+                    ref={beatNameInputRef}
                     type="text"
                     value={beatNameDraft}
                     onChange={(e) => setBeatNameDraft(e.target.value)}
@@ -6749,7 +6829,9 @@ useEffect(() => {
                     onClick={canUpdateLoadedLocalBeat ? updateCurrentLoadedBeatLocal : saveCurrentBeatLocal}
                     className={`px-2.5 py-1 rounded border text-sm ${
                       arrangementSourceTab === "local"
-                        ? "border-neutral-700 text-white bg-neutral-800 hover:bg-neutral-700/60"
+                        ? canUpdateLoadedLocalBeat
+                          ? "border-cyan-700 text-cyan-100 bg-cyan-900/20 hover:bg-cyan-800/30"
+                          : "border-neutral-700 text-white bg-neutral-800 hover:bg-neutral-700/60"
                         : "border-neutral-800 text-neutral-500 bg-neutral-900/60"
                     }`}
                     title={canUpdateLoadedLocalBeat ? "Update loaded local beat" : "Save to local beat library"}
@@ -6770,69 +6852,73 @@ useEffect(() => {
                     Submit public
                   </button>
                 </div>
-                <div className="mt-3 flex flex-wrap items-center gap-2">
-                  <span className="text-xs text-neutral-400">Sort</span>
-                  <button
-                    type="button"
-                    onClick={cycleLibrarySort}
-                    className="px-2 py-0.5 rounded border border-neutral-700 text-xs text-neutral-300 hover:bg-neutral-800/50"
-                  >
-                    {getLibrarySortLabel(librarySort)}
-                  </button>
-                  <span className="text-xs text-neutral-400">Time sig</span>
-                  <select
-                    value={libraryTimeSigFilter}
-                    onChange={(e) => setLibraryTimeSigFilter(e.target.value)}
-                    className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs"
-                  >
-                    <option value="all">All</option>
-                    {allTimeSigCategories.map((ts) => (
-                      <option key={`arr-ts-${ts}`} value={ts}>
-                        {ts}
-                      </option>
-                    ))}
-                  </select>
-                  <span className="text-xs text-neutral-400">BPM</span>
-                  <div className="flex items-stretch overflow-hidden rounded border border-neutral-700 bg-neutral-800">
-                    <button
-                      type="button"
-                      onPointerDown={() => startLibraryBpmRepeat(-1)}
-                      onPointerUp={stopLibraryBpmRepeat}
-                      onPointerCancel={stopLibraryBpmRepeat}
-                      onPointerLeave={stopLibraryBpmRepeat}
-                      className="px-2 text-xs text-neutral-300 hover:bg-neutral-700/60 active:bg-neutral-700"
-                    >
-                      −
-                    </button>
-                    <button
-                      type="button"
-                      onClick={cycleLibraryBpmFilterMode}
-                      className="min-w-[64px] border-l border-r border-neutral-700 px-2 py-1 text-xs text-white hover:bg-neutral-700/60"
-                      title="Cycle BPM filter mode"
-                    >
-                      {getBpmFilterLabel()}
-                    </button>
-                    <button
-                      type="button"
-                      onPointerDown={() => startLibraryBpmRepeat(1)}
-                      onPointerUp={stopLibraryBpmRepeat}
-                      onPointerCancel={stopLibraryBpmRepeat}
-                      onPointerLeave={stopLibraryBpmRepeat}
-                      className="px-2 text-xs text-neutral-300 hover:bg-neutral-700/60 active:bg-neutral-700"
-                    >
-                      +
-                    </button>
+                {libraryFiltersOpen && (
+                  <div className="mt-3 rounded border border-neutral-800 bg-neutral-900/40 p-2.5">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-xs text-neutral-400">Sort</span>
+                      <button
+                        type="button"
+                        onClick={cycleLibrarySort}
+                        className="px-2 py-0.5 rounded border border-neutral-700 text-xs text-neutral-300 hover:bg-neutral-800/50"
+                      >
+                        {getLibrarySortLabel(librarySort)}
+                      </button>
+                      <span className="text-xs text-neutral-400">Time sig</span>
+                      <select
+                        value={libraryTimeSigFilter}
+                        onChange={(e) => setLibraryTimeSigFilter(e.target.value)}
+                        className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs"
+                      >
+                        <option value="all">All</option>
+                        {allTimeSigCategories.map((ts) => (
+                          <option key={`arr-ts-${ts}`} value={ts}>
+                            {ts}
+                          </option>
+                        ))}
+                      </select>
+                      <span className="text-xs text-neutral-400">BPM</span>
+                      <div className="flex items-stretch overflow-hidden rounded border border-neutral-700 bg-neutral-800">
+                        <button
+                          type="button"
+                          onPointerDown={() => startLibraryBpmRepeat(-1)}
+                          onPointerUp={stopLibraryBpmRepeat}
+                          onPointerCancel={stopLibraryBpmRepeat}
+                          onPointerLeave={stopLibraryBpmRepeat}
+                          className="px-2 text-xs text-neutral-300 hover:bg-neutral-700/60 active:bg-neutral-700"
+                        >
+                          −
+                        </button>
+                        <button
+                          type="button"
+                          onClick={cycleLibraryBpmFilterMode}
+                          className="min-w-[64px] border-l border-r border-neutral-700 px-2 py-1 text-xs text-white hover:bg-neutral-700/60"
+                          title="Cycle BPM filter mode"
+                        >
+                          {getBpmFilterLabel()}
+                        </button>
+                        <button
+                          type="button"
+                          onPointerDown={() => startLibraryBpmRepeat(1)}
+                          onPointerUp={stopLibraryBpmRepeat}
+                          onPointerCancel={stopLibraryBpmRepeat}
+                          onPointerLeave={stopLibraryBpmRepeat}
+                          className="px-2 text-xs text-neutral-300 hover:bg-neutral-700/60 active:bg-neutral-700"
+                        >
+                          +
+                        </button>
+                      </div>
+                      {arrangementSourceTab === "public" && (
+                        <button
+                          type="button"
+                          onClick={refreshPublicLibrary}
+                          className="px-2 py-0.5 rounded border border-neutral-700 text-xs text-neutral-300 hover:bg-neutral-800/50"
+                        >
+                          Refresh
+                        </button>
+                      )}
+                    </div>
                   </div>
-                  {arrangementSourceTab === "public" && (
-                    <button
-                      type="button"
-                      onClick={refreshPublicLibrary}
-                      className="px-2 py-0.5 rounded border border-neutral-700 text-xs text-neutral-300 hover:bg-neutral-800/50"
-                    >
-                      Refresh
-                    </button>
-                  )}
-                </div>
+                )}
                 {publicLibraryError && (
                   <div className="mt-3 rounded border border-amber-700/70 bg-amber-950/30 px-2 py-1 text-xs text-amber-100 flex items-center justify-between gap-2">
                     <span>{publicLibraryError}</span>
@@ -6852,8 +6938,28 @@ useEffect(() => {
                     {arrangementSourceBeats.map((beat) => {
                       const beatBpm = getBeatBpm(beat);
                       const sourceLabel = arrangementSourceTab === "public" ? "public" : "local";
+                      const isLoadedTrackedBeat =
+                        arrangementSourceTab === "local" &&
+                        String(loadedLocalBeatId || "") === String(beat.id) &&
+                        !isLoadedLocalBeatNameChanged;
                       return (
-                        <div key={`arr-src-${sourceLabel}-${beat.id}`} className="rounded border border-neutral-800 bg-neutral-900/40 px-2.5 py-2">
+                        <div
+                          key={`arr-src-${sourceLabel}-${beat.id}`}
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => loadBeatIntoEditor(arrangementSourceTab, beat)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              loadBeatIntoEditor(arrangementSourceTab, beat);
+                            }
+                          }}
+                          className={`rounded border px-2.5 py-2 cursor-pointer ${
+                            isLoadedTrackedBeat
+                              ? "border-cyan-500/80 bg-cyan-900/20 shadow-[0_0_0_1px_rgba(6,182,212,0.35)]"
+                              : "border-neutral-800 bg-neutral-900/40 hover:bg-neutral-800/60"
+                          }`}
+                        >
                           <div className="flex items-center justify-between gap-2">
                             <div className="min-w-0">
                               <div className="text-sm text-white truncate">{beat.name || "Untitled Beat"}</div>
@@ -6869,27 +6975,10 @@ useEffect(() => {
                           <div className="flex items-center gap-1.5">
                             <button
                               type="button"
-                              onClick={() => {
-                                applyImportedBeatPayload(
-                                  beat.payload,
-                                  `${arrangementSourceTab}:${beat.id}:${beat.createdAt || ""}`
-                                );
-                                if (arrangementSourceTab === "local") {
-                                  setLoadedLocalBeatId(beat.id);
-                                  setBeatNameDraft(String(beat.name || ""));
-                                  setBeatCategoryDraft(String(beat.category || "Groove"));
-                                  setBeatStyleDraft(String(beat.style || "all"));
-                                } else {
-                                  setLoadedLocalBeatId(null);
-                                }
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                arrangementAddBeat(arrangementSourceTab, beat.id);
                               }}
-                              className="px-2 py-1 rounded border border-neutral-700 text-xs text-neutral-200 hover:bg-neutral-800/60"
-                            >
-                              Load
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => arrangementAddBeat(arrangementSourceTab, beat.id)}
                               className="px-2 py-1 rounded border border-neutral-700 text-xs text-white bg-neutral-800 hover:bg-neutral-700/60"
                             >
                               Add
@@ -6897,11 +6986,12 @@ useEffect(() => {
                             {arrangementSourceTab === "local" && (
                               <button
                                 type="button"
-                                onClick={() =>
+                                onClick={(e) => {
+                                  e.stopPropagation();
                                   setLocalBeatsWithUndo((prev) =>
                                     prev.filter((b) => String(b.id) !== String(beat.id))
                                   )
-                                }
+                                }}
                                 className="px-2 py-1 rounded border border-red-900 text-xs text-red-200 hover:bg-red-900/30"
                                 aria-label="Delete beat"
                                 title="Delete beat"
@@ -6946,61 +7036,36 @@ useEffect(() => {
                       className={`px-2 py-1 rounded border text-xs ${
                         arrangementPlaybackEnabled && playback.isPlaying
                           ? "border-neutral-600 text-white bg-neutral-800"
+                          : normalizedArrangementSelection
+                            ? "border-emerald-500/70 text-emerald-100 bg-emerald-900/20 hover:bg-emerald-900/30"
                           : arrangementPlayableEntries.length > 0
                             ? "border-neutral-700 text-white bg-neutral-800 hover:bg-neutral-700/60"
                             : "border-neutral-800 text-neutral-500 bg-neutral-900/60 cursor-not-allowed"
                       }`}
                     >
-                      {arrangementPlaybackEnabled && playback.isPlaying ? "Stop" : "Play arrangement"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setArrangementSelection(null);
-                        setArrangementSelectionAnchor(null);
-                      }}
-                      className="px-2 py-1 rounded border border-neutral-800 text-xs text-neutral-400 hover:bg-neutral-800/50"
-                    >
-                      Clear selection
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setArrangementItemsWithUndo([])}
-                      className="px-2 py-1 rounded border border-neutral-800 text-xs text-neutral-400 hover:bg-neutral-800/50"
-                    >
-                      Clear
+                      {arrangementPlaybackEnabled && playback.isPlaying
+                        ? "Stop"
+                        : normalizedArrangementSelection
+                          ? "Play loop selection"
+                          : "Play arrangement"}
                     </button>
                   </div>
-                </div>
-                <div className="mt-3 flex flex-wrap items-center gap-2">
-                  <input
-                    type="text"
-                    value={arrangementNameDraft}
-                    onChange={(e) => setArrangementNameDraft(e.target.value)}
-                    onFocus={(e) => e.target.select()}
-                    placeholder="Arrangement name"
-                    className="min-w-[180px] flex-1 bg-neutral-900 border border-neutral-700 rounded px-2 py-1 text-sm text-white"
-                  />
-                  <button
-                    type="button"
-                    onClick={saveArrangementSnapshot}
-                    disabled={arrangementItems.length < 1}
-                    className={`px-2.5 py-1 rounded border text-sm ${
-                      arrangementItems.length > 0
-                        ? "border-neutral-700 text-white bg-neutral-800 hover:bg-neutral-700/60"
-                        : "border-neutral-800 text-neutral-500 bg-neutral-900/60 cursor-not-allowed"
-                    }`}
-                    title="Save current song arrangement"
-                  >
-                    Save
-                  </button>
                 </div>
                 {savedArrangements.length > 0 && (
                   <div className="mt-2 space-y-1.5">
                     <div className="flex items-center gap-2">
                       <select
-                        value={selectedSavedArrangementEntry?.id || ""}
-                        onChange={(e) => setLoadedArrangementId(e.target.value || null)}
+                        value={loadedArrangementId || ""}
+                        onChange={(e) => {
+                          const nextId = e.target.value || "";
+                          const nextEntry = savedArrangements.find((entry) => entry.id === nextId) || null;
+                          if (!nextEntry) {
+                            setLoadedArrangementId(null);
+                            setArrangementSaveAsOpen(true);
+                            return;
+                          }
+                          loadSavedArrangement(nextEntry);
+                        }}
                         className="min-w-0 flex-1 bg-neutral-900 border border-neutral-700 rounded px-2 py-1 text-xs text-white"
                       >
                         {savedArrangements.map((entry) => (
@@ -7011,18 +7076,40 @@ useEffect(() => {
                       </select>
                       <button
                         type="button"
-                        onClick={() => {
-                          if (!selectedSavedArrangementEntry) return;
-                          loadSavedArrangement(selectedSavedArrangementEntry);
-                        }}
-                        disabled={!selectedSavedArrangementEntry}
+                        onClick={() => saveArrangementSnapshot({ mode: "update" })}
+                        disabled={
+                          !selectedSavedArrangementEntry ||
+                          arrangementItems.length < 1 ||
+                          !arrangementHasPendingUpdate
+                        }
                         className={`px-2 py-1 rounded border text-[11px] ${
-                          selectedSavedArrangementEntry
+                          selectedSavedArrangementEntry &&
+                          arrangementItems.length > 0 &&
+                          arrangementHasPendingUpdate
                             ? "border-neutral-700 text-neutral-200 hover:bg-neutral-800/60"
                             : "border-neutral-800 text-neutral-500 bg-neutral-900/60 cursor-not-allowed"
                         }`}
+                        title="Update selected arrangement"
                       >
-                        Load
+                        Update
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setArrangementNameDraft(selectedSavedArrangementEntry?.name || arrangementNameDraft);
+                          setArrangementSaveAsOpen((v) => !v);
+                        }}
+                        disabled={arrangementItems.length < 1}
+                        className={`px-2 py-1 rounded border text-[11px] ${
+                          arrangementItems.length > 0
+                            ? arrangementSaveAsOpen
+                              ? "border-neutral-600 text-white bg-neutral-800"
+                              : "border-neutral-700 text-neutral-200 hover:bg-neutral-800/60"
+                            : "border-neutral-800 text-neutral-500 bg-neutral-900/60 cursor-not-allowed"
+                        }`}
+                        title="Save as new arrangement"
+                      >
+                        Save as
                       </button>
                       <button
                         type="button"
@@ -7042,14 +7129,34 @@ useEffect(() => {
                         ×
                       </button>
                     </div>
-                    <div className="text-[10px] text-neutral-500">
-                      {selectedSavedArrangementEntry?.updatedAt
-                        ? `Updated ${new Date(selectedSavedArrangementEntry.updatedAt).toLocaleDateString()}`
-                        : ""}
-                    </div>
                   </div>
                 )}
-                <div className="mt-2 text-[11px] text-neutral-500">Click rows to build a contiguous loop block. Click selected rows again to shrink/clear. Play loops selected range.</div>
+                {arrangementSaveAsOpen && (
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <input
+                      type="text"
+                      value={arrangementNameDraft}
+                      onChange={(e) => setArrangementNameDraft(e.target.value)}
+                      onFocus={(e) => e.target.select()}
+                      placeholder="Arrangement name"
+                      autoFocus
+                      className="min-w-[180px] flex-1 bg-neutral-900 border border-neutral-700 rounded px-2 py-1 text-sm text-white"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => saveArrangementSnapshot({ mode: "saveAs" })}
+                      disabled={arrangementItems.length < 1}
+                      className={`px-2.5 py-1 rounded border text-sm ${
+                        arrangementItems.length > 0
+                          ? "border-neutral-700 text-white bg-neutral-800 hover:bg-neutral-700/60"
+                          : "border-neutral-800 text-neutral-500 bg-neutral-900/60 cursor-not-allowed"
+                      }`}
+                      title="Save as new arrangement"
+                    >
+                      Save
+                    </button>
+                  </div>
+                )}
                 <div ref={arrangementListRef} className="mt-3 max-h-[52vh] overflow-auto pr-1">
                   <DndContext
                     sensors={arrangementOrderSensors}
@@ -7075,6 +7182,7 @@ useEffect(() => {
                             )}
                             onSelect={() => handleArrangementRowSelect(idx)}
                             onPlay={() => startArrangementPlayback(idx)}
+                            onLoad={() => loadBeatIntoEditor(row.source, row.beat)}
                             onRepeatDown={() => arrangementNudgeRepeats(row.id, -1)}
                             onRepeatUp={() => arrangementNudgeRepeats(row.id, 1)}
                             onRemove={() => arrangementRemoveRow(row.id)}
@@ -7088,6 +7196,19 @@ useEffect(() => {
                       No sections yet. Add beats from the source list to build your song form.
                     </div>
                   )}
+                </div>
+                <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-neutral-300">
+                  <span className="rounded border border-neutral-700 px-2 py-1">{`Total bars: ${arrangementTotals.totalBars}`}</span>
+                  <span className="rounded border border-neutral-700 px-2 py-1">
+                    {`Est. length: ${Math.floor(Math.max(0, Math.round(arrangementTotals.totalSeconds)) / 60)}:${String(
+                      Math.max(0, Math.round(arrangementTotals.totalSeconds)) % 60
+                    ).padStart(2, "0")}`}
+                  </span>
+                  {normalizedArrangementSelection ? (
+                    <span className="rounded border border-emerald-700/70 px-2 py-1 text-emerald-200">
+                      {`Loop selection: ${normalizedArrangementSelection.start + 1}-${normalizedArrangementSelection.end + 1}`}
+                    </span>
+                  ) : null}
                 </div>
               </div>
               )}
@@ -8490,6 +8611,7 @@ function SortableArrangementRow({
   isSelected,
   onSelect,
   onPlay,
+  onLoad,
   onRepeatDown,
   onRepeatUp,
   onRemove,
@@ -8554,6 +8676,22 @@ function SortableArrangementRow({
             title="Play section in editor"
           >
             Play
+          </button>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onLoad?.();
+            }}
+            disabled={!row.beat?.payload}
+            className={`px-2 py-1 rounded border text-xs ${
+              row.beat?.payload
+                ? "border-neutral-700 text-neutral-100 hover:bg-neutral-700/60"
+                : "border-neutral-800 text-neutral-500 cursor-not-allowed"
+            }`}
+            title="Load beat in editor"
+          >
+            Load
           </button>
           <div className="flex items-stretch overflow-hidden rounded border border-neutral-700 bg-neutral-800">
             <button

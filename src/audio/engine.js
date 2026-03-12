@@ -296,6 +296,11 @@ function trigger(instId, time, gainValue = 1) {
     return scheduleAheadTimeSec;
   }
 
+  function setCurrentStep(stepIndex = 0) {
+    const maxStep = Math.max(0, transportColumns - 1);
+    currentStep = Math.max(0, Math.min(maxStep, Math.floor(Number(stepIndex) || 0)));
+  }
+
   return {
     ensureContext,
     getContext,
@@ -306,6 +311,7 @@ function trigger(instId, time, gainValue = 1) {
     setOnStep,
     getCurrentTime,
     getScheduleAheadTimeSec,
+    setCurrentStep,
     play,
     stop,
   };

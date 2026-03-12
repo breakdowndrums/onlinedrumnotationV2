@@ -112,6 +112,10 @@ export function usePlayback({ instruments, grid, columns, bpm, resolution, stepQ
     pendingPlayStartTsRef.current = null;
     firstStepSeenForPlayRef.current = false;
   }, [engine]);
+  const setTransportStep = useCallback((stepIndex = 0) => {
+    engine.setCurrentStep(stepIndex);
+    setPlayhead(Math.max(0, Math.floor(Number(stepIndex) || 0)));
+  }, [engine]);
   const getAudioTime = useCallback(() => engine.getCurrentTime(), [engine]);
   const getScheduleAheadTimeSec = useCallback(() => engine.getScheduleAheadTimeSec(), [engine]);
 
@@ -126,6 +130,7 @@ export function usePlayback({ instruments, grid, columns, bpm, resolution, stepQ
     stop,
     initSamples,
     setPlayhead,
+    setTransportStep,
     getAudioTime,
     getScheduleAheadTimeSec,
   };
