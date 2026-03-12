@@ -315,11 +315,12 @@ const EMBED_EXAMPLES = {
 };
 
 function getQuarterBeatsPerBar(ts) {
-  return Math.max(1, Math.round((ts.n * 4) / ts.d));
+  return Math.max(1, Math.round(Number(ts?.n) || 1));
 }
 
-function getBaseSubdivPerQuarter(resolution) {
-  return Math.max(1, Math.round(resolution / 4));
+function getBaseSubdivPerQuarter(resolution, ts = { d: 4 }) {
+  const beatValue = Math.max(1, Number(ts?.d) || 4);
+  return Math.max(1, Math.round(resolution / beatValue));
 }
 
 function buildTupletOverrides(count) {
@@ -352,7 +353,7 @@ function buildNotationStateFromPayload(payload) {
     d: Math.max(1, Number(rawTs.d) || 4),
   };
   const quarterCount = getQuarterBeatsPerBar(timeSig);
-  const baseSubdiv = getBaseSubdivPerQuarter(resolution);
+  const baseSubdiv = getBaseSubdivPerQuarter(resolution, timeSig);
   const tupletsByBar = Array.from({ length: bars }, (_, barIdx) =>
     Array.from({ length: quarterCount }, (_, qIdx) => {
       const raw = payload.tupletsByBar?.[barIdx]?.[qIdx];
@@ -414,7 +415,7 @@ function getBarIndexForStepFromPayload(payload, stepIndex) {
     d: Math.max(1, Number(rawTs.d) || 4),
   };
   const quarterCount = getQuarterBeatsPerBar(timeSig);
-  const baseSubdiv = getBaseSubdivPerQuarter(resolution);
+  const baseSubdiv = getBaseSubdivPerQuarter(resolution, timeSig);
   const tupletsByBar = Array.from({ length: bars }, (_, barIdx) =>
     Array.from({ length: quarterCount }, (_, qIdx) => {
       const raw = payload.tupletsByBar?.[barIdx]?.[qIdx];
@@ -1876,6 +1877,7 @@ useEffect(() => {
             scoreTitle: printTitle.trim(),
             composer: printComposer.trim(),
             watermark: printWatermarkEnabled,
+            includeSticking: showNotationSticking,
           });
           setIsPrintDialogOpen(false);
         } catch (err) {
@@ -1894,6 +1896,7 @@ useEffect(() => {
           scoreTitle: printTitle.trim(),
           composer: printComposer.trim(),
           watermark: printWatermarkEnabled,
+          includeSticking: showNotationSticking,
         });
         setIsPrintDialogOpen(false);
       } catch (err) {
@@ -1906,7 +1909,7 @@ useEffect(() => {
   }, [isPrintDialogOpen, printTitle, printComposer, printWatermarkEnabled]);
 
   const quarterBeatsPerBar = getQuarterBeatsPerBar(timeSig);
-  const baseSubdivPerQuarter = getBaseSubdivPerQuarter(resolution);
+  const baseSubdivPerQuarter = getBaseSubdivPerQuarter(resolution, timeSig);
   const normalizedTupletOverridesByBar = React.useMemo(() => {
     return Array.from({ length: bars }, (_, barIdx) =>
       Array.from({ length: quarterBeatsPerBar }, (_, qIdx) => {
@@ -2212,7 +2215,7 @@ useEffect(() => {
     tupletBaselineGridRef.current = null;
     tupletBaselineSubsByBarRef.current = null;
     const oldSubsByBar = quarterSubdivisionsByBar;
-    const nextBase = getBaseSubdivPerQuarter(newRes);
+    const nextBase = getBaseSubdivPerQuarter(newRes, timeSig);
     // Keep explicit tuplet values stable across resolution changes.
     // Example: triplet (3) should remain triplet when switching 8th <-> 16th.
     const nextOverridesByBar = normalizedTupletOverridesByBar.map((row) => row.map((v) => v));
@@ -2237,7 +2240,7 @@ useEffect(() => {
         clampTupletValue(normalizedTupletOverridesByBar[barIdx]?.[idx]) ?? null
       )
     );
-    const nextBase = getBaseSubdivPerQuarter(resolution);
+    const nextBase = getBaseSubdivPerQuarter(resolution, newTS);
     const nextSubsByBar = nextOverridesByBar.map((row) =>
       resolveQuarterSubdivisions(row, nextBase)
     );
@@ -2246,6 +2249,19 @@ useEffect(() => {
     }
     setTupletOverridesByBar(nextOverridesByBar);
     setTimeSig(newTS);
+  };
+  const stepTimeSigNumerator = (delta) => {
+    const nextN = Math.max(2, Math.min(15, Number(timeSig.n || 4) + delta));
+    if (nextN === timeSig.n) return;
+    handleTimeSigChange({ n: nextN, d: timeSig.d === 8 ? 8 : 4 });
+  };
+  const stepTimeSigDenominator = (delta) => {
+    const order = [4, 8];
+    const idx = order.indexOf(timeSig.d);
+    const safeIdx = idx < 0 ? 0 : idx;
+    const nextD = order[(safeIdx + delta + order.length) % order.length];
+    if (nextD === timeSig.d) return;
+    handleTimeSigChange({ n: Math.max(2, Math.min(15, Number(timeSig.n) || 4)), d: nextD });
   };
 
   const cycleTupletAt = React.useCallback(
@@ -3603,6 +3619,25 @@ useEffect(() => {
     }
     redoGrid();
   }, [isLibraryHistoryActive, redoLocalBeatHistory, redoGrid]);
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      const key = String(e.key || "").toLowerCase();
+      const hasHistoryModifier = e.metaKey || e.ctrlKey;
+      if (key !== "z" || !hasHistoryModifier) return;
+      const el = e.target;
+      const tag = (el?.tagName || "").toLowerCase();
+      const isTyping = tag === "input" || tag === "textarea" || el?.isContentEditable;
+      if (isTyping) return;
+      e.preventDefault();
+      if (e.shiftKey) {
+        handleTopRedo();
+        return;
+      }
+      handleTopUndo();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [handleTopUndo, handleTopRedo]);
 
   useEffect(() => {
     setPresetNameInlineDraft(selectedSavedPreset ? selectedSavedPreset.label : selectedPresetLabel);
@@ -3955,6 +3990,7 @@ useEffect(() => {
   const stepStartQuarterTimes = React.useMemo(() => {
     const out = Array(columns).fill(0);
     const byBar = Array.isArray(quarterSubdivisionsByBar) ? quarterSubdivisionsByBar : [];
+    const beatUnitQuarterLength = 4 / Math.max(1, Number(timeSig?.d) || 4);
     for (let b = 0; b < byBar.length; b++) {
       const barOffset = barStepOffsets?.[b] ?? 0;
       const row = Array.isArray(byBar[b]) ? byBar[b] : [];
@@ -3962,7 +3998,7 @@ useEffect(() => {
       let t = 0;
       for (let q = 0; q < row.length; q++) {
         const subdiv = Math.max(1, Number(row[q]) || 1);
-        const dur = 1 / subdiv;
+        const dur = beatUnitQuarterLength / subdiv;
         for (let s = 0; s < subdiv; s++) {
           const idx = barOffset + localStep;
           if (idx >= 0 && idx < columns) out[idx] = t;
@@ -3972,7 +4008,7 @@ useEffect(() => {
       }
     }
     return out;
-  }, [quarterSubdivisionsByBar, barStepOffsets, columns]);
+  }, [quarterSubdivisionsByBar, barStepOffsets, columns, timeSig]);
   const autoStickingAssignmentsByStep = React.useMemo(() => {
     const handIds = instruments.map((inst) => inst.id).filter((id) => !FOOT_INSTRUMENTS.has(id));
     const lead = stickingLeadHand === "left" ? "L" : "R";
@@ -4233,14 +4269,15 @@ useEffect(() => {
 
   const stepQuarterDurations = React.useMemo(() => {
     const out = [];
+    const beatUnitQuarterLength = 4 / Math.max(1, Number(timeSig?.d) || 4);
     quarterSubdivisionsByBar.forEach((row) => {
       row.forEach((subdiv) => {
         const s = Math.max(1, Number(subdiv) || 1);
-        for (let i = 0; i < s; i++) out.push(1 / s);
+        for (let i = 0; i < s; i++) out.push(beatUnitQuarterLength / s);
       });
     });
     return out;
-  }, [quarterSubdivisionsByBar]);
+  }, [quarterSubdivisionsByBar, timeSig]);
 
 
   const playback = usePlayback({
@@ -4314,7 +4351,7 @@ useEffect(() => {
       };
       const beatBars = Math.max(1, Math.min(64, Number(payload.bars) || 1));
       const quarterCount = getQuarterBeatsPerBar(beatTimeSig);
-      const baseSubdiv = getBaseSubdivPerQuarter(beatResolution);
+      const baseSubdiv = getBaseSubdivPerQuarter(beatResolution, beatTimeSig);
       const tupletsByBar = Array.from({ length: beatBars }, (_, barIdx) =>
         Array.from({ length: quarterCount }, (_, qIdx) => {
           const raw = payload.tupletsByBar?.[barIdx]?.[qIdx];
@@ -4613,13 +4650,14 @@ useEffect(() => {
         scoreTitle: printTitle.trim(),
         composer: printComposer.trim(),
         watermark: printWatermarkEnabled,
+        includeSticking: showNotationSticking,
       });
       setIsPrintDialogOpen(false);
     } catch (e) {
       console.error(e);
       alert(e?.message || "Failed to export PDF");
     }
-  }, [printTitle, printComposer, printWatermarkEnabled]);
+  }, [printTitle, printComposer, printWatermarkEnabled, showNotationSticking]);
   const bakeLoopPreview = React.useCallback(() => {
     if (!loopRule) return;
     setBaseGridWithUndo((prev) => bakeLoopInto(prev, loopRule, loopRepeats, loopOverlapMode));
@@ -5612,44 +5650,50 @@ useEffect(() => {
 
               <div className="flex items-center gap-2">
                 <span className="text-sm text-neutral-300 whitespace-nowrap">Time</span>
-                <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const order = [
-                        { n: 4, d: 4 },
-                        { n: 3, d: 4 },
-                        { n: 6, d: 8 },
-                      ];
-                      const idx = order.findIndex((x) => x.n === timeSig.n && x.d === timeSig.d);
-                      const next = order[(idx - 1 + order.length) % order.length];
-                      handleTimeSigChange(next);
-                    }}
-                    className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                    aria-label="Previous time signature"
-                  >
-                    −
-                  </button>
-                  <div className="min-w-[64px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700">
-                    {timeSig.n}/{timeSig.d}
+                <div className="flex items-center gap-1.5">
+                  <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
+                    <button
+                      type="button"
+                      onClick={() => stepTimeSigNumerator(-1)}
+                      className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                      aria-label="Decrease time signature numerator"
+                    >
+                      −
+                    </button>
+                    <div className="min-w-[36px] px-2.5 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700 tabular-nums">
+                      {Math.max(2, Math.min(15, Number(timeSig.n) || 4))}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => stepTimeSigNumerator(1)}
+                      className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                      aria-label="Increase time signature numerator"
+                    >
+                      +
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const order = [
-                        { n: 4, d: 4 },
-                        { n: 3, d: 4 },
-                        { n: 6, d: 8 },
-                      ];
-                      const idx = order.findIndex((x) => x.n === timeSig.n && x.d === timeSig.d);
-                      const next = order[(idx + 1) % order.length];
-                      handleTimeSigChange(next);
-                    }}
-                    className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                    aria-label="Next time signature"
-                  >
-                    +
-                  </button>
+                  <div className="text-sm text-neutral-400 select-none">/</div>
+                  <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
+                    <button
+                      type="button"
+                      onClick={() => stepTimeSigDenominator(-1)}
+                      className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                      aria-label="Previous time signature denominator"
+                    >
+                      −
+                    </button>
+                    <div className="min-w-[36px] px-2.5 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700 tabular-nums">
+                      {timeSig.d === 8 ? 8 : 4}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => stepTimeSigDenominator(1)}
+                      className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                      aria-label="Next time signature denominator"
+                    >
+                      +
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -5677,6 +5721,32 @@ useEffect(() => {
               title="When enabled, clicking active hand-hit cells edits R/L sticking instead of toggling notes"
             >
               Sticking edit mode
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowNotationSticking((v) => !v)}
+              className={`touch-none select-none px-3 py-[5px] rounded border text-sm ${
+                showNotationSticking
+                  ? "bg-neutral-800 border-neutral-700 text-white"
+                  : "bg-neutral-900 border-neutral-800 text-neutral-600"
+              }`}
+              title="Show inferred sticking (R/L) beneath notes in notation"
+            >
+              Show sticking
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                setNotationStickingView((v) => (v === "stacked" ? "split-rows" : "stacked"))
+              }
+              className={`touch-none select-none px-3 py-[5px] rounded border text-sm ${
+                showNotationSticking
+                  ? "bg-neutral-800 border-neutral-700 text-white"
+                  : "bg-neutral-900 border-neutral-800 text-neutral-600"
+              }`}
+              title="Change sticking display"
+            >
+              {notationStickingView === "stacked" ? "Stacked" : "Split rows"}
             </button>
 
             <div className="flex items-center gap-2">
@@ -5911,32 +5981,6 @@ useEffect(() => {
               title="Render beams horizontally (no tilt)"
             >
               Flat beams
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowNotationSticking((v) => !v)}
-              className={`touch-none select-none px-3 py-[5px] rounded border text-sm ${
-                showNotationSticking
-                  ? "bg-neutral-800 border-neutral-700 text-white"
-                  : "bg-neutral-900 border-neutral-800 text-neutral-600"
-              }`}
-              title="Show inferred sticking (R/L) beneath notes in notation"
-            >
-              Show sticking
-            </button>
-            <button
-              type="button"
-              onClick={() =>
-                setNotationStickingView((v) => (v === "stacked" ? "split-rows" : "stacked"))
-              }
-              className={`touch-none select-none px-3 py-[5px] rounded border text-sm ${
-                showNotationSticking
-                  ? "bg-neutral-800 border-neutral-700 text-white"
-                  : "bg-neutral-900 border-neutral-800 text-neutral-600"
-              }`}
-              title="Change sticking display"
-            >
-              {notationStickingView === "stacked" ? "Stacked" : "Split rows"}
             </button>
           </div>
         )}
@@ -9620,6 +9664,7 @@ function Notation({
 
   useEffect(() => {
   const Flow = Vex.Flow;
+    let ctx;
     const activeBarSet = new Set(
       (Array.isArray(activeBarIndices) ? activeBarIndices : [])
         .map((v) => Number(v))
@@ -9791,7 +9836,8 @@ function Notation({
       note.__dgStickingSpec = specList;
       note.__dgStickingStep = stepIdx;
     };
-    const drawStickingSpecsForVoice = (voice) => {
+    const drawStickingSpecsForVoice = (voice, svgRoot) => {
+      if (!svgRoot) return;
       const tickables = (voice && typeof voice.getTickables === "function" && voice.getTickables()) || [];
       tickables.forEach((note) => {
         const specList = note?.__dgStickingSpec;
@@ -9812,12 +9858,18 @@ function Notation({
           if (!txt) return;
           const lane = String(spec?.lane || "stackSingle");
           const y = (lane === "bottom" ? yBottom : yTop) + 8;
-          ctx.save();
-          ctx.setFont("Arial", 10, "normal");
-          const w = ctx.measureText(txt)?.width || 0;
           const xNudge = txt === "L" && lane === "bottom" ? -1.00 : 0;
-          ctx.fillText(txt, x - w / 2 + xNudge, y);
-          ctx.restore();
+          const textEl = document.createElementNS("http://www.w3.org/2000/svg", "text");
+          textEl.setAttribute("x", String(x + xNudge));
+          textEl.setAttribute("y", String(y));
+          textEl.setAttribute("fill", "white");
+          textEl.setAttribute("font-family", "Arial");
+          textEl.setAttribute("font-size", "12");
+          textEl.setAttribute("font-weight", "400");
+          textEl.setAttribute("text-anchor", "middle");
+          textEl.setAttribute("class", "dg-sticking");
+          textEl.textContent = txt;
+          svgRoot.appendChild(textEl);
         });
       });
     };
@@ -9869,8 +9921,9 @@ function Notation({
     if (!ref.current) return;
     ref.current.innerHTML = "";
 
-    const quarterCount = Math.max(1, Math.round((timeSig.n * 4) / timeSig.d));
-    const baseSubdivPerQuarter = Math.max(1, Math.round(resolution / 4));
+    const quarterCount = Math.max(1, Number(timeSig?.n) || 1);
+    const baseSubdivPerQuarter = Math.max(1, Math.round(resolution / Math.max(1, Number(timeSig?.d) || 4)));
+    const beatValue = Math.max(1, Number(timeSig?.d) || 4);
     const resolvedQuarterSubsByBar =
       Array.isArray(quarterSubdivisionsByBar) && quarterSubdivisionsByBar.length === bars
         ? quarterSubdivisionsByBar.map((row) =>
@@ -9904,18 +9957,17 @@ function Notation({
         while (base * 2 <= s) base *= 2;
         return Math.max(1, Math.min(8, base));
       };
-      const durationFromBase = (subdiv) => {
-        const s = Math.max(1, Number(subdiv) || 1);
-        if (s <= 1) return "q";
-        if (s <= 2) return "8";
-        if (s <= 4) return "16";
-        return "32";
+      const durationFromBase = (displayBase) => {
+        const base = Math.max(1, Number(displayBase) || 1);
+        const denom = Math.max(1, beatValue * base);
+        if (denom === 4) return "q";
+        return String(denom);
       };
       const durationFromLen = (lenSteps, baseStepsPerQuarter) => {
         const base = Math.max(1, Number(baseStepsPerQuarter) || 1);
         const len = Math.max(1, Math.min(base, Number(lenSteps) || 1));
         const ratio = base / len;
-        const denom = 4 * ratio;
+        const denom = beatValue * ratio;
         if (denom === 4) return "q";
         return String(denom);
       };
@@ -9968,7 +10020,8 @@ function Notation({
 
       const renderer = new Renderer(ref.current, Renderer.Backends.SVG);
       renderer.resize(width, height);
-      const ctx = renderer.getContext();
+      ctx = renderer.getContext();
+      const svgRoot = ref.current.querySelector("svg");
 
       const staves = [];
       const voices = [];
@@ -10174,7 +10227,7 @@ function Notation({
         const formatter = new Formatter().joinVoices([voices[b]]);
         formatter.formatToStave([voices[b]], staves[b]);
         voices[b].draw(ctx, staves[b]);
-        drawStickingSpecsForVoice(voices[b]);
+        drawStickingSpecsForVoice(voices[b], svgRoot);
         (beamsByBar[b] || []).forEach((beam) => {
           try {
             const beamNotes = (typeof beam.getNotes === "function" ? beam.getNotes() : beam.notes) || [];
@@ -10316,7 +10369,8 @@ function Notation({
 
     const renderer = new Renderer(ref.current, Renderer.Backends.SVG);
     renderer.resize(width, height);
-    const ctx = renderer.getContext();
+    ctx = renderer.getContext();
+    const svgRoot = ref.current.querySelector("svg");
 
     const dur = notationResolution === 4 ? "q" : notationResolution === 8 ? "8" : notationResolution === 16 ? "16" : "32";
 
@@ -10726,7 +10780,7 @@ for (let i = 0; i < notes.length; i++) {
       const formatter = new Formatter().joinVoices([voices[b]]);
       formatter.formatToStave([voices[b]], staves[b]);
       voices[b].draw(ctx, staves[b]);
-      drawStickingSpecsForVoice(voices[b]);
+      drawStickingSpecsForVoice(voices[b], svgRoot);
     }
 
     // Draw beams last for clarity
