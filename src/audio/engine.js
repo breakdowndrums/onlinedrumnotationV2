@@ -17,13 +17,21 @@ export function makeAudioEngine() {
   let openHats = [];
   let stopAtTime = null;
   let onEnded = null;
+  let playMode = "grid";
+  let compiledEvents = [];
+  let compiledCursor = 0;
+  let compiledLoop = false;
+  let compiledDurationSec = 0;
+  let compiledStartOffsetSec = 0;
+  let compiledLoopIteration = 0;
+  let playStartTime = 0;
 
   // Lookahead
   const lookaheadMs = 25;
   const scheduleAheadTimeSec = 0.12;
 
   let buffers = {}; // instId -> AudioBuffer
-  let onStep = null; // (stepIndex) => void
+  let onStep = null; // (stepIndex, meta?) => void
 
   function ensureContext() {
     if (audioCtx) return;
@@ -232,7 +240,38 @@ function trigger(instId, time, gainValue = 1) {
         trigger(inst.id, time, 0.9);
       }
     }
-    if (onStep) onStep(stepIndex);
+    if (onStep) onStep(stepIndex, null);
+  }
+
+  function scheduleCompiledEvent(event, time) {
+    if (!event) return;
+    const hits = Array.isArray(event.hits) ? event.hits : [];
+    for (const hit of hits) {
+      const instId = hit?.instId;
+      const state = hit?.state ?? "off";
+      if (!instId || state === "off") continue;
+      if (state === "ghost") {
+        if (instId === "snare" && buffers["snare_ghost"]) {
+          trigger("snare_ghost", time, 0.6);
+        } else if (instId === "hihat") {
+          chokeOpenHats(time);
+          trigger(instId, time, 0.3);
+        } else if (instId === "tom1" || instId === "tom2" || instId === "floorTom") {
+          trigger(instId, time, 0.15);
+        } else {
+          trigger(instId, time, 0.1);
+        }
+        continue;
+      }
+      if (instId === "hihat" || instId === "hihatFoot") chokeOpenHats(time);
+      if (instId === "hihatOpen") {
+        const h = triggerWithGain(instId, time, 0.9);
+        if (h) openHats.push(h);
+      } else {
+        trigger(instId, time, state === "accent" ? 1 : 0.9);
+      }
+    }
+    if (onStep) onStep(event.stepIndex ?? 0, event.meta || null);
   }
 
   function finishNaturally() {
@@ -250,22 +289,38 @@ function trigger(instId, time, gainValue = 1) {
   function scheduler(getGridSnapshot) {
     if (!audioCtx) return;
 
-    const { grid, instruments, columns } = getGridSnapshot();
-
     if (stopAtTime != null && audioCtx.currentTime >= stopAtTime) {
       finishNaturally();
       return;
     }
 
-    while (nextNoteTime < audioCtx.currentTime + scheduleAheadTimeSec) {
-      if (stopAtTime != null && nextNoteTime >= stopAtTime - 1e-6) {
-        break;
+    if (playMode === "compiled") {
+      while (compiledEvents.length > 0) {
+        if (compiledCursor >= compiledEvents.length) {
+          if (!compiledLoop) break;
+          compiledCursor = 0;
+          compiledLoopIteration += 1;
+        }
+        const event = compiledEvents[compiledCursor];
+        const eventTimeSec =
+          playStartTime + compiledLoopIteration * compiledDurationSec + (Number(event?.timeSec) || 0);
+        if (eventTimeSec >= audioCtx.currentTime + scheduleAheadTimeSec) break;
+        if (stopAtTime != null && eventTimeSec >= stopAtTime - 1e-6) break;
+        scheduleCompiledEvent(event, eventTimeSec);
+        compiledCursor += 1;
       }
-      scheduleStep(grid, instruments, currentStep, nextNoteTime);
+    } else {
+      const { grid, instruments, columns } = getGridSnapshot();
+      while (nextNoteTime < audioCtx.currentTime + scheduleAheadTimeSec) {
+        if (stopAtTime != null && nextNoteTime >= stopAtTime - 1e-6) {
+          break;
+        }
+        scheduleStep(grid, instruments, currentStep, nextNoteTime);
 
-      nextNoteTime += secondsForStep(currentStep);
-      currentStep += 1;
-      if (currentStep >= columns) currentStep = 0;
+        nextNoteTime += secondsForStep(currentStep);
+        currentStep += 1;
+        if (currentStep >= columns) currentStep = 0;
+      }
     }
 
     if (stopAtTime != null && audioCtx.currentTime >= stopAtTime) {
@@ -277,15 +332,52 @@ function trigger(instId, time, gainValue = 1) {
     await resumeIfNeeded();
     if (isPlaying) return;
 
+    playMode = "grid";
+    compiledEvents = [];
+    compiledCursor = 0;
+    compiledLoop = false;
+    compiledDurationSec = 0;
+    compiledStartOffsetSec = 0;
+    compiledLoopIteration = 0;
     const snap = getGridSnapshot();
     const maxStep = Math.max(0, (snap.columns ?? 1) - 1);
     transportColumns = Math.max(1, snap.columns ?? 1);
     currentStep = Math.max(0, Math.min(maxStep, startStep));
-    nextNoteTime = audioCtx.currentTime + 0.03;
+    playStartTime = audioCtx.currentTime + 0.03;
+    nextNoteTime = playStartTime;
     stopAtTime = null;
 
     isPlaying = true;
     timerId = window.setInterval(() => scheduler(getGridSnapshot), lookaheadMs);
+    return playStartTime;
+  }
+
+  async function playCompiled(events, { startAtSec = 0, totalDurationSec = 0, loop = false } = {}) {
+    await resumeIfNeeded();
+    if (isPlaying) return null;
+
+    playMode = "compiled";
+    compiledEvents = (Array.isArray(events) ? events : [])
+      .map((event) => ({
+        ...event,
+        timeSec: Math.max(0, Number(event?.timeSec) || 0),
+      }))
+      .sort((a, b) => (a.timeSec - b.timeSec) || ((a.stepIndex ?? 0) - (b.stepIndex ?? 0)));
+    compiledLoop = loop === true;
+    compiledDurationSec = Math.max(0, Number(totalDurationSec) || 0);
+    compiledStartOffsetSec = Math.max(0, Number(startAtSec) || 0);
+    compiledLoopIteration = 0;
+    playStartTime = audioCtx.currentTime + 0.03 - compiledStartOffsetSec;
+    compiledCursor = compiledEvents.findIndex((event) => event.timeSec >= compiledStartOffsetSec - 1e-6);
+    if (compiledCursor < 0) {
+      compiledCursor = compiledLoop ? 0 : compiledEvents.length;
+    }
+    nextNoteTime = 0;
+    stopAtTime = compiledLoop ? null : playStartTime + compiledDurationSec;
+
+    isPlaying = true;
+    timerId = window.setInterval(() => scheduler(() => ({ grid: {}, instruments: [], columns: 1 })), lookaheadMs);
+    return playStartTime;
   }
 
   function stop() {
@@ -302,6 +394,8 @@ function trigger(instId, time, gainValue = 1) {
     // Already-triggered sounds are allowed to ring out.
     currentStep = 0;
     nextNoteTime = 0;
+    playStartTime = 0;
+    compiledLoopIteration = 0;
     stopAtTime = null;
   }
 
@@ -359,6 +453,7 @@ function trigger(instId, time, gainValue = 1) {
     setCurrentStep,
     setStopAtTime,
     play,
+    playCompiled,
     stop,
     hardStop,
   };

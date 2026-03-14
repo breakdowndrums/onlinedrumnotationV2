@@ -1,5 +1,6 @@
 import { jsPDF } from "jspdf";
 import { svg2pdf } from "svg2pdf.js";
+import QRCode from "qrcode";
 
 /**
  * Vector PDF export (no rasterization).
@@ -13,12 +14,22 @@ export async function exportNotationPdf(containerEl, opts = {}) {
   const composer = (opts.composer || "").trim();
   const watermarkEnabled = opts.watermark !== false;
   const includeSticking = opts.includeSticking === true;
+  const qrText = String(opts.qrText || "").trim();
   const svgEls = Array.from(containerEl.querySelectorAll("svg"));
   if (svgEls.length === 0) throw new Error("No notation SVGs found to export");
 
   const pdf = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
   const pageW = pdf.internal.pageSize.getWidth();
   const pageH = pdf.internal.pageSize.getHeight();
+  const qrDataUrl = qrText ? await QRCode.toDataURL(qrText, {
+    margin: 0,
+    color: {
+      dark: "#000000",
+      light: "#FFFFFF",
+    },
+    width: 256,
+  }) : "";
+  const qrSize = 58;
 
   const pad = 36; // 0.5 inch
   const maxW = pageW - pad * 2;
@@ -107,6 +118,9 @@ export async function exportNotationPdf(containerEl, opts = {}) {
       pdf.setTextColor(180, 180, 180);
       pdf.text("onlinedrumnotation.com", pageW / 2, pageH - 14, { align: "center" });
       pdf.setTextColor(0, 0, 0);
+    }
+    if (qrDataUrl) {
+      pdf.addImage(qrDataUrl, "PNG", pad, pageH - pad - qrSize, qrSize, qrSize);
     }
 
     // svg2pdf renders into current page; specify x/y and scale
