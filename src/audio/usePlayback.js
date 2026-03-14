@@ -9,6 +9,7 @@ export function usePlayback({ instruments, grid, columns, bpm, resolution, stepQ
   const [isReady, setIsReady] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [playhead, setPlayhead] = useState(0);
+  const [stepMeta, setStepMeta] = useState(null);
   const [error, setError] = useState(null);
   const [startupLagMs, setStartupLagMs] = useState(0);
   const [slowStartDetected, setSlowStartDetected] = useState(false);
@@ -32,7 +33,7 @@ export function usePlayback({ instruments, grid, columns, bpm, resolution, stepQ
   }, [engine, bpm, resolution, columns, stepQuarterDurations]);
 
   useEffect(() => {
-    engine.setOnStep((step) => {
+    engine.setOnStep((step, meta) => {
       if (pendingPlayStartTsRef.current != null && !firstStepSeenForPlayRef.current) {
         const lag = Math.max(0, Math.round(performance.now() - pendingPlayStartTsRef.current));
         setStartupLagMs(lag);
@@ -41,6 +42,7 @@ export function usePlayback({ instruments, grid, columns, bpm, resolution, stepQ
         pendingPlayStartTsRef.current = null;
       }
       setPlayhead(step);
+      setStepMeta(meta || null);
     });
   }, [engine]);
   useEffect(() => {
@@ -81,6 +83,7 @@ export function usePlayback({ instruments, grid, columns, bpm, resolution, stepQ
         setStartupLagMs(0);
         setSlowStartDetected(false);
         setEndedNaturallyAt(0);
+        setStepMeta(null);
         pendingPlayStartTsRef.current = performance.now();
         firstStepSeenForPlayRef.current = false;
         if (!isReady) {
@@ -120,6 +123,7 @@ export function usePlayback({ instruments, grid, columns, bpm, resolution, stepQ
     engine.stop();
     setIsPlaying(false);
     setEndedNaturallyAt(0);
+    setStepMeta(null);
     pendingPlayStartTsRef.current = null;
     firstStepSeenForPlayRef.current = false;
   }, [engine]);
@@ -127,6 +131,7 @@ export function usePlayback({ instruments, grid, columns, bpm, resolution, stepQ
     engine.hardStop();
     setIsPlaying(false);
     setEndedNaturallyAt(0);
+    setStepMeta(null);
     pendingPlayStartTsRef.current = null;
     firstStepSeenForPlayRef.current = false;
   }, [engine]);
@@ -134,6 +139,40 @@ export function usePlayback({ instruments, grid, columns, bpm, resolution, stepQ
     engine.setCurrentStep(stepIndex);
     setPlayhead(Math.max(0, Math.floor(Number(stepIndex) || 0)));
   }, [engine]);
+  const playCompiled = useCallback(
+    async ({ events = [], startAtSec = 0, totalDurationSec = 0, loop = false } = {}) => {
+      try {
+        primeIOSAudioSync();
+        engine.unlock();
+        setError(null);
+        setStartupLagMs(0);
+        setSlowStartDetected(false);
+        setEndedNaturallyAt(0);
+        setStepMeta(null);
+        pendingPlayStartTsRef.current = performance.now();
+        firstStepSeenForPlayRef.current = false;
+        if (!isReady) {
+          await initSamples();
+        }
+        await engine.resumeIfNeeded();
+        const startedAt = await engine.playCompiled(events, {
+          startAtSec,
+          totalDurationSec,
+          loop,
+        });
+        setIsPlaying(true);
+        return startedAt;
+      } catch (e) {
+        setIsPlaying(false);
+        const msg = e?.message || String(e);
+        setError(msg);
+        pendingPlayStartTsRef.current = null;
+        firstStepSeenForPlayRef.current = false;
+        throw e;
+      }
+    },
+    [engine, initSamples, isReady]
+  );
   const setStopAtTime = useCallback((timeSec = null) => {
     engine.setStopAtTime(timeSec);
   }, [engine]);
@@ -144,11 +183,13 @@ export function usePlayback({ instruments, grid, columns, bpm, resolution, stepQ
     isReady,
     isPlaying,
     playhead,
+    stepMeta,
     error,
     startupLagMs,
     slowStartDetected,
     endedNaturallyAt,
     play,
+    playCompiled,
     stop,
     hardStop,
     initSamples,
