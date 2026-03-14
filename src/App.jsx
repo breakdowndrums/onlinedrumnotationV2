@@ -1518,9 +1518,9 @@ export default function App() {
   const [arrangementNotationBarsPerRow, setArrangementNotationBarsPerRow] = useState(() => {
     try {
       const raw = Number(window.localStorage.getItem(ARRANGEMENT_NOTATION_BARS_PER_ROW_STORAGE_KEY));
-      return raw === 1 || raw === 2 || raw === 3 || raw === 4 ? raw : 4;
+      return raw === 1 || raw === 2 || raw === 3 || raw === 4 ? raw : 2;
     } catch (_) {
-      return 4;
+      return 2;
     }
   });
   const [arrangementNotationDynamicSpacing, setArrangementNotationDynamicSpacing] = useState(() => {
