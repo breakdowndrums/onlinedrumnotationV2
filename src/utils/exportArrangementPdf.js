@@ -4,6 +4,7 @@ import QRCode from "qrcode";
 
 function cloneSvgForPrint(svg) {
   const clone = svg.cloneNode(true);
+  clone.querySelectorAll(".dg-active-bar, .dg-selected-bar, .dg-click-bar").forEach((el) => el.remove());
   const style = document.createElementNS("http://www.w3.org/2000/svg", "style");
   style.textContent = `
     * { stroke: #000 !important; }

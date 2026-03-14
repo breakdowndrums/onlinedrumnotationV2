@@ -389,7 +389,7 @@ function buildBarsFromTimeline(maxTick, ppq, tempos, timeSigs) {
 export function importDrumMidi({
   arrayBuffer,
   instruments,
-  arrangementSplitBars = 2,
+  arrangementSplitBars = 1,
   noteAssignments = {},
   velocityThresholds = null,
 }) {
@@ -579,7 +579,7 @@ export function importDrumMidi({
   const hasTimelineChanges = tempos.length > 1 || timeSigs.length > 1;
   const totalBars = barsTimeline.length;
   if (hasTimelineChanges || totalBars > 8) {
-    const splitBars = Math.max(1, Math.min(8, Math.round(Number(arrangementSplitBars) || 2)));
+    const splitBars = Math.max(1, Math.min(8, Math.round(Number(arrangementSplitBars) || 1)));
     const sections = [];
     let idx = 0;
     let sectionIndex = 1;

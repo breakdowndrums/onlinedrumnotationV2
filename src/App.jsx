@@ -469,6 +469,18 @@ function estimateNotationBarWidthDemand({
     ...((Array.isArray(quarterSubdivisions) ? quarterSubdivisions : [])
       .map((n) => Math.max(1, Number(n) || 1)))
   );
+  const tupletBracketExtra = (Array.isArray(quarterSubdivisions) ? quarterSubdivisions : []).reduce(
+    (sum, rawCount) => {
+      const count = Math.max(1, Number(rawCount) || 1);
+      const isPowerOfTwo = (count & (count - 1)) === 0;
+      if (count <= 1 || isPowerOfTwo) return sum;
+      if (count >= 9) return sum + 120;
+      if (count >= 7) return sum + 88;
+      if (count >= 5) return sum + 56;
+      return sum + 24;
+    },
+    0
+  );
   const densityRatio = activeSteps / barSteps;
   const chordExtras = Math.max(0, activeCells - activeSteps);
   const tupletExtra = Math.max(0, maxQuarterSubdiv - 2);
@@ -484,6 +496,7 @@ function estimateNotationBarWidthDemand({
     activeSteps * 10 +
     chordExtras * 18 +
     tupletExtra * 28 +
+    tupletBracketExtra +
     densityBoost +
     (maxChordSize >= 4 ? 38 : 0) +
     (maxChordSize === 3 ? 20 : 0);
@@ -1581,6 +1594,14 @@ export default function App() {
   });
   const [arrangementPdfQrEnabled, setArrangementPdfQrEnabled] = useState(false);
   const [arrangementPdfWatermarkEnabled, setArrangementPdfWatermarkEnabled] = useState(true);
+  useEffect(() => {
+    if (!isPrintDialogOpen) return;
+    setPrintQrEnabled(false);
+  }, [isPrintDialogOpen]);
+  useEffect(() => {
+    if (!isArrangementPrintDialogOpen) return;
+    setArrangementPdfQrEnabled(false);
+  }, [isArrangementPrintDialogOpen]);
   const [arrangementPlaybackEnabled, setArrangementPlaybackEnabled] = useState(false);
   const [arrangementPlaybackIndex, setArrangementPlaybackIndex] = useState(0);
   const [activeArrangementGlobalBarIndex, setActiveArrangementGlobalBarIndex] = useState(-1);
@@ -1592,6 +1613,19 @@ export default function App() {
     pointerId: null,
     mode: null,
   });
+  const arrangementPlayButtonRef = React.useRef(null);
+  const blurActiveTextInput = React.useCallback(() => {
+    const activeEl = document.activeElement;
+    if (
+      activeEl instanceof HTMLInputElement ||
+      activeEl instanceof HTMLTextAreaElement ||
+      activeEl?.isContentEditable
+    ) {
+      try {
+        activeEl.blur();
+      } catch (_) {}
+    }
+  }, []);
   const [arrangementPos, setArrangementPos] = useState({ x: 56, y: 112 });
   const [arrangementNotationPos, setArrangementNotationPos] = useState({ x: 56, y: 128 });
   const [isPublicSubmitDialogOpen, setIsPublicSubmitDialogOpen] = useState(false);
@@ -1690,7 +1724,7 @@ export default function App() {
   const [libraryTimeSigFilter, setLibraryTimeSigFilter] = useState("all");
   const [libraryBpmFilterMode, setLibraryBpmFilterMode] = useState("any"); // any | exact | pm5 | pm10
   const [libraryBpmTarget, setLibraryBpmTarget] = useState(120);
-  const [midiImportSplitBars, setMidiImportSplitBars] = useState(2);
+  const [midiImportSplitBars, setMidiImportSplitBars] = useState(1);
   const [localBeats, setLocalBeats] = useState(() => {
     try {
       const raw = window.localStorage.getItem(LOCAL_BEAT_LIBRARY_STORAGE_KEY);
@@ -2645,10 +2679,17 @@ useEffect(() => {
         ? margin
         : Math.max(margin, viewportWidth - panelWidth - margin);
     setBeatLibraryPos((prev) => ({ ...prev, x: nextX }));
-    const raf = window.requestAnimationFrame(() => {
-      beatNameInputRef.current?.focus();
-      beatNameInputRef.current?.select?.();
-    });
+    const currentGrid = baseGridRef.current || {};
+    const hasAnyNotes = ALL_INSTRUMENTS.some((inst) =>
+      (currentGrid[inst.id] || []).some((v) => v !== CELL.OFF)
+    );
+    const shouldAutoFocusBeatName = !loadedLocalBeatId && hasAnyNotes;
+    const raf = shouldAutoFocusBeatName
+      ? window.requestAnimationFrame(() => {
+          beatNameInputRef.current?.focus();
+          beatNameInputRef.current?.select?.();
+        })
+      : 0;
     const onKeyDown = (e) => {
       if (e.key !== "Escape") return;
       e.preventDefault();
@@ -2656,10 +2697,10 @@ useEffect(() => {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => {
-      window.cancelAnimationFrame(raf);
+      if (raf) window.cancelAnimationFrame(raf);
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [isBeatLibraryOpen]);
+  }, [isBeatLibraryOpen, loadedLocalBeatId]);
   useEffect(() => {
     if (!loadedLocalBeatId) return;
     const stillExists = localBeats.some((b) => String(b?.id || "") === String(loadedLocalBeatId));
@@ -2678,14 +2719,6 @@ useEffect(() => {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [isArrangementOpen, arrangementPanelWidth]);
-  useEffect(() => {
-    if (!isArrangementOpen || arrangementSourcesCollapsed || arrangementSourceTab !== "local") return;
-    const raf = window.requestAnimationFrame(() => {
-      beatNameInputRef.current?.focus();
-      beatNameInputRef.current?.select?.();
-    });
-    return () => window.cancelAnimationFrame(raf);
-  }, [isArrangementOpen, arrangementSourcesCollapsed, arrangementSourceTab]);
   useEffect(() => {
     if (!isArrangementNotationOpen) return;
     const margin = 8;
@@ -9193,6 +9226,7 @@ useEffect(() => {
                   }
                   if (canUpdateLoadedLocalBeat) updateCurrentLoadedBeatLocal();
                   else saveCurrentBeatLocal();
+                  try { e.currentTarget.blur(); } catch (_) {}
                   setIsBeatLibraryOpen(false);
                 }}
                 placeholder="Beat name"
@@ -9480,6 +9514,7 @@ useEffect(() => {
                   type="button"
                   onClick={() => {
                     if (!arrangementDetailsCollapsed && !arrangementSourcesCollapsed) {
+                      blurActiveTextInput();
                       setArrangementDetailsCollapsed(true);
                       setArrangementSourcesCollapsed(false);
                       return;
@@ -9488,8 +9523,14 @@ useEffect(() => {
                       setIsArrangementOpen(false);
                       return;
                     }
+                    blurActiveTextInput();
                     setArrangementDetailsCollapsed(false);
                     setArrangementSourcesCollapsed(true);
+                    window.requestAnimationFrame(() => {
+                      try {
+                        arrangementPlayButtonRef.current?.focus();
+                      } catch (_) {}
+                    });
                   }}
                   className={`px-3 py-1 rounded border text-sm ${
                     arrangementDetailsCollapsed
@@ -9587,6 +9628,7 @@ useEffect(() => {
                       }
                       if (canUpdateLoadedLocalBeat) updateCurrentLoadedBeatLocal();
                       else saveCurrentBeatLocal();
+                      try { e.currentTarget.blur(); } catch (_) {}
                     }}
                     placeholder="Beat name"
                     className="min-w-[180px] flex-1 bg-neutral-900 border border-neutral-700 rounded px-2 py-1 text-sm text-white"
@@ -9832,10 +9874,11 @@ useEffect(() => {
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
                     <div className="text-sm text-neutral-200">Arrangement</div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (arrangementPlaybackEnabled && playback.isPlaying) stopArrangementPlayback();
+                <button
+                  ref={arrangementPlayButtonRef}
+                  type="button"
+                  onClick={() => {
+                    if (arrangementPlaybackEnabled && playback.isPlaying) stopArrangementPlayback();
                         else startArrangementPlayback();
                       }}
                       disabled={arrangementPlayableEntries.length < 1}
@@ -11033,25 +11076,25 @@ useEffect(() => {
         </div>
       )}
 
+      <input
+        ref={midiImportInputRef}
+        type="file"
+        accept=".mid,.midi,audio/midi"
+        className="hidden"
+        onChange={async (e) => {
+          const file = e.target.files?.[0];
+          e.target.value = "";
+          if (!file) return;
+          try {
+            await handleMidiImportFile(file);
+          } catch (err) {
+            console.error(err);
+            alert(err?.message || "Failed to import MIDI");
+          }
+        }}
+      />
       {isShareActionsDialogOpen && (
         <>
-          <input
-            ref={midiImportInputRef}
-            type="file"
-            accept=".mid,.midi,audio/midi"
-            className="hidden"
-            onChange={async (e) => {
-              const file = e.target.files?.[0];
-              e.target.value = "";
-              if (!file) return;
-              try {
-                await handleMidiImportFile(file);
-              } catch (err) {
-                console.error(err);
-                alert(err?.message || "Failed to import MIDI");
-              }
-            }}
-          />
           {createPortal(
             <div
               ref={fileMenuRef}
@@ -14654,6 +14697,10 @@ function Notation({
       renderer.resize(width, height);
       ctx = renderer.getContext();
       const svgRoot = ref.current.querySelector("svg");
+      if (svgRoot instanceof SVGElement) {
+        svgRoot.style.overflow = "visible";
+        svgRoot.setAttribute("overflow", "visible");
+      }
 
       const staves = [];
       const voices = [];
@@ -15031,6 +15078,10 @@ function Notation({
     renderer.resize(width, height);
     ctx = renderer.getContext();
     const svgRoot = ref.current.querySelector("svg");
+    if (svgRoot instanceof SVGElement) {
+      svgRoot.style.overflow = "visible";
+      svgRoot.setAttribute("overflow", "visible");
+    }
 
     const dur = notationResolution === 4 ? "q" : notationResolution === 8 ? "8" : notationResolution === 16 ? "16" : "32";
 
