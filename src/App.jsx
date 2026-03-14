@@ -15628,6 +15628,14 @@ for (let i = 0; i < notes.length; i++) {
     });
   }, [onBarClick, selectedBarIndices]);
 
-  return <div ref={ref} style={{ touchAction: typeof onBarClick === "function" ? "none" : "pan-x pan-y" }} />;
+  return (
+    <div
+      ref={ref}
+      style={{
+        touchAction: typeof onBarClick === "function" ? "none" : "auto",
+        paddingRight: "1rem",
+      }}
+    />
+  );
 
 }
