@@ -15,6 +15,8 @@ export function makeAudioEngine() {
   let timerId = null;
   let activeSources = new Set();
   let openHats = [];
+  let stopAtTime = null;
+  let onEnded = null;
 
   // Lookahead
   const lookaheadMs = 25;
@@ -233,17 +235,41 @@ function trigger(instId, time, gainValue = 1) {
     if (onStep) onStep(stepIndex);
   }
 
+  function finishNaturally() {
+    isPlaying = false;
+    if (timerId) {
+      window.clearInterval(timerId);
+      timerId = null;
+    }
+    currentStep = 0;
+    nextNoteTime = 0;
+    stopAtTime = null;
+    if (onEnded) onEnded();
+  }
+
   function scheduler(getGridSnapshot) {
     if (!audioCtx) return;
 
     const { grid, instruments, columns } = getGridSnapshot();
 
+    if (stopAtTime != null && audioCtx.currentTime >= stopAtTime) {
+      finishNaturally();
+      return;
+    }
+
     while (nextNoteTime < audioCtx.currentTime + scheduleAheadTimeSec) {
+      if (stopAtTime != null && nextNoteTime >= stopAtTime - 1e-6) {
+        break;
+      }
       scheduleStep(grid, instruments, currentStep, nextNoteTime);
 
       nextNoteTime += secondsForStep(currentStep);
       currentStep += 1;
       if (currentStep >= columns) currentStep = 0;
+    }
+
+    if (stopAtTime != null && audioCtx.currentTime >= stopAtTime) {
+      finishNaturally();
     }
   }
 
@@ -256,6 +282,7 @@ function trigger(instId, time, gainValue = 1) {
     transportColumns = Math.max(1, snap.columns ?? 1);
     currentStep = Math.max(0, Math.min(maxStep, startStep));
     nextNoteTime = audioCtx.currentTime + 0.03;
+    stopAtTime = null;
 
     isPlaying = true;
     timerId = window.setInterval(() => scheduler(getGridSnapshot), lookaheadMs);
@@ -271,6 +298,16 @@ function trigger(instId, time, gainValue = 1) {
       timerId = null;
     }
 
+    // Reset transport so next play always starts from beginning.
+    // Already-triggered sounds are allowed to ring out.
+    currentStep = 0;
+    nextNoteTime = 0;
+    stopAtTime = null;
+  }
+
+  function hardStop() {
+    stop();
+
     // Kill any already-scheduled sounds
     activeSources.forEach((src) => {
       try { src.stop(0); } catch (e) {}
@@ -278,13 +315,16 @@ function trigger(instId, time, gainValue = 1) {
     activeSources.clear();
     openHats = [];
 
-    // Reset transport so next play always starts from beginning
-    currentStep = 0;
-    nextNoteTime = 0;
+    // Ensure no scheduled natural-end callback lingers.
+    stopAtTime = null;
   }
 
   function setOnStep(fn) {
     onStep = fn;
+  }
+
+  function setOnEnded(fn) {
+    onEnded = fn;
   }
 
   function getCurrentTime() {
@@ -301,6 +341,10 @@ function trigger(instId, time, gainValue = 1) {
     currentStep = Math.max(0, Math.min(maxStep, Math.floor(Number(stepIndex) || 0)));
   }
 
+  function setStopAtTime(timeSec = null) {
+    stopAtTime = Number.isFinite(timeSec) && timeSec > 0 ? Number(timeSec) : null;
+  }
+
   return {
     ensureContext,
     getContext,
@@ -309,10 +353,13 @@ function trigger(instId, time, gainValue = 1) {
     setBuffers,
     setTransport,
     setOnStep,
+    setOnEnded,
     getCurrentTime,
     getScheduleAheadTimeSec,
     setCurrentStep,
+    setStopAtTime,
     play,
     stop,
+    hardStop,
   };
 }

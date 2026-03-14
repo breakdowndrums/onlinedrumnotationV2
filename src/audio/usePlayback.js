@@ -12,6 +12,7 @@ export function usePlayback({ instruments, grid, columns, bpm, resolution, stepQ
   const [error, setError] = useState(null);
   const [startupLagMs, setStartupLagMs] = useState(0);
   const [slowStartDetected, setSlowStartDetected] = useState(false);
+  const [endedNaturallyAt, setEndedNaturallyAt] = useState(0);
 
   const snapRef = useRef({ instruments, grid, columns, stepQuarterDurations });
   const pendingPlayStartTsRef = useRef(null);
@@ -40,6 +41,14 @@ export function usePlayback({ instruments, grid, columns, bpm, resolution, stepQ
         pendingPlayStartTsRef.current = null;
       }
       setPlayhead(step);
+    });
+  }, [engine]);
+  useEffect(() => {
+    engine.setOnEnded(() => {
+      setIsPlaying(false);
+      setEndedNaturallyAt(Date.now());
+      pendingPlayStartTsRef.current = null;
+      firstStepSeenForPlayRef.current = false;
     });
   }, [engine]);
 
@@ -71,6 +80,7 @@ export function usePlayback({ instruments, grid, columns, bpm, resolution, stepQ
         setError(null);
         setStartupLagMs(0);
         setSlowStartDetected(false);
+        setEndedNaturallyAt(0);
         pendingPlayStartTsRef.current = performance.now();
         firstStepSeenForPlayRef.current = false;
         if (!isReady) {
@@ -109,12 +119,23 @@ export function usePlayback({ instruments, grid, columns, bpm, resolution, stepQ
   const stop = useCallback(() => {
     engine.stop();
     setIsPlaying(false);
+    setEndedNaturallyAt(0);
+    pendingPlayStartTsRef.current = null;
+    firstStepSeenForPlayRef.current = false;
+  }, [engine]);
+  const hardStop = useCallback(() => {
+    engine.hardStop();
+    setIsPlaying(false);
+    setEndedNaturallyAt(0);
     pendingPlayStartTsRef.current = null;
     firstStepSeenForPlayRef.current = false;
   }, [engine]);
   const setTransportStep = useCallback((stepIndex = 0) => {
     engine.setCurrentStep(stepIndex);
     setPlayhead(Math.max(0, Math.floor(Number(stepIndex) || 0)));
+  }, [engine]);
+  const setStopAtTime = useCallback((timeSec = null) => {
+    engine.setStopAtTime(timeSec);
   }, [engine]);
   const getAudioTime = useCallback(() => engine.getCurrentTime(), [engine]);
   const getScheduleAheadTimeSec = useCallback(() => engine.getScheduleAheadTimeSec(), [engine]);
@@ -126,11 +147,14 @@ export function usePlayback({ instruments, grid, columns, bpm, resolution, stepQ
     error,
     startupLagMs,
     slowStartDetected,
+    endedNaturallyAt,
     play,
     stop,
+    hardStop,
     initSamples,
     setPlayhead,
     setTransportStep,
+    setStopAtTime,
     getAudioTime,
     getScheduleAheadTimeSec,
   };
