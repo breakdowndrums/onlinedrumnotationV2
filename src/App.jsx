@@ -1588,6 +1588,10 @@ export default function App() {
   const [arrangementSelectionAnchor, setArrangementSelectionAnchor] = useState(null); // row index
   const [arrangementBarSelection, setArrangementBarSelection] = useState(null); // {start,end} global bar indices
   const [arrangementBarSelectionAnchor, setArrangementBarSelectionAnchor] = useState(null); // global bar index
+  const arrangementTouchSelectionRef = React.useRef({
+    pointerId: null,
+    mode: null,
+  });
   const [arrangementPos, setArrangementPos] = useState({ x: 56, y: 112 });
   const [arrangementNotationPos, setArrangementNotationPos] = useState({ x: 56, y: 128 });
   const [isPublicSubmitDialogOpen, setIsPublicSubmitDialogOpen] = useState(false);
@@ -1809,16 +1813,28 @@ export default function App() {
     dragging: false,
     offsetX: 0,
     offsetY: 0,
+    pointerId: null,
+    holdTimer: null,
+    startX: 0,
+    startY: 0,
   });
   const arrangementDragRef = React.useRef({
     dragging: false,
     offsetX: 0,
     offsetY: 0,
+    pointerId: null,
+    holdTimer: null,
+    startX: 0,
+    startY: 0,
   });
   const arrangementNotationDragRef = React.useRef({
     dragging: false,
     offsetX: 0,
     offsetY: 0,
+    pointerId: null,
+    holdTimer: null,
+    startX: 0,
+    startY: 0,
   });
   const arrangementPanelRef = React.useRef(null);
   const arrangementDragBeatRef = React.useRef(null);
@@ -1829,15 +1845,26 @@ export default function App() {
   const arrangementNotationScrollBucketRef = React.useRef(-1);
   const arrangementTitleMenuRef = React.useRef(null);
   const arrangementTitleMenuButtonRef = React.useRef(null);
-  const beginFloatingPanelDrag = React.useCallback((event, panelRef, dragRef) => {
-    if (event.button !== 0) return;
-    const target = event.target;
-    if (
+  const isFloatingPanelDragBlockedTarget = React.useCallback((target) => {
+    return (
       target instanceof Element &&
       target.closest(
         '[data-no-window-drag="1"], button, input, select, textarea, a, label, summary, [role="button"]'
       )
-    ) {
+    );
+  }, []);
+  const clearFloatingPanelTouchHold = React.useCallback((dragRef) => {
+    const drag = dragRef.current;
+    if (drag.holdTimer) window.clearTimeout(drag.holdTimer);
+    drag.holdTimer = null;
+    drag.pointerId = null;
+    drag.startX = 0;
+    drag.startY = 0;
+  }, []);
+  const beginFloatingPanelDrag = React.useCallback((event, panelRef, dragRef) => {
+    if (event.button !== 0) return;
+    const target = event.target;
+    if (isFloatingPanelDragBlockedTarget(target)) {
       event.stopPropagation();
       return;
     }
@@ -1854,7 +1881,34 @@ export default function App() {
     dragRef.current.offsetY = event.clientY - rect.top;
     event.preventDefault();
     event.stopPropagation();
-  }, []);
+  }, [isFloatingPanelDragBlockedTarget]);
+  const beginFloatingPanelTouchHold = React.useCallback((event, panelRef, dragRef) => {
+    if (event.pointerType === "mouse") return;
+    const target = event.target;
+    if (isFloatingPanelDragBlockedTarget(target)) {
+      event.stopPropagation();
+      return;
+    }
+    clearFloatingPanelTouchHold(dragRef);
+    const panel =
+      panelRef.current instanceof HTMLElement
+        ? panelRef.current
+        : event.currentTarget instanceof HTMLElement
+          ? event.currentTarget
+          : null;
+    if (!(panel instanceof HTMLElement)) return;
+    const drag = dragRef.current;
+    drag.pointerId = event.pointerId;
+    drag.startX = event.clientX;
+    drag.startY = event.clientY;
+    drag.holdTimer = window.setTimeout(() => {
+      const rect = panel.getBoundingClientRect();
+      drag.dragging = true;
+      drag.offsetX = drag.startX - rect.left;
+      drag.offsetY = drag.startY - rect.top;
+      drag.holdTimer = null;
+    }, 180);
+  }, [clearFloatingPanelTouchHold, isFloatingPanelDragBlockedTarget]);
   const arrangementGlobalSettingsMenuRef = React.useRef(null);
   const arrangementGlobalSettingsMenuButtonRef = React.useRef(null);
   const arrangementNotationMoreMenuRef = React.useRef(null);
@@ -2585,7 +2639,11 @@ useEffect(() => {
     if (!isBeatLibraryOpen) return;
     const panelWidth = 704; // max-w-[44rem]
     const margin = 8;
-    const nextX = Math.max(margin, window.innerWidth - panelWidth - margin);
+    const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+    const nextX =
+      viewportWidth > 0 && viewportWidth < 768
+        ? margin
+        : Math.max(margin, viewportWidth - panelWidth - margin);
     setBeatLibraryPos((prev) => ({ ...prev, x: nextX }));
     const raf = window.requestAnimationFrame(() => {
       beatNameInputRef.current?.focus();
@@ -2675,66 +2733,102 @@ useEffect(() => {
   }, [isPublicSubmitDialogOpen, lockedPublicComposer]);
   useEffect(() => {
     if (!isBeatLibraryOpen) return;
-    const onMouseMove = (e) => {
+    const onPointerMove = (e) => {
       const drag = beatLibraryDragRef.current;
-      if (!drag.dragging) return;
-      const minX = 8;
-      const minY = 8;
-      const nextX = Math.max(minX, e.clientX - drag.offsetX);
-      const nextY = Math.max(minY, e.clientY - drag.offsetY);
-      setBeatLibraryPos({ x: nextX, y: nextY });
+      if (drag.dragging) {
+        if (drag.pointerId != null && e.pointerId !== drag.pointerId) return;
+        const minX = 8;
+        const minY = 8;
+        const nextX = Math.max(minX, e.clientX - drag.offsetX);
+        const nextY = Math.max(minY, e.clientY - drag.offsetY);
+        setBeatLibraryPos({ x: nextX, y: nextY });
+        return;
+      }
+      if (drag.pointerId == null || e.pointerId !== drag.pointerId || !drag.holdTimer) return;
+      const dx = e.clientX - drag.startX;
+      const dy = e.clientY - drag.startY;
+      if (dx * dx + dy * dy > 36) clearFloatingPanelTouchHold(beatLibraryDragRef);
     };
-    const stopDrag = () => {
-      beatLibraryDragRef.current.dragging = false;
+    const stopDrag = (e) => {
+      const drag = beatLibraryDragRef.current;
+      if (drag.pointerId != null && e.pointerId !== drag.pointerId) return;
+      drag.dragging = false;
+      clearFloatingPanelTouchHold(beatLibraryDragRef);
     };
-    window.addEventListener("mousemove", onMouseMove);
-    window.addEventListener("mouseup", stopDrag);
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", stopDrag);
+    window.addEventListener("pointercancel", stopDrag);
     return () => {
-      window.removeEventListener("mousemove", onMouseMove);
-      window.removeEventListener("mouseup", stopDrag);
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", stopDrag);
+      window.removeEventListener("pointercancel", stopDrag);
     };
-  }, [isBeatLibraryOpen]);
+  }, [isBeatLibraryOpen, clearFloatingPanelTouchHold]);
   useEffect(() => {
     if (!isArrangementOpen) return;
-    const onMouseMove = (e) => {
+    const onPointerMove = (e) => {
       const drag = arrangementDragRef.current;
-      if (!drag.dragging) return;
-      const minX = 8;
-      const minY = 8;
-      const nextX = Math.max(minX, e.clientX - drag.offsetX);
-      const nextY = Math.max(minY, e.clientY - drag.offsetY);
-      setArrangementPos({ x: nextX, y: nextY });
+      if (drag.dragging) {
+        if (drag.pointerId != null && e.pointerId !== drag.pointerId) return;
+        const minX = 8;
+        const minY = 8;
+        const nextX = Math.max(minX, e.clientX - drag.offsetX);
+        const nextY = Math.max(minY, e.clientY - drag.offsetY);
+        setArrangementPos({ x: nextX, y: nextY });
+        return;
+      }
+      if (drag.pointerId == null || e.pointerId !== drag.pointerId || !drag.holdTimer) return;
+      const dx = e.clientX - drag.startX;
+      const dy = e.clientY - drag.startY;
+      if (dx * dx + dy * dy > 36) clearFloatingPanelTouchHold(arrangementDragRef);
     };
-    const stopDrag = () => {
-      arrangementDragRef.current.dragging = false;
+    const stopDrag = (e) => {
+      const drag = arrangementDragRef.current;
+      if (drag.pointerId != null && e.pointerId !== drag.pointerId) return;
+      drag.dragging = false;
+      clearFloatingPanelTouchHold(arrangementDragRef);
     };
-    window.addEventListener("mousemove", onMouseMove);
-    window.addEventListener("mouseup", stopDrag);
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", stopDrag);
+    window.addEventListener("pointercancel", stopDrag);
     return () => {
-      window.removeEventListener("mousemove", onMouseMove);
-      window.removeEventListener("mouseup", stopDrag);
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", stopDrag);
+      window.removeEventListener("pointercancel", stopDrag);
     };
-  }, [isArrangementOpen, arrangementPanelWidth]);
+  }, [isArrangementOpen, arrangementPanelWidth, clearFloatingPanelTouchHold]);
   useEffect(() => {
     if (!isArrangementNotationOpen) return;
-    const onMouseMove = (e) => {
+    const onPointerMove = (e) => {
       const drag = arrangementNotationDragRef.current;
-      if (!drag.dragging) return;
-      const minY = 8;
-      const nextX = e.clientX - drag.offsetX;
-      const nextY = Math.max(minY, e.clientY - drag.offsetY);
-      setArrangementNotationPos({ x: nextX, y: nextY });
+      if (drag.dragging) {
+        if (drag.pointerId != null && e.pointerId !== drag.pointerId) return;
+        const minY = 8;
+        const nextX = e.clientX - drag.offsetX;
+        const nextY = Math.max(minY, e.clientY - drag.offsetY);
+        setArrangementNotationPos({ x: nextX, y: nextY });
+        return;
+      }
+      if (drag.pointerId == null || e.pointerId !== drag.pointerId || !drag.holdTimer) return;
+      const dx = e.clientX - drag.startX;
+      const dy = e.clientY - drag.startY;
+      if (dx * dx + dy * dy > 36) clearFloatingPanelTouchHold(arrangementNotationDragRef);
     };
-    const stopDrag = () => {
-      arrangementNotationDragRef.current.dragging = false;
+    const stopDrag = (e) => {
+      const drag = arrangementNotationDragRef.current;
+      if (drag.pointerId != null && e.pointerId !== drag.pointerId) return;
+      drag.dragging = false;
+      clearFloatingPanelTouchHold(arrangementNotationDragRef);
     };
-    window.addEventListener("mousemove", onMouseMove);
-    window.addEventListener("mouseup", stopDrag);
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", stopDrag);
+    window.addEventListener("pointercancel", stopDrag);
     return () => {
-      window.removeEventListener("mousemove", onMouseMove);
-      window.removeEventListener("mouseup", stopDrag);
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", stopDrag);
+      window.removeEventListener("pointercancel", stopDrag);
     };
-  }, [isArrangementNotationOpen]);
+  }, [isArrangementNotationOpen, clearFloatingPanelTouchHold]);
 
   useEffect(() => {
     if (!isLegalDialogOpen) return;
@@ -5416,6 +5510,46 @@ useEffect(() => {
       setArrangementSelectionAnchor(null);
     }
   }, [arrangementBarSelectionAnchor, findArrangementRowIndexForBar]);
+  const handleArrangementRowTouchSelect = React.useCallback((rowIndex, pointerId) => {
+    const touch = arrangementTouchSelectionRef.current;
+    const extend =
+      Number.isFinite(pointerId) &&
+      Number.isFinite(touch.pointerId) &&
+      touch.pointerId !== pointerId &&
+      touch.mode === "row" &&
+      Number.isFinite(arrangementSelectionAnchor);
+    handleArrangementRowSelect(rowIndex, extend);
+    if (!Number.isFinite(touch.pointerId)) touch.pointerId = pointerId;
+    touch.mode = "row";
+  }, [arrangementSelectionAnchor, handleArrangementRowSelect]);
+  const handleArrangementNotationBarTouchSelect = React.useCallback((barIndex, pointerId) => {
+    const touch = arrangementTouchSelectionRef.current;
+    const extend =
+      Number.isFinite(pointerId) &&
+      Number.isFinite(touch.pointerId) &&
+      touch.pointerId !== pointerId &&
+      touch.mode === "bar" &&
+      Number.isFinite(arrangementBarSelectionAnchor);
+    handleArrangementNotationBarSelect(barIndex, extend);
+    if (!Number.isFinite(touch.pointerId)) touch.pointerId = pointerId;
+    touch.mode = "bar";
+  }, [arrangementBarSelectionAnchor, handleArrangementNotationBarSelect]);
+  useEffect(() => {
+    const resetTouchSelection = (event) => {
+      if (event.pointerType === "mouse") return;
+      const touch = arrangementTouchSelectionRef.current;
+      if (touch.pointerId === event.pointerId) {
+        touch.pointerId = null;
+        touch.mode = null;
+      }
+    };
+    window.addEventListener("pointerup", resetTouchSelection);
+    window.addEventListener("pointercancel", resetTouchSelection);
+    return () => {
+      window.removeEventListener("pointerup", resetTouchSelection);
+      window.removeEventListener("pointercancel", resetTouchSelection);
+    };
+  }, []);
   const selectedSavedArrangementEntry = React.useMemo(() => {
     if (!savedArrangements.length || !loadedArrangementId) return null;
     return savedArrangements.find((entry) => entry.id === loadedArrangementId) || null;
@@ -7171,6 +7305,11 @@ useEffect(() => {
     restoreMidiImportPreviewSnapshot,
   ]);
   const applyImportedArrangementPayload = React.useCallback((payload) => {
+    const viewportWidth =
+      typeof window !== "undefined"
+        ? (window.innerWidth || document.documentElement.clientWidth || 0)
+        : 0;
+    const isMobileViewport = viewportWidth > 0 && viewportWidth < 768;
     const sharedBeats = Array.isArray(payload?.beats)
       ? payload.beats
           .map((beat, idx) => {
@@ -7212,8 +7351,9 @@ useEffect(() => {
     setArrangementTitleLine2Draft(String(payload?.titleLine2 || ""));
     setArrangementComposerDraft(String(payload?.composer || ""));
     setIsArrangementOpen(true);
-    setArrangementSourcesCollapsed(false);
+    setArrangementSourcesCollapsed(isMobileViewport);
     setArrangementDetailsCollapsed(false);
+    if (isMobileViewport) setIsBeatLibraryOpen(false);
     const firstBeat = sharedBeats[0] || null;
     if (firstBeat?.payload) {
       applyImportedBeatPayloadRef.current?.(firstBeat.payload, `shared-arrangement:${payload?.name || ""}:0`);
@@ -7646,10 +7786,15 @@ useEffect(() => {
                     exportMode
                       ? null
                       : (localBarIndex, event) =>
-                          handleArrangementNotationBarSelect(
-                            (segment.startBarOffset || 0) + localBarIndex,
-                            !!event?.shiftKey
-                          )
+                          (event?.pointerType && event.pointerType !== "mouse")
+                            ? handleArrangementNotationBarTouchSelect(
+                                (segment.startBarOffset || 0) + localBarIndex,
+                                event.pointerId
+                              )
+                            : handleArrangementNotationBarSelect(
+                                (segment.startBarOffset || 0) + localBarIndex,
+                                !!event?.shiftKey
+                              )
                   }
                   activeBarIndices={
                     exportMode
@@ -8665,7 +8810,7 @@ useEffect(() => {
       
       
       <main
-        className={`touch-none select-none ${
+        className={`select-none ${
           isEmbedMode
             ? "mt-0"
             : `mt-6 ${
@@ -8721,8 +8866,8 @@ useEffect(() => {
               />
             </div>
 
-            <div className="w-full overflow-x-auto">
-              <div className="inline-block align-top">
+            <div className="w-full overflow-visible">
+              <div className="inline-block align-top pr-4">
                 <Grid
                 instruments={instruments}
                 grid={computedGrid}
@@ -8764,8 +8909,8 @@ useEffect(() => {
           </>
         ) : (
           <>
-            <div className="w-full overflow-x-auto">
-              <div className="inline-block align-top">
+            <div className="w-full overflow-visible">
+              <div className="inline-block align-top pr-4">
                 <Grid
                 instruments={instruments}
                 grid={computedGrid}
@@ -8805,7 +8950,7 @@ useEffect(() => {
             </div>
             </div>
 
-            <div className="w-full" ref={setNotationExportEl}>
+            <div className="w-full pr-4 inline-block align-top" ref={setNotationExportEl}>
               <Notation
                 instruments={instruments}
                 grid={computedGrid}
@@ -8975,6 +9120,7 @@ useEffect(() => {
               <div
                 className="flex items-center gap-3 cursor-move select-none"
                 onMouseDown={(e) => beginFloatingPanelDrag(e, beatLibraryPanelRef, beatLibraryDragRef)}
+                onPointerDown={(e) => beginFloatingPanelTouchHold(e, beatLibraryPanelRef, beatLibraryDragRef)}
                 title="Drag window"
               >
                 <div className="grid grid-cols-2 gap-0.5 text-neutral-500" aria-hidden="true">
@@ -9298,6 +9444,7 @@ useEffect(() => {
               <div
                 className="flex items-center gap-3 cursor-move select-none"
                 onMouseDown={(e) => beginFloatingPanelDrag(e, arrangementPanelRef, arrangementDragRef)}
+                onPointerDown={(e) => beginFloatingPanelTouchHold(e, arrangementPanelRef, arrangementDragRef)}
                 title="Drag window"
               >
                 <div className="grid grid-cols-2 gap-0.5 text-neutral-500" aria-hidden="true">
@@ -9902,6 +10049,7 @@ useEffect(() => {
                                 idx <= normalizedArrangementSelection.end
                             )}
                             onSelect={(e) => handleArrangementRowSelect(idx, !!e?.shiftKey)}
+                            onTouchSelect={handleArrangementRowTouchSelect}
                             onPlay={() => startArrangementPlayback(idx)}
                             onLoad={() => loadBeatIntoEditor(row.source, row.beat)}
                             dropPosition={
@@ -10011,6 +10159,9 @@ useEffect(() => {
                     className="flex items-center gap-3 cursor-move select-none"
                     onMouseDown={(e) =>
                       beginFloatingPanelDrag(e, arrangementNotationPanelRef, arrangementNotationDragRef)
+                    }
+                    onPointerDown={(e) =>
+                      beginFloatingPanelTouchHold(e, arrangementNotationPanelRef, arrangementNotationDragRef)
                     }
                     title="Drag window"
                   >
@@ -10393,10 +10544,15 @@ useEffect(() => {
                               : []
                           }
                           onBarClick={(localBarIndex, event) =>
-                            handleArrangementNotationBarSelect(
-                              (section.startBarOffset || 0) + localBarIndex,
-                              !!event?.shiftKey
-                            )
+                            (event?.pointerType && event.pointerType !== "mouse")
+                              ? handleArrangementNotationBarTouchSelect(
+                                  (section.startBarOffset || 0) + localBarIndex,
+                                  event.pointerId
+                                )
+                              : handleArrangementNotationBarSelect(
+                                  (section.startBarOffset || 0) + localBarIndex,
+                                  !!event?.shiftKey
+                                )
                           }
                           activeBarIndices={
                             activeArrangementGlobalBarIndex >= section.startBarOffset &&
@@ -10470,10 +10626,15 @@ useEffect(() => {
                                 : []
                             }
                             onBarClick={(localBarIndex, event) =>
-                              handleArrangementNotationBarSelect(
-                                (chunk.startBarOffset || 0) + localBarIndex,
-                                !!event?.shiftKey
-                              )
+                              (event?.pointerType && event.pointerType !== "mouse")
+                                ? handleArrangementNotationBarTouchSelect(
+                                    (chunk.startBarOffset || 0) + localBarIndex,
+                                    event.pointerId
+                                  )
+                                : handleArrangementNotationBarSelect(
+                                    (chunk.startBarOffset || 0) + localBarIndex,
+                                    !!event?.shiftKey
+                                  )
                             }
                             activeBarIndices={
                               activeArrangementGlobalBarIndex >= chunk.startBarOffset &&
@@ -12402,6 +12563,7 @@ function SortableArrangementRow({
   onSetNotationSpacingPreset,
   onSetNotationCustomText,
   onSetNotationBarsPerRowOverride,
+  onTouchSelect,
 }) {
   const [isMenuOpen, setIsMenuOpen] = React.useState(false);
   const [menuPosition, setMenuPosition] = React.useState({ top: 0, left: 0 });
@@ -12496,6 +12658,12 @@ function SortableArrangementRow({
       data-arrangement-row-index={index}
       style={style}
       onClick={(e) => onSelect?.(e)}
+      onPointerDown={(e) => {
+        if (e.pointerType === "mouse") return;
+        e.preventDefault();
+        e.stopPropagation();
+        onTouchSelect?.(index, e.pointerId);
+      }}
       onDragOver={onExternalDragOver}
       onDrop={onExternalDrop}
       className={`rounded border px-2.5 py-2 ${
@@ -15448,12 +15616,18 @@ for (let i = 0; i < notes.length; i++) {
         hit.setAttribute("class", "dg-click-bar");
         hit.style.cursor = "pointer";
         hit.style.pointerEvents = "all";
+        hit.style.touchAction = "none";
+        hit.addEventListener("pointerdown", (event) => {
+          if (event.pointerType === "mouse") return;
+          event.preventDefault();
+          onBarClick(barIndex, event);
+        });
         hit.addEventListener("click", (event) => onBarClick(barIndex, event));
         svg.appendChild(hit);
       }
     });
   }, [onBarClick, selectedBarIndices]);
 
-  return <div ref={ref} />;
+  return <div ref={ref} style={{ touchAction: typeof onBarClick === "function" ? "none" : "pan-x pan-y" }} />;
 
 }
