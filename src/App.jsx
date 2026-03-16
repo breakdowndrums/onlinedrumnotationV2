@@ -447,6 +447,11 @@ function normalizeArrangementItems(items) {
     .filter((item) => item.id && item.beatId);
 }
 
+function getArrangementNameFromTitles(titleLine1, titleLine2, fallback = "Arrangement") {
+  const parts = [String(titleLine1 || "").trim(), String(titleLine2 || "").trim()].filter(Boolean);
+  return parts.join(" ") || String(fallback || "Arrangement").trim() || "Arrangement";
+}
+
 function estimateNotationBarWidthDemand({
   grid,
   barStartStep,
@@ -1570,7 +1575,6 @@ export default function App() {
   const [midiExportMode, setMidiExportMode] = useState("beat");
   const [pendingMidiImportMapping, setPendingMidiImportMapping] = useState(null);
   const [pendingMidiTempoPrompt, setPendingMidiTempoPrompt] = useState(null);
-  const [pendingMidiSplitPrompt, setPendingMidiSplitPrompt] = useState(null);
   const [lastMidiImportSession, setLastMidiImportSession] = useState(null);
   const [isLegalDialogOpen, setIsLegalDialogOpen] = useState(false);
   const [isPreferencesDialogOpen, setIsPreferencesDialogOpen] = useState(false);
@@ -1827,7 +1831,7 @@ export default function App() {
           createdAt: String(entry?.createdAt || entry?.updatedAt || ""),
           items: normalizeArrangementItems(entry?.items),
         }))
-        .filter((entry) => entry.id && entry.name && entry.items.length > 0);
+        .filter((entry) => entry.id && entry.name);
     } catch (_) {
       return [];
     }
@@ -1869,6 +1873,7 @@ export default function App() {
   const [arrangementNotationMoreMenuOpen, setArrangementNotationMoreMenuOpen] = useState(false);
   const [arrangementNotationMoreMenuPosition, setArrangementNotationMoreMenuPosition] = useState({ top: 0, left: 0 });
   const [arrangementNotationRowMenuState, setArrangementNotationRowMenuState] = useState(null);
+  const [pendingArrangementDeleteEntry, setPendingArrangementDeleteEntry] = useState(null);
   const [fileMenuPosition, setFileMenuPosition] = useState({ top: 0, left: 0 });
   const [arrangementDropActive, setArrangementDropActive] = useState(false);
   const [arrangementDropTarget, setArrangementDropTarget] = useState(null);
@@ -1892,6 +1897,7 @@ export default function App() {
   const [libraryBpmFilterMode, setLibraryBpmFilterMode] = useState("any"); // any | exact | pm5 | pm10
   const [libraryBpmTarget, setLibraryBpmTarget] = useState(120);
   const [midiImportSplitBars, setMidiImportSplitBars] = useState(1);
+  const [midiArrangementImportMode, setMidiArrangementImportMode] = useState("new-arrangement");
   const [localBeats, setLocalBeats] = useState(() => {
     try {
       const raw = window.localStorage.getItem(LOCAL_BEAT_LIBRARY_STORAGE_KEY);
@@ -2342,6 +2348,17 @@ export default function App() {
       window.localStorage.setItem(ARRANGEMENT_COMPOSER_STORAGE_KEY, arrangementComposerDraft);
     } catch (_) {}
   }, [arrangementComposerDraft]);
+  useEffect(() => {
+    if (!arrangementTitleLine1Draft.trim() && !arrangementTitleLine2Draft.trim()) return;
+    const nextName = getArrangementNameFromTitles(
+      arrangementTitleLine1Draft,
+      arrangementTitleLine2Draft,
+      ""
+    );
+    if (nextName && nextName !== arrangementNameDraft) {
+      setArrangementNameDraft(nextName);
+    }
+  }, [arrangementNameDraft, arrangementTitleLine1Draft, arrangementTitleLine2Draft]);
   React.useEffect(() => {
     if (!arrangementTitleMenuOpen) return undefined;
     const updateMenuPosition = () => {
@@ -5285,18 +5302,20 @@ useEffect(() => {
   }, [setArrangementItemsWithUndo]);
   const saveArrangementSnapshot = React.useCallback((options = {}) => {
     const normalizedItems = normalizeArrangementItems(arrangementItems);
-    if (!normalizedItems.length) return;
     const { mode = "auto" } = options;
     const now = new Date().toISOString();
-    const trimmed = arrangementNameDraft.trim();
     const fallbackName = `Arrangement ${savedArrangements.length + 1}`;
-    const name = trimmed || fallbackName;
+    const name = getArrangementNameFromTitles(
+      arrangementTitleLine1Draft,
+      arrangementTitleLine2Draft,
+      fallbackName
+    );
     const lower = name.toLowerCase();
     const loadedEntry = loadedArrangementId
       ? savedArrangements.find((entry) => entry.id === loadedArrangementId) || null
       : null;
     const isSameNameAsLoaded =
-      !!loadedEntry && trimmed.length > 0 && loadedEntry.name.trim().toLowerCase() === lower;
+      !!loadedEntry && loadedEntry.name.trim().toLowerCase() === lower;
     const byId = loadedArrangementId
       ? savedArrangements.find((entry) => entry.id === loadedArrangementId)
       : null;
@@ -5324,16 +5343,59 @@ useEffect(() => {
       out[idx] = nextEntry;
       return out;
     });
-    setArrangementNameDraft(nextEntry.name);
+    setArrangementNameDraft(
+      getArrangementNameFromTitles(
+        nextEntry.titleLine1,
+        nextEntry.titleLine2,
+        nextEntry.name
+      )
+    );
     setArrangementTitleLine1Draft(nextEntry.titleLine1);
     setArrangementTitleLine2Draft(nextEntry.titleLine2);
     setArrangementComposerDraft(nextEntry.composer);
     setLoadedArrangementId(nextId);
     setArrangementSaveAsOpen(false);
-  }, [arrangementItems, arrangementNameDraft, arrangementTitleLine1Draft, arrangementTitleLine2Draft, arrangementComposerDraft, savedArrangements, loadedArrangementId, pushLocalBeatHistory]);
+  }, [arrangementItems, arrangementTitleLine1Draft, arrangementTitleLine2Draft, arrangementComposerDraft, savedArrangements, loadedArrangementId, pushLocalBeatHistory]);
+  const createNewArrangement = React.useCallback(() => {
+    const now = new Date().toISOString();
+    const nextId = `arrlib-${Math.random().toString(36).slice(2, 10)}`;
+    const nextEntry = {
+      id: nextId,
+      name: `Arrangement ${savedArrangements.length + 1}`,
+      titleLine1: "",
+      titleLine2: "",
+      composer: "",
+      createdAt: now,
+      updatedAt: now,
+      items: [],
+    };
+    pushLocalBeatHistory();
+    setSavedArrangements((prev) => [nextEntry, ...prev]);
+    setArrangementItems([]);
+    setArrangementSelection(null);
+    setArrangementSelectionAnchor(null);
+    setArrangementBarSelection(null);
+    setArrangementBarSelectionAnchor(null);
+    setArrangementNameDraft(
+      getArrangementNameFromTitles(
+        nextEntry.titleLine1,
+        nextEntry.titleLine2,
+        nextEntry.name
+      )
+    );
+    setArrangementTitleLine1Draft("");
+    setArrangementTitleLine2Draft("");
+    setArrangementComposerDraft("");
+    setLoadedArrangementId(nextId);
+    setArrangementSaveAsOpen(false);
+    setArrangementSourcesCollapsed(false);
+    setArrangementDetailsCollapsed(false);
+    setArrangementSourceTab("local");
+    setIsArrangementOpen(true);
+  }, [pushLocalBeatHistory, savedArrangements.length]);
   const loadSavedArrangement = React.useCallback(
     (entry) => {
-      if (!entry || !Array.isArray(entry.items) || entry.items.length < 1) return;
+      if (!entry || !Array.isArray(entry.items)) return;
       if (arrangementPlaybackEnabled) {
         setArrangementPlaybackEnabled(false);
         setArrangementPlaybackIndex(0);
@@ -5344,7 +5406,9 @@ useEffect(() => {
       setArrangementSelectionAnchor(null);
       setArrangementBarSelection(null);
       setArrangementBarSelectionAnchor(null);
-      setArrangementNameDraft(String(entry.name || ""));
+      setArrangementNameDraft(
+        getArrangementNameFromTitles(entry.titleLine1, entry.titleLine2, String(entry.name || ""))
+      );
       setArrangementTitleLine1Draft(String(entry.titleLine1 || ""));
       setArrangementTitleLine2Draft(String(entry.titleLine2 || ""));
       setArrangementComposerDraft(String(entry.composer || ""));
@@ -5359,6 +5423,14 @@ useEffect(() => {
     setLoadedArrangementId((prev) => (prev === entryId ? null : prev));
     setArrangementSaveAsOpen(false);
   }, [pushLocalBeatHistory]);
+  const requestDeleteSavedArrangement = React.useCallback((entry) => {
+    if (!entry?.id) return;
+    if (Array.isArray(entry.items) && entry.items.length > 0) {
+      setPendingArrangementDeleteEntry(entry);
+      return;
+    }
+    deleteSavedArrangement(entry.id);
+  }, [deleteSavedArrangement]);
   const loadBeatIntoEditor = React.useCallback((source, beat) => {
     if (!beat?.payload) return;
     const normalizedSource = source === "public" ? "public" : source === "shared" ? "shared" : "local";
@@ -5407,7 +5479,11 @@ useEffect(() => {
     return {
       v: 1,
       kind: "arrangement",
-      name: arrangementNameDraft.trim() || "Arrangement",
+      name: getArrangementNameFromTitles(
+        arrangementTitleLine1Draft,
+        arrangementTitleLine2Draft,
+        arrangementNameDraft || "Arrangement"
+      ),
       titleLine1: arrangementTitleLine1Draft.trim(),
       titleLine2: arrangementTitleLine2Draft.trim(),
       composer: arrangementComposerDraft.trim(),
@@ -5427,7 +5503,6 @@ useEffect(() => {
   }, [
     arrangementItems,
     getBeatBySourceRef,
-    arrangementNameDraft,
     arrangementTitleLine1Draft,
     arrangementTitleLine2Draft,
     arrangementComposerDraft,
@@ -5494,15 +5569,26 @@ useEffect(() => {
     clearMidiImportPreviewSession();
     setPendingMidiImportMapping(null);
     setPendingMidiTempoPrompt(null);
-    setPendingMidiSplitPrompt(null);
   }, [clearMidiImportPreviewSession, restoreMidiImportPreviewSnapshot]);
   const applyImportedMidiResult = React.useCallback((imported, fileMeta, bpmOverride = null, options = {}) => {
     const replaceLastImport = options?.replaceLastImport === true;
+    const arrangementImportMode =
+      options?.arrangementImportMode === "current-arrangement"
+        ? "current-arrangement"
+        : "new-arrangement";
+    const importedTitleLine1 = String(options?.titleLine1 || "").trim();
+    const importedTitleLine2 = String(options?.titleLine2 || "").trim();
+    const importedAuthor = String(options?.author || "").trim();
     const safeFileName = String(fileMeta?.fileName || "import.mid");
     const safeLastModified = fileMeta?.lastModified || "";
     const preparedImported = buildPreparedImportedMidiResult(imported, bpmOverride);
     if (preparedImported.kind === "arrangement" && Array.isArray(preparedImported.sections) && preparedImported.sections.length > 0) {
       const now = new Date().toISOString();
+      const importedArrangementName = getArrangementNameFromTitles(
+        importedTitleLine1,
+        importedTitleLine2,
+        preparedImported.title || safeFileName.replace(/\.[^.]+$/, "") || `Arrangement ${savedArrangements.length + 1}`
+      );
       pushLocalBeatHistory();
       const previousImportedBeatIds =
         replaceLastImport && Array.isArray(lastMidiImportSession?.generatedBeatIds)
@@ -5510,7 +5596,7 @@ useEffect(() => {
           : null;
       const sectionBeats = preparedImported.sections.map((section, idx) => ({
         id: `local-${Math.random().toString(36).slice(2, 10)}`,
-        name: section.name || `${preparedImported.title || "Imported"} ${idx + 1}`,
+        name: importedArrangementName,
         category: "Groove",
         style: undefined,
         timeSigCategory: `${section.timeSig?.n || 4}/${section.timeSig?.d || 4}`,
@@ -5519,26 +5605,82 @@ useEffect(() => {
         payload: section.payload,
         source: "local",
       }));
+      const nextArrangementId =
+        arrangementImportMode === "new-arrangement"
+          ? (
+              replaceLastImport && lastMidiImportSession?.generatedArrangementId
+                ? String(lastMidiImportSession.generatedArrangementId)
+                : `arrlib-${Math.random().toString(36).slice(2, 10)}`
+            )
+          : null;
+      const nextArrangementRows = sectionBeats.map((beat) => ({
+        id: `arr-${Math.random().toString(36).slice(2, 10)}`,
+        source: "local",
+        beatId: beat.id,
+        repeats: 1,
+        showNotationBeatName: false,
+        notationCustomText: "",
+        notationJoinWithNext: false,
+        notationBarsPerRowCustom: false,
+        notationBarsPerRowOverride: null,
+      }));
       setLocalBeats((prev) => {
         const base = previousImportedBeatIds ? prev.filter((beat) => !previousImportedBeatIds.has(beat.id)) : prev;
         return [...sectionBeats, ...base].slice(0, 500);
       });
-      setArrangementItems(
-        sectionBeats.map((beat) => ({
-          id: `arr-${Math.random().toString(36).slice(2, 10)}`,
-          source: "local",
-          beatId: beat.id,
-          repeats: 1,
-          showNotationBeatName: false,
-          notationCustomText: "",
-          notationJoinWithNext: false,
-          notationBarsPerRowCustom: false,
-          notationBarsPerRowOverride: null,
-        }))
-      );
-      setArrangementNameDraft(preparedImported.title || safeFileName.replace(/\.[^.]+$/, ""));
-      setLoadedArrangementId(null);
-      setArrangementSaveAsOpen(!replaceLastImport);
+      if (arrangementImportMode === "current-arrangement") {
+        setArrangementItemsWithUndo((prev) => {
+          if (!replaceLastImport || !Array.isArray(lastMidiImportSession?.generatedArrangementRowIds)) {
+            return [...prev, ...nextArrangementRows];
+          }
+          const rowIdsToReplace = new Set(lastMidiImportSession.generatedArrangementRowIds);
+          const firstMatchIndex = prev.findIndex((row) => rowIdsToReplace.has(row.id));
+          const base = prev.filter((row) => !rowIdsToReplace.has(row.id));
+          if (firstMatchIndex < 0) return [...base, ...nextArrangementRows];
+          const out = [...base];
+          out.splice(firstMatchIndex, 0, ...nextArrangementRows);
+          return out;
+        });
+      } else {
+        const existingArrangement =
+          replaceLastImport && lastMidiImportSession?.generatedArrangementId
+            ? savedArrangements.find((entry) => entry.id === lastMidiImportSession.generatedArrangementId) || null
+            : null;
+        const nextArrangementEntry = {
+          id: nextArrangementId,
+          name: importedArrangementName,
+          titleLine1: importedTitleLine1 || preparedImported.title || importedArrangementName,
+          titleLine2: importedTitleLine2,
+          composer: importedAuthor || preparedImported.composer || "",
+          createdAt: existingArrangement?.createdAt || now,
+          updatedAt: now,
+          items: nextArrangementRows,
+        };
+        setSavedArrangements((prev) => {
+          const idx = prev.findIndex((entry) => entry.id === nextArrangementId);
+          if (idx < 0) return [nextArrangementEntry, ...prev];
+          const out = [...prev];
+          out[idx] = nextArrangementEntry;
+          return out;
+        });
+        setArrangementItems(nextArrangementRows);
+        setArrangementSelection(null);
+        setArrangementSelectionAnchor(null);
+        setArrangementBarSelection(null);
+        setArrangementBarSelectionAnchor(null);
+        setArrangementNameDraft(
+          getArrangementNameFromTitles(
+            nextArrangementEntry.titleLine1,
+            nextArrangementEntry.titleLine2,
+            nextArrangementEntry.name
+          )
+        );
+        setArrangementTitleLine1Draft(nextArrangementEntry.titleLine1);
+        setArrangementTitleLine2Draft(nextArrangementEntry.titleLine2);
+        setArrangementComposerDraft(nextArrangementEntry.composer);
+        setLoadedArrangementId(nextArrangementId);
+        setArrangementSaveAsOpen(false);
+      }
       setArrangementSourcesCollapsed(false);
       setArrangementDetailsCollapsed(false);
       setArrangementSourceTab("local");
@@ -5561,14 +5703,27 @@ useEffect(() => {
         arrayBuffer: prev?.arrayBuffer || null,
         fileName: safeFileName,
         lastModified: safeLastModified,
-        title: preparedImported.title || prev?.title || "",
-        composer: preparedImported.composer || prev?.composer || "",
+        title: importedTitleLine1 || preparedImported.title || prev?.title || "",
+        titleLine1: importedTitleLine1 || prev?.titleLine1 || preparedImported.title || "",
+        titleLine2: importedTitleLine2 || prev?.titleLine2 || "",
+        author: importedAuthor || prev?.author || preparedImported.composer || "",
+        composer: importedAuthor || preparedImported.composer || prev?.composer || "",
         splitBars: prev?.splitBars || midiImportSplitBars,
         bpm: Math.max(20, Math.min(400, Number(sectionBeats[0]?.bpm) || Number(bpmOverride) || 120)),
         noteAssignments: prev?.noteAssignments || {},
         noteVelocityModes: prev?.noteVelocityModes || {},
+        arrangementImportMode,
         kind: "arrangement",
         generatedBeatIds: sectionBeats.map((beat) => beat.id),
+        generatedArrangementId:
+          arrangementImportMode === "new-arrangement"
+            ? (
+                replaceLastImport && lastMidiImportSession?.generatedArrangementId
+                  ? String(lastMidiImportSession.generatedArrangementId)
+                  : nextArrangementId
+              )
+            : null,
+        generatedArrangementRowIds: nextArrangementRows.map((row) => row.id),
       }));
     } else {
       if (Number.isFinite(Number(preparedImported?.payload?.bpm))) {
@@ -5590,23 +5745,29 @@ useEffect(() => {
         arrayBuffer: prev?.arrayBuffer || null,
         fileName: safeFileName,
         lastModified: safeLastModified,
-        title: preparedImported.title || prev?.title || "",
-        composer: preparedImported.composer || prev?.composer || "",
+        title: importedTitleLine1 || preparedImported.title || prev?.title || "",
+        titleLine1: importedTitleLine1 || prev?.titleLine1 || preparedImported.title || "",
+        titleLine2: importedTitleLine2 || prev?.titleLine2 || "",
+        author: importedAuthor || prev?.author || preparedImported.composer || "",
+        composer: importedAuthor || preparedImported.composer || prev?.composer || "",
         splitBars: prev?.splitBars || midiImportSplitBars,
         bpm: Math.max(20, Math.min(400, Number(preparedImported?.payload?.bpm) || Number(bpmOverride) || 120)),
         noteAssignments: prev?.noteAssignments || {},
         noteVelocityModes: prev?.noteVelocityModes || {},
+        arrangementImportMode,
         kind: "beat",
         generatedBeatIds: [],
+        generatedArrangementId: null,
+        generatedArrangementRowIds: [],
       }));
     }
-    if (preparedImported.composer) setPrintComposer(preparedImported.composer);
-    if (preparedImported.title) setPrintTitle(preparedImported.title);
+    if (importedAuthor || preparedImported.composer) setPrintComposer(importedAuthor || preparedImported.composer);
+    if (importedTitleLine1 || preparedImported.title) setPrintTitle(importedTitleLine1 || preparedImported.title);
     clearMidiImportPreviewSession();
     setPendingMidiImportMapping(null);
     setPendingMidiTempoPrompt(null);
     setIsShareActionsDialogOpen(false);
-  }, [buildPreparedImportedMidiResult, clearMidiImportPreviewSession, lastMidiImportSession, midiImportSplitBars, pushLocalBeatHistory]);
+  }, [buildPreparedImportedMidiResult, clearMidiImportPreviewSession, lastMidiImportSession, midiImportSplitBars, pushLocalBeatHistory, savedArrangements, setArrangementItemsWithUndo]);
   const buildPendingMidiImportMappingState = React.useCallback((session, imported) => {
     const assignments = {};
     const velocityModes = {};
@@ -5632,8 +5793,18 @@ useEffect(() => {
       fileName: session?.fileName || "import.mid",
       lastModified: session?.lastModified || "",
       title: imported.title || session?.title || "",
+      titleLine1:
+        session?.titleLine1 != null
+          ? String(session.titleLine1)
+          : String(imported.title || session?.title || ""),
+      titleLine2: String(session?.titleLine2 || ""),
+      author:
+        session?.author != null
+          ? String(session.author)
+          : String(imported.composer || session?.composer || ""),
       composer: imported.composer || session?.composer || "",
       applyMode: session?.applyMode || "new",
+      arrangementImportMode: session?.arrangementImportMode || "new-arrangement",
       bpm: session?.bpm || "",
       presetId: "manual",
       usedInstrumentIds: Array.isArray(imported.usedInstrumentIds) ? imported.usedInstrumentIds : [],
@@ -5659,7 +5830,6 @@ useEffect(() => {
       applyMode: "update-last",
     }, imported));
     setPendingMidiTempoPrompt(null);
-    setPendingMidiSplitPrompt(null);
     setIsShareActionsDialogOpen(false);
   }, [
     buildPendingMidiImportMappingState,
@@ -5683,8 +5853,12 @@ useEffect(() => {
           fileName: file.name,
           lastModified: file.lastModified || "",
           title: imported.title || "",
+          titleLine1: imported.title || "",
+          titleLine2: "",
+          author: imported.composer || "",
           composer: imported.composer || "",
           applyMode: "new",
+          arrangementImportMode: midiArrangementImportMode,
           splitBars: midiImportSplitBars,
           noteAssignments: {},
           noteVelocityModes: {},
@@ -5698,6 +5872,11 @@ useEffect(() => {
         noteAssignments: {},
         noteVelocityModes: {},
         applyMode: "new",
+        arrangementImportMode: midiArrangementImportMode,
+        splitBars: midiImportSplitBars,
+        titleLine1: imported.title || "",
+        titleLine2: "",
+        author: imported.composer || "",
         fileMeta: {
           fileName: file.name,
           lastModified: file.lastModified || "",
@@ -5706,7 +5885,7 @@ useEffect(() => {
       });
       setIsShareActionsDialogOpen(false);
     },
-    [bpm, buildPendingMidiImportMappingState, getSuggestedImportedMidiBpm, midiImportSplitBars, midiImportVelocityThresholds]
+    [bpm, buildPendingMidiImportMappingState, getSuggestedImportedMidiBpm, midiArrangementImportMode, midiImportSplitBars, midiImportVelocityThresholds]
   );
   const confirmPendingMidiImportMapping = React.useCallback(() => {
     if (!pendingMidiImportMapping?.arrayBuffer) return;
@@ -5745,14 +5924,21 @@ useEffect(() => {
         fileName: pendingMidiImportMapping.fileName || prev?.fileName || "import.mid",
         lastModified: pendingMidiImportMapping.lastModified || prev?.lastModified || "",
         title: imported.title || prev?.title || "",
+        titleLine1: pendingMidiImportMapping.titleLine1 || prev?.titleLine1 || imported.title || "",
+        titleLine2: pendingMidiImportMapping.titleLine2 || prev?.titleLine2 || "",
+        author: pendingMidiImportMapping.author || prev?.author || imported.composer || "",
         composer: imported.composer || prev?.composer || "",
         splitBars:
           Math.max(1, Math.min(8, Math.round(Number(prev?.splitBars) || midiImportSplitBars))),
         bpm: nextBpm,
         noteAssignments: pendingMidiImportMapping.noteAssignments || {},
         noteVelocityModes: pendingMidiImportMapping.noteVelocityModes || {},
+        arrangementImportMode:
+          pendingMidiImportMapping.arrangementImportMode || prev?.arrangementImportMode || "new-arrangement",
         kind: imported.kind === "arrangement" ? "arrangement" : "beat",
         generatedBeatIds: prev?.generatedBeatIds || [],
+        generatedArrangementId: prev?.generatedArrangementId || null,
+        generatedArrangementRowIds: prev?.generatedArrangementRowIds || [],
       }));
       setPendingMidiImportMapping(null);
       applyImportedMidiResult(
@@ -5762,21 +5948,35 @@ useEffect(() => {
           lastModified: pendingMidiImportMapping.lastModified || "",
         },
         nextBpm,
-        { replaceLastImport: true }
+        {
+          replaceLastImport: true,
+          arrangementImportMode:
+            pendingMidiImportMapping.arrangementImportMode || "new-arrangement",
+          titleLine1: pendingMidiImportMapping.titleLine1 || "",
+          titleLine2: pendingMidiImportMapping.titleLine2 || "",
+          author: pendingMidiImportMapping.author || "",
+        }
       );
       return;
     }
     setPendingMidiImportMapping(null);
-    setPendingMidiTempoPrompt({
+      setPendingMidiTempoPrompt({
       imported,
       arrayBuffer: pendingMidiImportMapping.arrayBuffer,
       noteAssignments: pendingMidiImportMapping.noteAssignments || {},
-      noteVelocityModes: pendingMidiImportMapping.noteVelocityModes || {},
-      applyMode: pendingMidiImportMapping.applyMode || "new",
-      fileMeta: {
-        fileName: pendingMidiImportMapping.fileName,
-        lastModified: pendingMidiImportMapping.lastModified || "",
-      },
+        noteVelocityModes: pendingMidiImportMapping.noteVelocityModes || {},
+        applyMode: pendingMidiImportMapping.applyMode || "new",
+        arrangementImportMode:
+          pendingMidiImportMapping.arrangementImportMode || "new-arrangement",
+        titleLine1: pendingMidiImportMapping.titleLine1 || imported.title || "",
+        titleLine2: pendingMidiImportMapping.titleLine2 || "",
+        author: pendingMidiImportMapping.author || imported.composer || "",
+        splitBars:
+          Math.max(1, Math.min(8, Math.round(Number(pendingMidiImportMapping.splitBars) || midiImportSplitBars))),
+        fileMeta: {
+          fileName: pendingMidiImportMapping.fileName,
+          lastModified: pendingMidiImportMapping.lastModified || "",
+        },
       bpm: getSuggestedImportedMidiBpm(imported, bpm),
     });
   }, [
@@ -5792,84 +5992,72 @@ useEffect(() => {
   const confirmPendingMidiTempoPrompt = React.useCallback(() => {
     if (!pendingMidiTempoPrompt?.imported) return;
     const nextBpm = clampBpm(Math.round(Number(pendingMidiTempoPrompt.bpm) || bpm));
-    if (pendingMidiTempoPrompt.imported.kind === "arrangement") {
-      setPendingMidiSplitPrompt({
-        arrayBuffer: pendingMidiTempoPrompt.arrayBuffer,
-        fileMeta: pendingMidiTempoPrompt.fileMeta || {},
-        noteAssignments: pendingMidiTempoPrompt.noteAssignments || {},
-        noteVelocityModes: pendingMidiTempoPrompt.noteVelocityModes || {},
-        applyMode: pendingMidiTempoPrompt.applyMode || "new",
-        bpm: nextBpm,
-        splitBars: midiImportSplitBars,
-      });
-      setPendingMidiTempoPrompt(null);
-      return;
-    }
+    const importedForApply =
+      pendingMidiTempoPrompt.imported.kind === "arrangement"
+        ? importDrumMidi({
+            arrayBuffer: pendingMidiTempoPrompt.arrayBuffer,
+            instruments: ALL_INSTRUMENTS,
+            arrangementSplitBars:
+              Math.max(1, Math.min(8, Math.round(Number(pendingMidiTempoPrompt.splitBars) || midiImportSplitBars))),
+            noteAssignments: pendingMidiTempoPrompt.noteAssignments || {},
+            noteVelocityModes: pendingMidiTempoPrompt.noteVelocityModes || {},
+            velocityThresholds: midiImportVelocityThresholds,
+          })
+        : pendingMidiTempoPrompt.imported;
+    if (importedForApply.kind === "needs-mapping") return;
     setLastMidiImportSession({
       arrayBuffer: pendingMidiTempoPrompt.arrayBuffer,
       fileName: pendingMidiTempoPrompt.fileMeta?.fileName || "import.mid",
       lastModified: pendingMidiTempoPrompt.fileMeta?.lastModified || "",
-      title: pendingMidiTempoPrompt.imported.title || "",
-      composer: pendingMidiTempoPrompt.imported.composer || "",
-      splitBars: midiImportSplitBars,
+      title: importedForApply.title || "",
+      titleLine1: pendingMidiTempoPrompt.titleLine1 || importedForApply.title || "",
+      titleLine2: pendingMidiTempoPrompt.titleLine2 || "",
+      author: pendingMidiTempoPrompt.author || importedForApply.composer || "",
+      composer: importedForApply.composer || "",
+      splitBars:
+        Math.max(1, Math.min(8, Math.round(Number(pendingMidiTempoPrompt.splitBars) || midiImportSplitBars))),
       bpm: nextBpm,
       noteAssignments: pendingMidiTempoPrompt.noteAssignments || {},
       noteVelocityModes: pendingMidiTempoPrompt.noteVelocityModes || {},
+      arrangementImportMode:
+        pendingMidiTempoPrompt.arrangementImportMode || "new-arrangement",
     });
     setLastMidiImportSession((prev) => ({
       ...(prev || {}),
       arrayBuffer: pendingMidiTempoPrompt.arrayBuffer,
       fileName: pendingMidiTempoPrompt.fileMeta?.fileName || "import.mid",
       lastModified: pendingMidiTempoPrompt.fileMeta?.lastModified || "",
-      title: pendingMidiTempoPrompt.imported.title || "",
-      composer: pendingMidiTempoPrompt.imported.composer || "",
-      splitBars: midiImportSplitBars,
+      title: importedForApply.title || "",
+      titleLine1: pendingMidiTempoPrompt.titleLine1 || prev?.titleLine1 || importedForApply.title || "",
+      titleLine2: pendingMidiTempoPrompt.titleLine2 || prev?.titleLine2 || "",
+      author: pendingMidiTempoPrompt.author || prev?.author || importedForApply.composer || "",
+      composer: importedForApply.composer || "",
+      splitBars:
+        Math.max(1, Math.min(8, Math.round(Number(pendingMidiTempoPrompt.splitBars) || midiImportSplitBars))),
       bpm: nextBpm,
       noteAssignments: pendingMidiTempoPrompt.noteAssignments || {},
       noteVelocityModes: pendingMidiTempoPrompt.noteVelocityModes || {},
+      arrangementImportMode:
+        pendingMidiTempoPrompt.arrangementImportMode || "new-arrangement",
       kind: prev?.kind || "beat",
       generatedBeatIds: prev?.generatedBeatIds || [],
+      generatedArrangementId: prev?.generatedArrangementId || null,
+      generatedArrangementRowIds: prev?.generatedArrangementRowIds || [],
     }));
     applyImportedMidiResult(
-      pendingMidiTempoPrompt.imported,
+      importedForApply,
       pendingMidiTempoPrompt.fileMeta || {},
       nextBpm,
-      { replaceLastImport: pendingMidiTempoPrompt.applyMode === "update-last" }
+      {
+        replaceLastImport: pendingMidiTempoPrompt.applyMode === "update-last",
+        arrangementImportMode:
+          pendingMidiTempoPrompt.arrangementImportMode || "new-arrangement",
+        titleLine1: pendingMidiTempoPrompt.titleLine1 || "",
+        titleLine2: pendingMidiTempoPrompt.titleLine2 || "",
+        author: pendingMidiTempoPrompt.author || "",
+      }
     );
-  }, [applyImportedMidiResult, bpm, clampBpm, midiImportSplitBars, pendingMidiTempoPrompt]);
-  const confirmPendingMidiSplitPrompt = React.useCallback(() => {
-    if (!pendingMidiSplitPrompt?.arrayBuffer) return;
-    const imported = importDrumMidi({
-      arrayBuffer: pendingMidiSplitPrompt.arrayBuffer,
-      instruments: ALL_INSTRUMENTS,
-      arrangementSplitBars: pendingMidiSplitPrompt.splitBars,
-      noteAssignments: pendingMidiSplitPrompt.noteAssignments || {},
-      noteVelocityModes: pendingMidiSplitPrompt.noteVelocityModes || {},
-      velocityThresholds: midiImportVelocityThresholds,
-    });
-    if (imported.kind === "needs-mapping") return;
-    setLastMidiImportSession((prev) => ({
-      ...(prev || {}),
-      arrayBuffer: pendingMidiSplitPrompt.arrayBuffer,
-      fileName: pendingMidiSplitPrompt.fileMeta?.fileName || "import.mid",
-      lastModified: pendingMidiSplitPrompt.fileMeta?.lastModified || "",
-      title: imported.title || "",
-      composer: imported.composer || "",
-      splitBars: pendingMidiSplitPrompt.splitBars,
-      bpm: pendingMidiSplitPrompt.bpm,
-      noteAssignments: pendingMidiSplitPrompt.noteAssignments || {},
-      noteVelocityModes: pendingMidiSplitPrompt.noteVelocityModes || {},
-      kind: prev?.kind || "arrangement",
-      generatedBeatIds: prev?.generatedBeatIds || [],
-    }));
-    applyImportedMidiResult(
-      imported,
-      pendingMidiSplitPrompt.fileMeta || {},
-      pendingMidiSplitPrompt.bpm,
-      { replaceLastImport: pendingMidiSplitPrompt.applyMode === "update-last" }
-    );
-    setPendingMidiSplitPrompt(null);
-  }, [applyImportedMidiResult, midiImportVelocityThresholds, pendingMidiSplitPrompt]);
+  }, [applyImportedMidiResult, bpm, clampBpm, midiImportSplitBars, midiImportVelocityThresholds, pendingMidiTempoPrompt]);
   const pendingMidiImportVelocityRanges = React.useMemo(() => {
     const arrayBuffer = pendingMidiImportMapping?.arrayBuffer || pendingMidiTempoPrompt?.arrayBuffer;
     if (!arrayBuffer) return null;
@@ -5878,7 +6066,16 @@ useEffect(() => {
       const imported = importDrumMidi({
         arrayBuffer,
         instruments: ALL_INSTRUMENTS,
-        arrangementSplitBars: midiImportSplitBars,
+        arrangementSplitBars:
+          Math.max(
+            1,
+            Math.min(
+              8,
+              Math.round(
+                Number(pendingMidiImportMapping?.splitBars || pendingMidiTempoPrompt?.splitBars || midiImportSplitBars)
+              ) || midiImportSplitBars
+            )
+          ),
         noteAssignments,
         noteVelocityModes:
           pendingMidiImportMapping?.noteVelocityModes || pendingMidiTempoPrompt?.noteVelocityModes || {},
@@ -6041,6 +6238,29 @@ useEffect(() => {
     if (!savedArrangements.length || !loadedArrangementId) return null;
     return savedArrangements.find((entry) => entry.id === loadedArrangementId) || null;
   }, [savedArrangements, loadedArrangementId]);
+  const arrangementDisplayName = React.useMemo(
+    () =>
+      getArrangementNameFromTitles(
+        arrangementTitleLine1Draft,
+        arrangementTitleLine2Draft,
+        arrangementNameDraft || selectedSavedArrangementEntry?.name || "Arrangement"
+      ),
+    [
+      arrangementTitleLine1Draft,
+      arrangementTitleLine2Draft,
+      arrangementNameDraft,
+      selectedSavedArrangementEntry,
+    ]
+  );
+  const sortedSavedArrangements = React.useMemo(() => {
+    const byMostRecent = (a, b) => {
+      const aTime = new Date(a?.updatedAt || a?.createdAt || 0).getTime();
+      const bTime = new Date(b?.updatedAt || b?.createdAt || 0).getTime();
+      if (aTime !== bTime) return bTime - aTime;
+      return String(a?.name || "").localeCompare(String(b?.name || ""));
+    };
+    return [...savedArrangements].sort(byMostRecent);
+  }, [savedArrangements]);
   const arrangementHasPendingUpdate = React.useMemo(() => {
     if (!selectedSavedArrangementEntry) return false;
     const currentItems = normalizeArrangementItems(arrangementItems);
@@ -6074,17 +6294,29 @@ useEffect(() => {
         savedArrangements.find((entry) => entry.id === loadedArrangementId)) ||
       null;
     if (!activeEntry) {
-      const fallbackEntry = savedArrangements[0] || null;
+      const fallbackEntry = sortedSavedArrangements[0] || null;
       if (fallbackEntry) {
         setLoadedArrangementId(fallbackEntry.id);
-        setArrangementNameDraft(String(fallbackEntry.name || ""));
+        setArrangementNameDraft(
+          getArrangementNameFromTitles(
+            fallbackEntry.titleLine1,
+            fallbackEntry.titleLine2,
+            String(fallbackEntry.name || "")
+          )
+        );
         setArrangementSaveAsOpen(false);
       }
       return;
     }
-    setArrangementNameDraft(String(activeEntry.name || ""));
+    setArrangementNameDraft(
+      getArrangementNameFromTitles(
+        activeEntry.titleLine1,
+        activeEntry.titleLine2,
+        String(activeEntry.name || "")
+      )
+    );
     setArrangementSaveAsOpen(false);
-  }, [loadedArrangementId, savedArrangements]);
+  }, [loadedArrangementId, savedArrangements, sortedSavedArrangements]);
   useEffect(() => {
     if (!arrangementSelection) return;
     if (!arrangementRows.length) {
@@ -7854,7 +8086,13 @@ useEffect(() => {
     setArrangementBarSelection(null);
     setArrangementBarSelectionAnchor(null);
     setArrangementItems(nextItems);
-    setArrangementNameDraft(String(payload?.name || ""));
+    setArrangementNameDraft(
+      getArrangementNameFromTitles(
+        payload?.titleLine1,
+        payload?.titleLine2,
+        String(payload?.name || "")
+      )
+    );
     setArrangementTitleLine1Draft(String(payload?.titleLine1 || ""));
     setArrangementTitleLine2Draft(String(payload?.titleLine2 || ""));
     setArrangementComposerDraft(String(payload?.composer || ""));
@@ -8160,12 +8398,10 @@ useEffect(() => {
       const exportSource =
         arrangementNotationExportRef.current ||
         arrangementNotationVisiblePagesRef.current;
+      const arrangementName = arrangementDisplayName || "Arrangement";
       await exportArrangementPdf(exportSource, {
-        title:
-          arrangementNameDraft.trim() ||
-          arrangementTitleLine1Draft.trim() ||
-          "arrangement-sheet",
-        titleLine1: arrangementTitleLine1Draft.trim() || arrangementNameDraft.trim() || "Arrangement",
+        title: arrangementName || "arrangement-sheet",
+        titleLine1: arrangementTitleLine1Draft.trim() || arrangementName || "Arrangement",
         titleLine2: arrangementTitleLine2Draft.trim(),
         composer: arrangementComposerDraft.trim(),
         qrText,
@@ -8176,7 +8412,7 @@ useEffect(() => {
       alert(err?.message || "Failed to export arrangement PDF");
     }
   }, [
-    arrangementNameDraft,
+    arrangementDisplayName,
     arrangementTitleLine1Draft,
     arrangementTitleLine2Draft,
     arrangementComposerDraft,
@@ -8222,7 +8458,7 @@ useEffect(() => {
           {pageIdx === 0 && (
             <div className="mb-6 flex justify-center">
               <ArrangementPageHeaderSvg
-                titleLine1={arrangementTitleLine1Draft.trim() || arrangementNameDraft.trim() || "Arrangement"}
+                titleLine1={arrangementTitleLine1Draft.trim() || arrangementDisplayName || "Arrangement"}
                 titleLine2={arrangementTitleLine2Draft.trim()}
                 composer={arrangementComposerDraft.trim()}
                 dark={dark}
@@ -10432,9 +10668,17 @@ useEffect(() => {
                   <div className="flex items-center gap-2">
                   </div>
                 </div>
-                {savedArrangements.length > 0 && (
-                  <div className="mt-2 space-y-1.5">
-                    <div className="flex items-center gap-2">
+                <div className="mt-2 space-y-1.5">
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={createNewArrangement}
+                      className="px-2 py-1 rounded border border-neutral-700 text-[11px] text-neutral-200 hover:bg-neutral-800/60"
+                      title="Create a new empty arrangement"
+                    >
+                      New
+                    </button>
+                    {savedArrangements.length > 0 && (
                       <select
                         value={loadedArrangementId || ""}
                         onChange={(e) => {
@@ -10449,12 +10693,13 @@ useEffect(() => {
                         }}
                         className="min-w-0 flex-1 bg-neutral-900 border border-neutral-700 rounded px-2 py-1 text-xs text-white"
                       >
-                        {savedArrangements.map((entry) => (
+                        {sortedSavedArrangements.map((entry) => (
                           <option key={`arr-save-opt-${entry.id}`} value={entry.id}>
                             {entry.name}
                           </option>
                         ))}
                       </select>
+                    )}
                       <button
                         ref={arrangementTitleMenuButtonRef}
                         type="button"
@@ -10520,12 +10765,10 @@ useEffect(() => {
                         onClick={() => saveArrangementSnapshot({ mode: "update" })}
                         disabled={
                           !selectedSavedArrangementEntry ||
-                          arrangementItems.length < 1 ||
                           !arrangementHasPendingUpdate
                         }
                         className={`px-2 py-1 rounded border text-[11px] ${
                           selectedSavedArrangementEntry &&
-                          arrangementItems.length > 0 &&
                           arrangementHasPendingUpdate
                             ? "border-neutral-700 text-neutral-200 hover:bg-neutral-800/60"
                             : "border-neutral-800 text-neutral-500 bg-neutral-900/60 cursor-not-allowed"
@@ -10536,17 +10779,11 @@ useEffect(() => {
                       </button>
                       <button
                         type="button"
-                        onClick={() => {
-                          setArrangementNameDraft(selectedSavedArrangementEntry?.name || arrangementNameDraft);
-                          setArrangementSaveAsOpen((v) => !v);
-                        }}
-                        disabled={arrangementItems.length < 1}
+                        onClick={() => setArrangementSaveAsOpen((v) => !v)}
                         className={`px-2 py-1 rounded border text-[11px] ${
-                          arrangementItems.length > 0
-                            ? arrangementSaveAsOpen
-                              ? "border-neutral-600 text-white bg-neutral-800"
-                              : "border-neutral-700 text-neutral-200 hover:bg-neutral-800/60"
-                            : "border-neutral-800 text-neutral-500 bg-neutral-900/60 cursor-not-allowed"
+                          arrangementSaveAsOpen
+                            ? "border-neutral-600 text-white bg-neutral-800"
+                            : "border-neutral-700 text-neutral-200 hover:bg-neutral-800/60"
                         }`}
                         title="Save as new arrangement"
                       >
@@ -10556,7 +10793,7 @@ useEffect(() => {
                         type="button"
                         onClick={() => {
                           if (!selectedSavedArrangementEntry) return;
-                          deleteSavedArrangement(selectedSavedArrangementEntry.id);
+                          requestDeleteSavedArrangement(selectedSavedArrangementEntry);
                         }}
                         disabled={!selectedSavedArrangementEntry}
                         className={`px-2 py-1 rounded border text-[11px] ${
@@ -10569,33 +10806,24 @@ useEffect(() => {
                       >
                         ×
                       </button>
-                    </div>
                   </div>
-                )}
+                </div>
                 {arrangementSaveAsOpen && (
                   <div className="mt-3 flex flex-wrap items-center gap-2">
-                    <input
-                      type="text"
-                      value={arrangementNameDraft}
-                      onChange={(e) => setArrangementNameDraft(e.target.value)}
-                      onFocus={(e) => e.target.select()}
-                      placeholder="Arrangement name"
-                      autoFocus
-                      className="min-w-[180px] flex-1 bg-neutral-900 border border-neutral-700 rounded px-2 py-1 text-sm text-white"
-                    />
+                      <div className="min-w-[180px] flex-1 rounded border border-neutral-800 bg-neutral-950/40 px-2 py-1 text-sm text-neutral-300">
+                        {arrangementDisplayName || `Arrangement ${savedArrangements.length + 1}`}
+                      </div>
                     <button
                       type="button"
                       onClick={() => saveArrangementSnapshot({ mode: "saveAs" })}
-                      disabled={arrangementItems.length < 1}
-                      className={`px-2.5 py-1 rounded border text-sm ${
-                        arrangementItems.length > 0
-                          ? "border-neutral-700 text-white bg-neutral-800 hover:bg-neutral-700/60"
-                          : "border-neutral-800 text-neutral-500 bg-neutral-900/60 cursor-not-allowed"
-                      }`}
+                      className="px-2.5 py-1 rounded border border-neutral-700 text-sm text-white bg-neutral-800 hover:bg-neutral-700/60"
                       title="Save as new arrangement"
                     >
                       Save
                     </button>
+                    <div className="w-full text-[11px] text-neutral-500">
+                      Arrangement name is generated from Title line 1 and Title line 2.
+                    </div>
                   </div>
                 )}
                 <div ref={arrangementListRef} className="mt-3 max-h-[52vh] overflow-auto pr-1">
@@ -11048,7 +11276,7 @@ useEffect(() => {
                     <div className={`text-[2.85rem] font-normal leading-tight ${
                       arrangementNotationTheme === "light" ? "text-neutral-900" : "text-neutral-100"
                     }`}>
-                      {arrangementTitleLine1Draft.trim() || arrangementNameDraft.trim() || "Arrangement"}
+                      {arrangementTitleLine1Draft.trim() || arrangementDisplayName || "Arrangement"}
                     </div>
                     {arrangementTitleLine2Draft.trim() ? (
                       <div className={`mt-1 text-[2.85rem] font-normal leading-tight ${
@@ -11791,11 +12019,7 @@ useEffect(() => {
                   type="button"
                   onClick={() => {
                     setIsShareActionsDialogOpen(false);
-                    setPrintTitle(
-                      arrangementTitleLine1Draft.trim() ||
-                      arrangementNameDraft.trim() ||
-                      "Arrangement"
-                    );
+                    setPrintTitle(arrangementDisplayName || "Arrangement");
                     setPrintComposer(arrangementComposerDraft.trim());
                     setMidiExportMode("arrangement");
                     setIsMidiDialogOpen(true);
@@ -11821,7 +12045,7 @@ useEffect(() => {
                     midiImportInputRef.current?.click();
                   }}
                   className="rounded border border-neutral-700 px-3 py-2 text-left text-sm text-neutral-200 hover:bg-neutral-800/60"
-                  title="Import MIDI into the current beat"
+                  title="Import MIDI"
                 >
                   MIDI
                 </button>
@@ -12322,7 +12546,7 @@ useEffect(() => {
             className="w-full max-w-md rounded-xl border border-neutral-700 bg-neutral-900 p-4 md:p-5"
             onMouseDown={(e) => e.stopPropagation()}
           >
-            <h3 className="text-base font-semibold">Set MIDI Tempo</h3>
+            <h3 className="text-base font-semibold">Import MIDI</h3>
             <p className="mt-2 text-sm text-neutral-300">
               {pendingMidiTempoPrompt.imported?.hasTempo
                 ? "This MIDI file includes tempo information. Adjust the BPM if you want to override it for import."
@@ -12354,6 +12578,116 @@ useEffect(() => {
                 className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1.5 text-sm text-white"
               />
             </label>
+            {pendingMidiTempoPrompt.imported?.kind === "arrangement" && (
+              <div className="mt-4 grid grid-cols-1 gap-3">
+                <label className="text-sm text-neutral-300 flex flex-col gap-1">
+                  <span>Title line 1</span>
+                  <input
+                    type="text"
+                    value={pendingMidiTempoPrompt.titleLine1 || ""}
+                    onChange={(e) =>
+                      setPendingMidiTempoPrompt((prev) => (
+                        prev ? { ...prev, titleLine1: e.target.value } : prev
+                      ))
+                    }
+                    className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1.5 text-sm text-white"
+                  />
+                </label>
+                <label className="text-sm text-neutral-300 flex flex-col gap-1">
+                  <span>Title line 2</span>
+                  <input
+                    type="text"
+                    value={pendingMidiTempoPrompt.titleLine2 || ""}
+                    onChange={(e) =>
+                      setPendingMidiTempoPrompt((prev) => (
+                        prev ? { ...prev, titleLine2: e.target.value } : prev
+                      ))
+                    }
+                    className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1.5 text-sm text-white"
+                  />
+                </label>
+                <label className="text-sm text-neutral-300 flex flex-col gap-1">
+                  <span>Author</span>
+                  <input
+                    type="text"
+                    value={pendingMidiTempoPrompt.author || ""}
+                    onChange={(e) =>
+                      setPendingMidiTempoPrompt((prev) => (
+                        prev ? { ...prev, author: e.target.value } : prev
+                      ))
+                    }
+                    className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1.5 text-sm text-white"
+                  />
+                </label>
+                <label className="text-sm text-neutral-300 flex flex-col gap-1">
+                  <span>Import into</span>
+                  <select
+                    value={pendingMidiTempoPrompt.arrangementImportMode || "new-arrangement"}
+                    onChange={(e) => {
+                      const nextValue =
+                        e.target.value === "current-arrangement"
+                          ? "current-arrangement"
+                          : "new-arrangement";
+                      setMidiArrangementImportMode(nextValue);
+                      setPendingMidiTempoPrompt((prev) => (
+                        prev ? { ...prev, arrangementImportMode: nextValue } : prev
+                      ));
+                    }}
+                    className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1.5 text-sm text-white"
+                  >
+                    <option value="new-arrangement">New saved arrangement</option>
+                    <option value="current-arrangement">Current arrangement</option>
+                  </select>
+                </label>
+                <div className="flex items-center justify-between rounded border border-neutral-800 bg-neutral-950/40 px-3 py-2 text-sm">
+                  <span className="text-neutral-400">Bars per section</span>
+                  <div className="flex items-center overflow-hidden rounded border border-neutral-700">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setPendingMidiTempoPrompt((prev) =>
+                          prev ? { ...prev, splitBars: Math.max(1, Number(prev.splitBars || 1) - 1) } : prev
+                        )
+                      }
+                      className="w-9 h-9 border-r border-neutral-700 text-neutral-200 hover:bg-neutral-800/60"
+                      aria-label="Reduce MIDI arrangement split size"
+                    >
+                      -
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setPendingMidiTempoPrompt((prev) =>
+                          prev
+                            ? {
+                                ...prev,
+                                splitBars: Number(prev.splitBars) === 2 ? 1 : 2,
+                              }
+                            : prev
+                        )
+                      }
+                      className="min-w-[86px] h-9 px-3 text-neutral-100 hover:bg-neutral-800/60"
+                      aria-label="Toggle MIDI arrangement split size"
+                      title="Toggle between 1 bar and the last larger split size"
+                    >
+                      {pendingMidiTempoPrompt.splitBars || 1} {(pendingMidiTempoPrompt.splitBars || 1) === 1 ? "bar" : "bars"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setPendingMidiTempoPrompt((prev) =>
+                          prev ? { ...prev, splitBars: Math.min(8, Number(prev.splitBars || 1) + 1) } : prev
+                        )
+                      }
+                      className="w-9 h-9 border-l border-neutral-700 text-neutral-200 hover:bg-neutral-800/60"
+                      aria-label="Increase MIDI arrangement split size"
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
             <div className="mt-4 flex items-center justify-end gap-2">
               <button
                 type="button"
@@ -12374,80 +12708,36 @@ useEffect(() => {
         </div>
       )}
 
-      {pendingMidiSplitPrompt && (
+      {pendingArrangementDeleteEntry && (
         <div
           className="fixed inset-0 z-[89] bg-black/60 p-4 flex items-center justify-center"
-          onMouseDown={cancelPendingMidiImport}
+          onMouseDown={() => setPendingArrangementDeleteEntry(null)}
         >
           <div
             className="w-full max-w-md rounded-xl border border-neutral-700 bg-neutral-900 p-4 md:p-5"
             onMouseDown={(e) => e.stopPropagation()}
           >
-            <h3 className="text-base font-semibold">Split Arrangement</h3>
+            <h3 className="text-base font-semibold">Delete Arrangement</h3>
             <p className="mt-2 text-sm text-neutral-300">
-              Choose how many bars should be grouped into each imported arrangement section.
+              {`"${pendingArrangementDeleteEntry.name || "Untitled Arrangement"}" contains beats. Delete it anyway?`}
             </p>
-            <div className="mt-4 flex items-center justify-between rounded border border-neutral-800 bg-neutral-950/40 px-3 py-2 text-sm">
-              <span className="text-neutral-400">Bars per section</span>
-              <div className="flex items-center overflow-hidden rounded border border-neutral-700">
-                <button
-                  type="button"
-                  onClick={() =>
-                    setPendingMidiSplitPrompt((prev) =>
-                      prev ? { ...prev, splitBars: Math.max(1, Number(prev.splitBars || 1) - 1) } : prev
-                    )
-                  }
-                  className="w-9 h-9 border-r border-neutral-700 text-neutral-200 hover:bg-neutral-800/60"
-                  aria-label="Reduce MIDI arrangement split size"
-                >
-                  -
-                </button>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setPendingMidiSplitPrompt((prev) =>
-                      prev
-                        ? {
-                            ...prev,
-                            splitBars: Number(prev.splitBars) === 2 ? 1 : 2,
-                          }
-                        : prev
-                    )
-                  }
-                  className="min-w-[86px] h-9 px-3 text-neutral-100 hover:bg-neutral-800/60"
-                  aria-label="Toggle MIDI arrangement split size"
-                  title="Toggle between 1 bar and the last larger split size"
-                >
-                  {pendingMidiSplitPrompt.splitBars} {pendingMidiSplitPrompt.splitBars === 1 ? "bar" : "bars"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setPendingMidiSplitPrompt((prev) =>
-                      prev ? { ...prev, splitBars: Math.min(8, Number(prev.splitBars || 1) + 1) } : prev
-                    )
-                  }
-                  className="w-9 h-9 border-l border-neutral-700 text-neutral-200 hover:bg-neutral-800/60"
-                  aria-label="Increase MIDI arrangement split size"
-                >
-                  +
-                </button>
-              </div>
-            </div>
             <div className="mt-4 flex items-center justify-end gap-2">
               <button
                 type="button"
-                onClick={cancelPendingMidiImport}
+                onClick={() => setPendingArrangementDeleteEntry(null)}
                 className="px-3 py-1.5 rounded border border-neutral-700 text-sm text-neutral-300 hover:bg-neutral-800/60"
               >
                 Cancel
               </button>
               <button
                 type="button"
-                onClick={confirmPendingMidiSplitPrompt}
-                className="px-3 py-1.5 rounded border border-neutral-700 text-sm text-white bg-neutral-800 hover:bg-neutral-700/60"
+                onClick={() => {
+                  deleteSavedArrangement(pendingArrangementDeleteEntry.id);
+                  setPendingArrangementDeleteEntry(null);
+                }}
+                className="px-3 py-1.5 rounded border border-red-900 text-sm text-red-100 bg-red-950/40 hover:bg-red-900/40"
               >
-                Import
+                Delete
               </button>
             </div>
           </div>
@@ -12614,7 +12904,7 @@ useEffect(() => {
                         instruments: ALL_INSTRUMENTS,
                         title: printTitle.trim(),
                         composer: printComposer.trim(),
-                        filename: printTitle.trim() || arrangementNameDraft.trim() || "Drum Arrangement",
+                        filename: printTitle.trim() || arrangementDisplayName || "Drum Arrangement",
                       });
                     } else {
                       exportDrumMidi({
