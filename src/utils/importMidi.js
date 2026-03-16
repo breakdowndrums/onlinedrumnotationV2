@@ -147,23 +147,94 @@ function buildInstrumentLookup(instruments) {
   return { byMidi, byId };
 }
 
-function hasNoteAssignment(noteAssignments, note) {
+function buildSourceAssignmentKey(trackIndex, note) {
+  return `t${Math.max(0, Number(trackIndex) || 0)}:n${Math.max(0, Number(note) || 0)}`;
+}
+
+function hasNoteAssignment(noteAssignments, note, trackIndex = null) {
+  const sourceKey =
+    trackIndex == null ? "" : buildSourceAssignmentKey(trackIndex, note);
   return !!(
     noteAssignments &&
-    Object.prototype.hasOwnProperty.call(noteAssignments, String(note))
+    ((sourceKey && Object.prototype.hasOwnProperty.call(noteAssignments, sourceKey)) ||
+      Object.prototype.hasOwnProperty.call(noteAssignments, String(note)))
   );
 }
 
-function getImportedInstrumentForNote(note, lookups, noteAssignments) {
-  if (hasNoteAssignment(noteAssignments, note)) {
-    const assignedId = String(noteAssignments[String(note)] || "").trim();
-    if (!assignedId || assignedId === "ignore") return null;
+function getAssignedInstrumentId(noteAssignments, note, trackIndex = null) {
+  const sourceKey =
+    trackIndex == null ? "" : buildSourceAssignmentKey(trackIndex, note);
+  if (noteAssignments && sourceKey && Object.prototype.hasOwnProperty.call(noteAssignments, sourceKey)) {
+    return String(noteAssignments[sourceKey] || "").trim();
+  }
+  if (noteAssignments && Object.prototype.hasOwnProperty.call(noteAssignments, String(note))) {
+    return String(noteAssignments[String(note)] || "").trim();
+  }
+  return "";
+}
+
+function getAssignedVelocityMode(noteVelocityModes, note, trackIndex = null) {
+  const sourceKey =
+    trackIndex == null ? "" : buildSourceAssignmentKey(trackIndex, note);
+  const raw =
+    noteVelocityModes && sourceKey && Object.prototype.hasOwnProperty.call(noteVelocityModes, sourceKey)
+      ? noteVelocityModes[sourceKey]
+      : noteVelocityModes && Object.prototype.hasOwnProperty.call(noteVelocityModes, String(note))
+        ? noteVelocityModes[String(note)]
+        : "auto";
+  return ["auto", "ghost", "normal", "accent"].includes(String(raw)) ? String(raw) : "auto";
+}
+
+function getImportedInstrumentForEvent(event, lookups, noteAssignments) {
+  const note = Number(event?.note) || 0;
+  const assignedId = getAssignedInstrumentId(noteAssignments, note, event?.trackIndex);
+  if (assignedId) {
+    if (assignedId === "ignore") return null;
     if (lookups.byId.has(assignedId)) return lookups.byId.get(assignedId);
   }
   if (lookups.byMidi.has(note)) return lookups.byMidi.get(note);
   const aliasId = GM_NOTE_ALIASES[note];
   if (aliasId && lookups.byId.has(aliasId)) return lookups.byId.get(aliasId);
   return null;
+}
+
+function getImportedInstrumentForNote(note, lookups, noteAssignments) {
+  return getImportedInstrumentForEvent({ note }, lookups, noteAssignments);
+}
+
+function buildTrackConflictEntries(mappedEvents, noteVelocityModes) {
+  const byInstrument = new Map();
+  (Array.isArray(mappedEvents) ? mappedEvents : []).forEach((event) => {
+    const instrumentId = String(event?.instrument?.id || "").trim();
+    if (!instrumentId) return;
+    const sourceKey = buildSourceAssignmentKey(event.trackIndex, event.note);
+    if (!byInstrument.has(instrumentId)) byInstrument.set(instrumentId, new Map());
+    const sourceMap = byInstrument.get(instrumentId);
+    if (!sourceMap.has(sourceKey)) {
+      sourceMap.set(sourceKey, {
+        sourceKey,
+        note: Number(event.note) || 0,
+        trackIndex: Math.max(0, Number(event.trackIndex) || 0),
+        trackName: String(event.trackName || "").trim(),
+        instrumentId,
+        instrumentLabel: String(event.instrument?.label || event.instrument?.id || "").trim(),
+        count: 0,
+        velocityMode: getAssignedVelocityMode(noteVelocityModes, event.note, event.trackIndex),
+      });
+    }
+    sourceMap.get(sourceKey).count += 1;
+  });
+  return Array.from(byInstrument.values())
+    .flatMap((sourceMap) => {
+      const entries = Array.from(sourceMap.values());
+      const uniqueTracks = new Set(entries.map((entry) => entry.trackIndex));
+      return uniqueTracks.size > 1 ? entries : [];
+    })
+    .sort((a, b) =>
+      a.instrumentLabel.localeCompare(b.instrumentLabel) ||
+      a.trackIndex - b.trackIndex ||
+      a.note - b.note
+    );
 }
 
 function chooseSubdivisionForSegment(segmentEvents, segmentStartTick, segmentTicks, baseSubdiv) {
@@ -241,6 +312,7 @@ function quantizeEventsToPayload({
   bars,
   ppq,
   noteAssignments,
+  noteVelocityModes,
   velocityThresholds,
 }) {
   const instrumentLookups = buildInstrumentLookup(instruments);
@@ -250,7 +322,7 @@ function quantizeEventsToPayload({
         ? event
         : {
             ...event,
-            instrument: getImportedInstrumentForNote(event.note, instrumentLookups, noteAssignments),
+            instrument: getImportedInstrumentForEvent(event, instrumentLookups, noteAssignments),
           }
     )
     .filter((event) => event.instrument);
@@ -318,8 +390,22 @@ function quantizeEventsToPayload({
       Math.min(subdiv - 1, Math.round((event.tick - segmentStartTick) / localStepTicks))
     );
     const step = stepOffsetsByBar[barIdx][qIdx] + localStep;
+    const explicitVelocityMode = getAssignedVelocityMode(
+      noteVelocityModes,
+      event.note,
+      event.trackIndex
+    );
     const ghostMax = getVelocityThresholdForInstrument(event.instrument?.id, velocityThresholds);
-    const cellValue = event.velocity <= ghostMax ? 2 : 1;
+    const cellValue =
+      explicitVelocityMode === "ghost"
+        ? 2
+        : explicitVelocityMode === "accent"
+          ? 3
+          : explicitVelocityMode === "normal"
+            ? 1
+            : event.velocity <= ghostMax
+              ? 2
+              : 1;
     const inst = event.instrument;
     const row = gridMap.get(inst.id) || new Map();
     row.set(step, Math.max(cellValue, row.get(step) || 0));
@@ -391,6 +477,7 @@ export function importDrumMidi({
   instruments,
   arrangementSplitBars = 1,
   noteAssignments = {},
+  noteVelocityModes = {},
   velocityThresholds = null,
 }) {
   const bytes = new Uint8Array(arrayBuffer);
@@ -415,6 +502,7 @@ export function importDrumMidi({
   const noteEvents = [];
   const tempos = [];
   const timeSigs = [];
+  const trackNames = [];
   let title = "";
   let composer = "";
   let embeddedPayload = null;
@@ -474,6 +562,7 @@ export function importDrumMidi({
           });
         } else if ((type === 0x03 || type === 0x01) && data.length) {
           const text = textFromBytes(data).trim();
+          if (type === 0x03 && !trackNames[trackIndex]) trackNames[trackIndex] = text;
           if (type === 0x03 && !title) title = text;
           if (type === 0x01) {
             const decodedPayload = decodePayloadMeta(text);
@@ -518,6 +607,8 @@ export function importDrumMidi({
             note: data1,
             velocity: start.velocity,
             channel: start.channel,
+            trackIndex,
+            trackName: String(trackNames[trackIndex] || "").trim(),
           });
           if (!stack.length) activeByNote.delete(data1);
         }
@@ -539,8 +630,10 @@ export function importDrumMidi({
   const mappedEvents = noteEvents
     .map((event) => ({
       ...event,
-      hasExplicitAssignment: hasNoteAssignment(noteAssignments, event.note),
-      instrument: getImportedInstrumentForNote(event.note, instrumentLookups, noteAssignments),
+      sourceKey: buildSourceAssignmentKey(event.trackIndex, event.note),
+      hasExplicitAssignment: hasNoteAssignment(noteAssignments, event.note, event.trackIndex),
+      velocityMode: getAssignedVelocityMode(noteVelocityModes, event.note, event.trackIndex),
+      instrument: getImportedInstrumentForEvent(event, instrumentLookups, noteAssignments),
     }));
   const usedMappedInstrumentIds = Array.from(
     new Set(
@@ -558,7 +651,31 @@ export function importDrumMidi({
     if (event.instrument || event.hasExplicitAssignment) return;
     unmappedCounts.set(event.note, (unmappedCounts.get(event.note) || 0) + 1);
   });
-  if (unmappedCounts.size) {
+  const filteredEvents = mappedEvents.filter((event) => event.instrument);
+  const trackConflicts = buildTrackConflictEntries(filteredEvents, noteVelocityModes);
+  const mappingEntries = mappedEvents
+    .reduce((acc, event) => {
+      const key = String(event.sourceKey || buildSourceAssignmentKey(event.trackIndex, event.note));
+      if (!acc.has(key)) {
+        acc.set(key, {
+          sourceKey: key,
+          note: Number(event.note) || 0,
+          trackIndex: Math.max(0, Number(event.trackIndex) || 0),
+          trackName: String(event.trackName || "").trim(),
+          count: 0,
+          instrumentId: String(event.instrument?.id || getAssignedInstrumentId(noteAssignments, event.note, event.trackIndex) || "").trim(),
+          instrumentLabel: String(event.instrument?.label || "").trim(),
+          velocityMode: getAssignedVelocityMode(noteVelocityModes, event.note, event.trackIndex),
+          hasExplicitAssignment: hasNoteAssignment(noteAssignments, event.note, event.trackIndex),
+        });
+      }
+      acc.get(key).count += 1;
+      return acc;
+    }, new Map());
+  const mappingEntryList = Array.from(mappingEntries.values()).sort(
+    (a, b) => a.trackIndex - b.trackIndex || a.note - b.note
+  );
+  if (unmappedCounts.size || trackConflicts.length) {
     return {
       kind: "needs-mapping",
       title,
@@ -566,13 +683,13 @@ export function importDrumMidi({
       hasTempo: tempos.length > 0,
       usedInstrumentIds: usedMappedInstrumentIds,
       velocityRanges,
+      trackConflicts,
+      mappingEntries: mappingEntryList,
       unmappedNotes: Array.from(unmappedCounts.entries())
         .map(([note, count]) => ({ note: Number(note), count }))
         .sort((a, b) => a.note - b.note),
     };
   }
-  const filteredEvents = mappedEvents
-    .filter((event) => event.instrument);
   if (!filteredEvents.length) throw new Error("No mapped drum notes remain after import mapping.");
   const maxTick = filteredEvents.reduce((max, event) => Math.max(max, event.tick), 0);
   const barsTimeline = buildBarsFromTimeline(maxTick, ppq, tempos, timeSigs);
@@ -608,6 +725,7 @@ export function importDrumMidi({
         bars: endIdx - idx + 1,
         ppq,
         noteAssignments,
+        noteVelocityModes,
         velocityThresholds,
       });
       sections.push({
@@ -625,7 +743,10 @@ export function importDrumMidi({
       title,
       composer,
       hasTempo: tempos.length > 0,
+      usedInstrumentIds: usedMappedInstrumentIds,
       velocityRanges,
+      trackConflicts,
+      mappingEntries: mappingEntryList,
       sections,
     };
   }
@@ -640,6 +761,7 @@ export function importDrumMidi({
     bars: totalBars,
     ppq,
     noteAssignments,
+    noteVelocityModes,
     velocityThresholds,
   });
   return {
@@ -648,6 +770,9 @@ export function importDrumMidi({
     title,
     composer,
     hasTempo: tempos.length > 0,
+    usedInstrumentIds: usedMappedInstrumentIds,
     velocityRanges,
+    trackConflicts,
+    mappingEntries: mappingEntryList,
   };
 }
