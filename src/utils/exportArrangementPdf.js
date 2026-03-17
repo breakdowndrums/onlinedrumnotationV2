@@ -95,7 +95,7 @@ export async function exportArrangementPdf(containerEl, opts = {}) {
     },
     width: 256,
   }) : "";
-  const qrSize = 62;
+  const qrSize = 40;
   for (let pageIndex = 0; pageIndex < pageEls.length; pageIndex++) {
     if (pageIndex > 0) pdf.addPage();
     const pageEl = pageEls[pageIndex];
@@ -115,8 +115,8 @@ export async function exportArrangementPdf(containerEl, opts = {}) {
       height: pageRect.height * scale,
     });
 
-    if (qrDataUrl) {
-      pdf.addImage(qrDataUrl, "PNG", pad, pageH - pad - qrSize, qrSize, qrSize);
+    if (qrDataUrl && pageIndex === 0) {
+      pdf.addImage(qrDataUrl, "PNG", pad, pad, qrSize, qrSize);
     }
     if (watermarkEnabled) {
       pdf.setFont("helvetica", "normal");

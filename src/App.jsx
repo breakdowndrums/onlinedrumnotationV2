@@ -1813,9 +1813,9 @@ export default function App() {
   const [arrangementNotationVirtualize, setArrangementNotationVirtualize] = useState(() => {
     try {
       const raw = window.localStorage.getItem(ARRANGEMENT_NOTATION_VIRTUALIZE_STORAGE_KEY);
-      return raw !== "false";
+      return raw === "true";
     } catch (_) {
-      return true;
+      return false;
     }
   });
   const [arrangementPdfQrEnabled, setArrangementPdfQrEnabled] = useState(false);
@@ -7845,6 +7845,7 @@ useEffect(() => {
     const countInBeats = metronomeCountInEnabled ? Math.max(1, Number(startTimeSig?.n) || 4) : 0;
     setArrangementPlaybackIndex(startIndex);
     setArrangementPlaybackEnabled(true);
+    setArrangementNotationVirtualize(true);
     window.requestAnimationFrame(() => {
       playback.playCompiled({
         events: plan.events,
@@ -7859,6 +7860,7 @@ useEffect(() => {
         playback.hardStop();
         setArrangementPlaybackEnabled(false);
         setArrangementPlaybackIndex(0);
+        setArrangementNotationVirtualize(false);
       });
     });
   }, [
@@ -7881,12 +7883,14 @@ useEffect(() => {
     playback.setStopAtTime(null);
     setArrangementPlaybackEnabled(false);
     setArrangementPlaybackIndex(0);
+    setArrangementNotationVirtualize(false);
   }, [playback.hardStop, playback.setStopAtTime]);
   const finishArrangementPlaybackNaturally = React.useCallback(() => {
     arrangementStartedRef.current = false;
     playback.setStopAtTime(null);
     setArrangementPlaybackEnabled(false);
     setArrangementPlaybackIndex(0);
+    setArrangementNotationVirtualize(false);
   }, [playback.setStopAtTime]);
   useEffect(() => {
     if (!arrangementPlaybackEnabled) return;
@@ -11797,19 +11801,6 @@ useEffect(() => {
                       )}
                     </div>
                   )}
-                  <div
-                    ref={arrangementNotationExportRef}
-                    className="pointer-events-none absolute left-0 top-0 z-[-1] w-[794px] overflow-hidden opacity-0"
-                    aria-hidden="true"
-                  >
-                    {arrangementNotationPages.map((page, pageIdx) =>
-                      renderArrangementNotationPage(page, pageIdx, {
-                        dark: false,
-                        exportMode: true,
-                        includePageNumber: false,
-                      })
-                    )}
-                  </div>
                   {arrangementNotationRowMenuState && arrangementRows[arrangementNotationRowMenuState.rowIndex]
                     ? createPortal(
                         <ArrangementRowNotationMenu
@@ -11853,6 +11844,20 @@ useEffect(() => {
           </div>
         </div>
       )}
+
+      <div
+        ref={arrangementNotationExportRef}
+        className="pointer-events-none fixed left-0 top-0 z-[-1] w-[794px] overflow-hidden opacity-0"
+        aria-hidden="true"
+      >
+        {arrangementNotationPages.map((page, pageIdx) =>
+          renderArrangementNotationPage(page, pageIdx, {
+            dark: false,
+            exportMode: true,
+            includePageNumber: false,
+          })
+        )}
+      </div>
 
       {isKitEditorOpen && (
         <div
