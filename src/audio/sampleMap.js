@@ -1,4 +1,6 @@
 export const SAMPLE_MAP = {
+  metronomeHi: "/samples/metronome_clave_hi.mp3",
+  metronomeLo: "/samples/metronome_clave_lo.mp3",
   kick: "/samples/kick.mp3",
   snare: "/samples/snare.mp3",
   snare_ghost: "/samples/snare_ghost.mp3",

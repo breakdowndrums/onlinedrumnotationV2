@@ -8,6 +8,9 @@ export function makeAudioEngine() {
   let resolution = 16;
   let transportColumns = 32;
   let stepQuarterDurations = [];
+  let timeSig = { n: 4, d: 4 };
+  let metronomeEnabled = false;
+  let metronomeVolume = 0.75;
 
   // Scheduler state
   let currentStep = 0;
@@ -75,9 +78,27 @@ export function makeAudioEngine() {
     buffers = next || {};
   }
 
-  function setTransport({ nextBpm, nextResolution, nextColumns, nextStepQuarterDurations }) {
+  function setTransport({
+    nextBpm,
+    nextResolution,
+    nextColumns,
+    nextStepQuarterDurations,
+    nextTimeSig,
+    nextMetronomeEnabled,
+    nextMetronomeVolume,
+  }) {
     if (typeof nextBpm === "number") bpm = nextBpm;
     if (typeof nextResolution === "number") resolution = nextResolution;
+    if (nextTimeSig && typeof nextTimeSig === "object") {
+      timeSig = {
+        n: Math.max(1, Math.round(Number(nextTimeSig.n) || 4)),
+        d: Math.max(1, Math.round(Number(nextTimeSig.d) || 4)),
+      };
+    }
+    if (typeof nextMetronomeEnabled === "boolean") metronomeEnabled = nextMetronomeEnabled;
+    if (typeof nextMetronomeVolume === "number" && Number.isFinite(nextMetronomeVolume)) {
+      metronomeVolume = Math.max(0, Math.min(1, nextMetronomeVolume));
+    }
     const prevStepQuarterDurations = stepQuarterDurations;
     if (Array.isArray(nextStepQuarterDurations) && nextStepQuarterDurations.length > 0) {
       stepQuarterDurations = nextStepQuarterDurations.map((v) =>
@@ -141,6 +162,45 @@ export function makeAudioEngine() {
       return (60 / bpm) * q;
     }
     return secondsPerStep();
+  }
+
+  function triggerMetronome(time, accented = false) {
+    const instId = accented ? "metronomeHi" : "metronomeLo";
+    if (!buffers[instId]) return;
+    const baseGain = accented ? 0.95 : 0.82;
+    trigger(instId, time, baseGain * Math.max(0, Math.min(1, metronomeVolume)));
+  }
+
+  function scheduleCountIn(countInBeats = 0, beatDurSec = 0) {
+    const beats = Math.max(0, Math.floor(Number(countInBeats) || 0));
+    const duration = Math.max(0, Number(beatDurSec) || 0);
+    if (beats < 1 || duration <= 0) return 0;
+    const startTime = audioCtx.currentTime + 0.03;
+    for (let beat = 0; beat < beats; beat++) {
+      triggerMetronome(startTime + beat * duration, beat === 0);
+    }
+    return beats * duration;
+  }
+
+  function getQuarterPositionBeforeStep(stepIndex) {
+    if (Array.isArray(stepQuarterDurations) && stepQuarterDurations.length === transportColumns) {
+      let total = 0;
+      for (let i = 0; i < stepIndex; i++) total += stepQuarterDurations[i] ?? 0;
+      return total;
+    }
+    return stepIndex * (1 / Math.max(1, resolution / 4));
+  }
+
+  function scheduleMetronomeForGridStep(stepIndex, time) {
+    if (!metronomeEnabled) return;
+    const beatQuarterLength = 4 / Math.max(1, Number(timeSig?.d) || 4);
+    const beatsPerBar = Math.max(1, Math.round(Number(timeSig?.n) || 4));
+    const quarterPos = getQuarterPositionBeforeStep(stepIndex);
+    const beatPos = quarterPos / Math.max(1e-6, beatQuarterLength);
+    const nearestBeat = Math.round(beatPos);
+    if (Math.abs(beatPos - nearestBeat) > 1e-6) return;
+    const beatIndex = ((nearestBeat % beatsPerBar) + beatsPerBar) % beatsPerBar;
+    triggerMetronome(time, beatIndex === 0);
   }
 
   
@@ -207,6 +267,7 @@ function trigger(instId, time, gainValue = 1) {
   }
 
   function scheduleStep(grid, instruments, stepIndex, time) {
+    scheduleMetronomeForGridStep(stepIndex, time);
     for (const inst of instruments) {
       const state = grid[inst.id]?.[stepIndex] ?? "off";
       if (state === "off") continue;
@@ -249,7 +310,12 @@ function trigger(instId, time, gainValue = 1) {
     for (const hit of hits) {
       const instId = hit?.instId;
       const state = hit?.state ?? "off";
+      const explicitGain = Number.isFinite(hit?.gain) ? Math.max(0, Math.min(1, Number(hit.gain))) : null;
       if (!instId || state === "off") continue;
+      if (instId === "metronomeHi" || instId === "metronomeLo") {
+        trigger(instId, time, explicitGain ?? ((instId === "metronomeHi" ? 0.95 : 0.82) * Math.max(0, Math.min(1, metronomeVolume))));
+        continue;
+      }
       if (state === "ghost") {
         if (instId === "snare" && buffers["snare_ghost"]) {
           trigger("snare_ghost", time, 0.6);
@@ -265,13 +331,13 @@ function trigger(instId, time, gainValue = 1) {
       }
       if (instId === "hihat" || instId === "hihatFoot") chokeOpenHats(time);
       if (instId === "hihatOpen") {
-        const h = triggerWithGain(instId, time, 0.9);
+        const h = triggerWithGain(instId, time, explicitGain ?? 0.9);
         if (h) openHats.push(h);
       } else {
-        trigger(instId, time, state === "accent" ? 1 : 0.9);
+        trigger(instId, time, explicitGain ?? (state === "accent" ? 1 : 0.9));
       }
     }
-    if (onStep) onStep(event.stepIndex ?? 0, event.meta || null);
+    if (event.meta && onStep) onStep(event.stepIndex ?? 0, event.meta);
   }
 
   function finishNaturally() {
@@ -328,7 +394,7 @@ function trigger(instId, time, gainValue = 1) {
     }
   }
 
-  async function play(getGridSnapshot, { startStep = 0 } = {}) {
+  async function play(getGridSnapshot, { startStep = 0, countInBeats = 0, countInBeatDurSec = 0 } = {}) {
     await resumeIfNeeded();
     if (isPlaying) return;
 
@@ -343,7 +409,8 @@ function trigger(instId, time, gainValue = 1) {
     const maxStep = Math.max(0, (snap.columns ?? 1) - 1);
     transportColumns = Math.max(1, snap.columns ?? 1);
     currentStep = Math.max(0, Math.min(maxStep, startStep));
-    playStartTime = audioCtx.currentTime + 0.03;
+    const countInDurationSec = scheduleCountIn(countInBeats, countInBeatDurSec);
+    playStartTime = audioCtx.currentTime + 0.03 + countInDurationSec;
     nextNoteTime = playStartTime;
     stopAtTime = null;
 
@@ -352,7 +419,10 @@ function trigger(instId, time, gainValue = 1) {
     return playStartTime;
   }
 
-  async function playCompiled(events, { startAtSec = 0, totalDurationSec = 0, loop = false } = {}) {
+  async function playCompiled(
+    events,
+    { startAtSec = 0, totalDurationSec = 0, loop = false, countInBeats = 0, countInBeatDurSec = 0 } = {}
+  ) {
     await resumeIfNeeded();
     if (isPlaying) return null;
 
@@ -367,7 +437,8 @@ function trigger(instId, time, gainValue = 1) {
     compiledDurationSec = Math.max(0, Number(totalDurationSec) || 0);
     compiledStartOffsetSec = Math.max(0, Number(startAtSec) || 0);
     compiledLoopIteration = 0;
-    playStartTime = audioCtx.currentTime + 0.03 - compiledStartOffsetSec;
+    const countInDurationSec = scheduleCountIn(countInBeats, countInBeatDurSec);
+    playStartTime = audioCtx.currentTime + 0.03 + countInDurationSec - compiledStartOffsetSec;
     compiledCursor = compiledEvents.findIndex((event) => event.timeSec >= compiledStartOffsetSec - 1e-6);
     if (compiledCursor < 0) {
       compiledCursor = compiledLoop ? 0 : compiledEvents.length;

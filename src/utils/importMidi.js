@@ -80,6 +80,74 @@ const GM_NOTE_ALIASES = {
   59: "ride",
 };
 
+function getHumanizeToleranceTicks(ppq, timeSig = null) {
+  const ticksPerSixteenth = Math.max(1, Math.round(Number(ppq) / 4));
+  const quarterTicks = Math.max(1, Math.round(Number(ppq) * (4 / Math.max(1, Number(timeSig?.d) || 4))));
+  return Math.max(1, Math.min(Math.round(ticksPerSixteenth * 0.15), Math.round(quarterTicks * 0.06)));
+}
+
+function getSuggestedTimingShiftSixteenths(noteEvents, ppq, timeSigs) {
+  if (!Array.isArray(noteEvents) || noteEvents.length < 1) return 0;
+  const earliestTick = noteEvents.reduce((min, event) => Math.min(min, Number(event.tick) || 0), Infinity);
+  if (!Number.isFinite(earliestTick) || earliestTick <= 0) return 0;
+  const ticksPerSixteenth = Math.max(1, Math.round(ppq / 4));
+  const firstTimeSig = Array.isArray(timeSigs) && timeSigs.length ? timeSigs[0] : null;
+  const humanizeTolerance = getHumanizeToleranceTicks(ppq, firstTimeSig);
+  if (earliestTick <= humanizeTolerance) return 0;
+  const sixteenthsPerBar = Math.max(
+    1,
+    Math.round(((Number(firstTimeSig?.n) || 4) * 16) / Math.max(1, Number(firstTimeSig?.d) || 4))
+  );
+  const quarterStride = Math.max(1, Math.round(16 / Math.max(1, Number(firstTimeSig?.d) || 4)));
+  const analysisBarLimit = 16;
+  const scoredBarCount = 4;
+  const candidateScores = Array.from({ length: sixteenthsPerBar }, (_, shiftSixteenths) => {
+    const shiftTicks = shiftSixteenths * ticksPerSixteenth;
+    const bars = Array.from({ length: analysisBarLimit }, () => ({ score: 0, noteCount: 0 }));
+    noteEvents.forEach((event) => {
+      const adjustedTick = Math.max(0, (Number(event.tick) || 0) + shiftTicks);
+      const sixteenthIndex = Math.round(adjustedTick / ticksPerSixteenth);
+      const absoluteBarIndex = Math.floor(sixteenthIndex / Math.max(1, sixteenthsPerBar));
+      if (absoluteBarIndex < 0 || absoluteBarIndex >= analysisBarLimit) return;
+      const barPos = ((sixteenthIndex % sixteenthsPerBar) + sixteenthsPerBar) % sixteenthsPerBar;
+      const velocityWeight = 0.75 + Math.min(1, Math.max(0, Number(event.velocity) || 0) / 127);
+      const noteNumber = Number(event.note) || 0;
+      const isSnareFamily = noteNumber === 38 || noteNumber === 37 || noteNumber === 40;
+      const snareWeight = isSnareFamily ? 1.8 : 1;
+      const barBucket = bars[absoluteBarIndex];
+      barBucket.noteCount += 1;
+      if (barPos === 0) {
+        barBucket.score += 8 * velocityWeight * snareWeight;
+      } else if (barPos % quarterStride === 0) {
+        barBucket.score += 3 * velocityWeight * snareWeight;
+      } else if (barPos % 2 === 0) {
+        barBucket.score += 0.6 * velocityWeight;
+      } else {
+        barBucket.score -= 0.35 * velocityWeight;
+      }
+      if (isSnareFamily && (barPos === quarterStride || barPos === quarterStride * 3)) {
+        barBucket.score += 2.5 * velocityWeight;
+      }
+      if (barPos === sixteenthsPerBar - 1 || barPos === sixteenthsPerBar - 2) {
+        barBucket.score -= 1.25 * velocityWeight * snareWeight;
+      }
+    });
+    const score = bars
+      .filter((bar) => bar.noteCount > 0)
+      .sort((a, b) => b.noteCount - a.noteCount || b.score - a.score)
+      .slice(0, scoredBarCount)
+      .reduce((sum, bar) => sum + bar.score, 0);
+    return { shiftSixteenths, score };
+  });
+  const zeroCandidate = candidateScores.find((candidate) => candidate.shiftSixteenths === 0) || { score: 0 };
+  const bestCandidate = candidateScores.reduce((best, candidate) => (
+    candidate.score > best.score ? candidate : best
+  ), candidateScores[0] || { shiftSixteenths: 0, score: 0 });
+  if (!bestCandidate || bestCandidate.shiftSixteenths === 0) return 0;
+  if (bestCandidate.score - zeroCandidate.score < 4) return 0;
+  return bestCandidate.shiftSixteenths;
+}
+
 function buildTupletsByBar(barCount, quarterCount) {
   return Array.from({ length: Math.max(1, barCount) }, () =>
     Array.from({ length: Math.max(1, quarterCount) }, () => null)
@@ -260,6 +328,18 @@ function chooseSubdivisionForSegment(segmentEvents, segmentStartTick, segmentTic
   return bestSubdiv;
 }
 
+function assignForwardToleranceIndex(value, unitTicks, count, toleranceTicks) {
+  const safeUnit = Math.max(1, Number(unitTicks) || 1);
+  const safeCount = Math.max(1, Math.floor(Number(count) || 1));
+  const safeValue = Math.max(0, Number(value) || 0);
+  let index = Math.max(0, Math.min(safeCount - 1, Math.floor(safeValue / safeUnit)));
+  const nextBoundary = (index + 1) * safeUnit;
+  if (index < safeCount - 1 && nextBoundary - safeValue <= Math.max(0, Number(toleranceTicks) || 0)) {
+    index += 1;
+  }
+  return index;
+}
+
 function getVelocityThresholdForInstrument(instId, velocityThresholds) {
   const id = String(instId || "");
   if (id === "kick" || id === "sideStick") {
@@ -348,19 +428,29 @@ function quantizeEventsToPayload({
     ? Math.max(1, Math.round((ppq * (4 / Math.max(1, timeSig.d))) / inferred.ticksPerStep))
     : Math.max(1, Math.round(resolution / Math.max(1, timeSig.d)));
   const segmentTicks = ppq * (4 / Math.max(1, timeSig.d));
+  const humanizeToleranceTicks = getHumanizeToleranceTicks(ppq, timeSig);
   const ticksPerBar = quarterCount * segmentTicks;
   const safeBars = Math.max(1, bars);
   const tupletsByBar = buildTupletsByBar(safeBars, quarterCount);
   const subdivisionsByBar = Array.from({ length: safeBars }, () =>
     Array.from({ length: quarterCount }, () => baseSubdiv)
   );
+  const segmentEventsByBar = Array.from({ length: safeBars }, () =>
+    Array.from({ length: quarterCount }, () => [])
+  );
+
+  filteredEvents.forEach((event) => {
+    const rawTick = Math.max(0, Number(event.tick) || 0);
+    const barIdx = assignForwardToleranceIndex(rawTick, ticksPerBar, safeBars, humanizeToleranceTicks);
+    const tickInBar = Math.max(0, rawTick - barIdx * ticksPerBar);
+    const qIdx = assignForwardToleranceIndex(tickInBar, segmentTicks, quarterCount, humanizeToleranceTicks);
+    segmentEventsByBar[barIdx][qIdx].push(event);
+  });
 
   for (let barIdx = 0; barIdx < safeBars; barIdx++) {
     for (let qIdx = 0; qIdx < quarterCount; qIdx++) {
       const segmentStartTick = barIdx * ticksPerBar + qIdx * segmentTicks;
-      const segmentEvents = filteredEvents.filter(
-        (event) => event.tick >= segmentStartTick && event.tick < segmentStartTick + segmentTicks
-      );
+      const segmentEvents = segmentEventsByBar[barIdx][qIdx];
       const subdiv = chooseSubdivisionForSegment(segmentEvents, segmentStartTick, segmentTicks, baseSubdiv);
       subdivisionsByBar[barIdx][qIdx] = subdiv;
       tupletsByBar[barIdx][qIdx] = subdiv === baseSubdiv ? null : subdiv;
@@ -379,15 +469,16 @@ function quantizeEventsToPayload({
   }
 
   filteredEvents.forEach((event) => {
-    const barIdx = Math.max(0, Math.min(safeBars - 1, Math.floor(event.tick / Math.max(1, ticksPerBar))));
-    const tickInBar = event.tick - barIdx * ticksPerBar;
-    const qIdx = Math.max(0, Math.min(quarterCount - 1, Math.floor(tickInBar / Math.max(1, segmentTicks))));
+    const rawTick = Math.max(0, Number(event.tick) || 0);
+    const barIdx = assignForwardToleranceIndex(rawTick, ticksPerBar, safeBars, humanizeToleranceTicks);
+    const tickInBar = Math.max(0, rawTick - barIdx * ticksPerBar);
+    const qIdx = assignForwardToleranceIndex(tickInBar, segmentTicks, quarterCount, humanizeToleranceTicks);
     const segmentStartTick = barIdx * ticksPerBar + qIdx * segmentTicks;
     const subdiv = subdivisionsByBar[barIdx][qIdx];
     const localStepTicks = segmentTicks / Math.max(1, subdiv);
     const localStep = Math.max(
       0,
-      Math.min(subdiv - 1, Math.round((event.tick - segmentStartTick) / localStepTicks))
+      Math.min(subdiv - 1, Math.round((Number(event.tick) - segmentStartTick) / localStepTicks))
     );
     const step = stepOffsetsByBar[barIdx][qIdx] + localStep;
     const explicitVelocityMode = getAssignedVelocityMode(
@@ -472,12 +563,52 @@ function buildBarsFromTimeline(maxTick, ppq, tempos, timeSigs) {
   return bars;
 }
 
+function getPayloadBarStepCounts(payload) {
+  const timeSig = payload?.timeSig || { n: 4, d: 4 };
+  const quarterCount = getQuarterBeatsPerBar(timeSig);
+  const bars = Math.max(1, Number(payload?.bars) || 1);
+  const baseSubdiv = Math.max(1, Math.round((Number(payload?.resolution) || 8) / Math.max(1, Number(timeSig?.d) || 4)));
+  return Array.from({ length: bars }, (_, barIdx) =>
+    Array.from({ length: quarterCount }, (_, quarterIdx) =>
+      Number(payload?.tupletsByBar?.[barIdx]?.[quarterIdx]) || baseSubdiv
+    ).reduce((sum, value) => sum + Math.max(1, value), 0)
+  );
+}
+
+function slicePayloadByBars(payload, startBarIndex, barCount, bpmOverride = null) {
+  const safePayload = payload || {};
+  const barStepCounts = getPayloadBarStepCounts(safePayload);
+  const safeStartBar = Math.max(0, Math.min(barStepCounts.length - 1, Math.floor(Number(startBarIndex) || 0)));
+  const safeBarCount = Math.max(1, Math.min(barStepCounts.length - safeStartBar, Math.floor(Number(barCount) || 1)));
+  const startStep = barStepCounts.slice(0, safeStartBar).reduce((sum, count) => sum + count, 0);
+  const stepCount = barStepCounts.slice(safeStartBar, safeStartBar + safeBarCount).reduce((sum, count) => sum + count, 0);
+  const endStep = startStep + stepCount;
+  const nextGrid = {};
+  Object.entries(safePayload.grid || {}).forEach(([instId, entries]) => {
+    const slicedEntries = (Array.isArray(entries) ? entries : [])
+      .map((entry) => [Number(entry?.[0]), Number(entry?.[1])])
+      .filter(([step, value]) => Number.isFinite(step) && Number.isFinite(value) && step >= startStep && step < endStep)
+      .map(([step, value]) => [step - startStep, value]);
+    if (slicedEntries.length) nextGrid[instId] = slicedEntries;
+  });
+  return {
+    ...safePayload,
+    bars: safeBarCount,
+    bpm: bpmOverride == null ? safePayload.bpm : bpmOverride,
+    tupletsByBar: Array.isArray(safePayload.tupletsByBar)
+      ? safePayload.tupletsByBar.slice(safeStartBar, safeStartBar + safeBarCount)
+      : buildTupletsByBar(safeBarCount, getQuarterBeatsPerBar(safePayload.timeSig)),
+    grid: nextGrid,
+  };
+}
+
 export function importDrumMidi({
   arrayBuffer,
   instruments,
   arrangementSplitBars = 1,
   noteAssignments = {},
   noteVelocityModes = {},
+  timingShiftSixteenths = 0,
   velocityThresholds = null,
 }) {
   const bytes = new Uint8Array(arrayBuffer);
@@ -626,6 +757,16 @@ export function importDrumMidi({
   }
 
   if (!noteEvents.length) throw new Error("No drum notes found in MIDI file.");
+  const ticksPerSixteenth = Math.max(1, Math.round(ppq / 4));
+  const appliedShiftSixteenths = Math.max(-15, Math.min(15, Math.round(Number(timingShiftSixteenths) || 0)));
+  const timingShiftTicks = appliedShiftSixteenths * ticksPerSixteenth;
+  if (timingShiftTicks !== 0) {
+    noteEvents.forEach((event) => {
+      event.tick = Math.max(0, (Number(event.tick) || 0) + timingShiftTicks);
+      event.durationTicks = Math.max(1, Number(event.durationTicks) || 1);
+    });
+  }
+  const suggestedShiftSixteenths = getSuggestedTimingShiftSixteenths(noteEvents, ppq, timeSigs);
   const instrumentLookups = buildInstrumentLookup(instruments);
   const mappedEvents = noteEvents
     .map((event) => ({
@@ -652,6 +793,10 @@ export function importDrumMidi({
     unmappedCounts.set(event.note, (unmappedCounts.get(event.note) || 0) + 1);
   });
   const filteredEvents = mappedEvents.filter((event) => event.instrument);
+  const importHumanizeToleranceTicks = getHumanizeToleranceTicks(
+    ppq,
+    (timeSigs && timeSigs.length ? timeSigs[0] : null)
+  );
   const trackConflicts = buildTrackConflictEntries(filteredEvents, noteVelocityModes);
   const mappingEntries = mappedEvents
     .reduce((acc, event) => {
@@ -682,6 +827,7 @@ export function importDrumMidi({
       composer,
       hasTempo: tempos.length > 0,
       usedInstrumentIds: usedMappedInstrumentIds,
+      suggestedShiftSixteenths,
       velocityRanges,
       trackConflicts,
       mappingEntries: mappingEntryList,
@@ -697,6 +843,44 @@ export function importDrumMidi({
   const totalBars = barsTimeline.length;
   if (hasTimelineChanges || totalBars > 8) {
     const splitBars = Math.max(1, Math.min(8, Math.round(Number(arrangementSplitBars) || 1)));
+    if (!hasTimelineChanges && totalBars > 8) {
+      const timeSig = barsTimeline[0]?.timeSig || { n: 4, d: 4 };
+      const sectionBpm = Math.max(20, Math.min(400, Number(barsTimeline[0]?.bpm) || 120));
+      const quantized = quantizeEventsToPayload({
+        events: filteredEvents,
+        instruments,
+        timeSig,
+        bpm: sectionBpm,
+        bars: totalBars,
+        ppq,
+        noteAssignments,
+        noteVelocityModes,
+        velocityThresholds,
+      });
+      const sections = [];
+      for (let startBarIndex = 0, sectionIndex = 1; startBarIndex < totalBars; startBarIndex += splitBars, sectionIndex += 1) {
+        const sectionBarCount = Math.min(splitBars, totalBars - startBarIndex);
+        sections.push({
+          name: `${title || "Imported"} ${sectionIndex}`,
+          bars: sectionBarCount,
+          bpm: sectionBpm,
+          timeSig,
+          payload: slicePayloadByBars(quantized.payload, startBarIndex, sectionBarCount, sectionBpm),
+        });
+      }
+      return {
+        kind: "arrangement",
+        title,
+        composer,
+        hasTempo: tempos.length > 0,
+        usedInstrumentIds: usedMappedInstrumentIds,
+        suggestedShiftSixteenths,
+        velocityRanges,
+        trackConflicts,
+        mappingEntries: mappingEntryList,
+        sections,
+      };
+    }
     const sections = [];
     let idx = 0;
     let sectionIndex = 1;
@@ -715,7 +899,10 @@ export function importDrumMidi({
       const sectionStartTick = startBar.startTick;
       const sectionEndTick = barsTimeline[endIdx].endTick;
       const sectionEvents = filteredEvents
-        .filter((event) => event.tick >= sectionStartTick && event.tick < sectionEndTick)
+        .filter((event) => {
+          const adjustedTick = Math.max(0, (Number(event.tick) || 0) + importHumanizeToleranceTicks);
+          return adjustedTick >= sectionStartTick && adjustedTick < sectionEndTick;
+        })
         .map((event) => ({ ...event, tick: event.tick - sectionStartTick }));
       const quantized = quantizeEventsToPayload({
         events: sectionEvents,
@@ -744,6 +931,7 @@ export function importDrumMidi({
       composer,
       hasTempo: tempos.length > 0,
       usedInstrumentIds: usedMappedInstrumentIds,
+      suggestedShiftSixteenths,
       velocityRanges,
       trackConflicts,
       mappingEntries: mappingEntryList,
@@ -771,6 +959,7 @@ export function importDrumMidi({
     composer,
     hasTempo: tempos.length > 0,
     usedInstrumentIds: usedMappedInstrumentIds,
+    suggestedShiftSixteenths,
     velocityRanges,
     trackConflicts,
     mappingEntries: mappingEntryList,

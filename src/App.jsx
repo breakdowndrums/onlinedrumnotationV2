@@ -60,6 +60,12 @@ function formatMidiNoteName(note) {
   return `${MIDI_NOTE_NAMES[pitchClass]}${octave}`;
 }
 
+function formatTimingShiftLabel(sixteenths) {
+  const value = Math.max(-15, Math.min(15, Math.round(Number(sixteenths) || 0)));
+  if (value === 0) return "Off";
+  return value < 0 ? `${Math.abs(value)}/16 earlier` : `${value}/16 later`;
+}
+
 // ====================
 // INSTRUMENT SET (MVP+)
 // ====================
@@ -127,6 +133,9 @@ const LAST_USED_ARRANGEMENT_ID_STORAGE_KEY = "drum-grid-last-used-arrangement-id
 const ARRANGEMENT_BOUNDARY_COMP_SCALE_STORAGE_KEY = "drum-grid-arrangement-boundary-comp-scale-v1";
 const ARRANGEMENT_ADAPTIVE_COMP_ENABLED_STORAGE_KEY = "drum-grid-arrangement-adaptive-comp-enabled-v1";
 const PLAYBACK_RATE_STORAGE_KEY = "drum-grid-playback-rate-v1";
+const METRONOME_ENABLED_STORAGE_KEY = "drum-grid-metronome-enabled-v1";
+const METRONOME_VOLUME_STORAGE_KEY = "drum-grid-metronome-volume-v1";
+const METRONOME_COUNT_IN_ENABLED_STORAGE_KEY = "drum-grid-metronome-count-in-enabled-v1";
 const MIDI_IMPORT_SNARE_GHOST_MAX_STORAGE_KEY = "drum-grid-midi-import-snare-ghost-max-v1";
 const MIDI_IMPORT_TOM_GHOST_MAX_STORAGE_KEY = "drum-grid-midi-import-tom-ghost-max-v1";
 const MIDI_IMPORT_HIHAT_GHOST_MAX_STORAGE_KEY = "drum-grid-midi-import-hihat-ghost-max-v1";
@@ -1035,6 +1044,52 @@ function sliceStickingAssignmentsByBars(assignments, barStepOffsets, startBar, b
   return src.slice(startStep, endStep);
 }
 
+function buildPayloadFromNotationState(state, bpm = 120) {
+  if (!state || typeof state !== "object") return null;
+  const bars = Math.max(1, Number(state.bars) || 1);
+  const resolution = [4, 8, 16, 32].includes(Number(state.resolution))
+    ? Number(state.resolution)
+    : 8;
+  const timeSig = {
+    n: Math.max(1, Number(state.timeSig?.n) || 4),
+    d: Math.max(1, Number(state.timeSig?.d) || 4),
+  };
+  const kitInstrumentIds = (Array.isArray(state.instruments) ? state.instruments : [])
+    .map((inst) => inst?.id)
+    .filter(Boolean);
+  const tupletsByBar = Array.from({ length: bars }, (_, barIdx) =>
+    Array.from(
+      { length: Math.max(1, Number(state.quarterSubdivisionsByBar?.[barIdx]?.length) || getQuarterBeatsPerBar(timeSig)) },
+      (_, qIdx) => {
+        const subdiv = Number(state.quarterSubdivisionsByBar?.[barIdx]?.[qIdx]);
+        const baseSubdiv = getBaseSubdivPerQuarter(resolution, timeSig);
+        return Number.isFinite(subdiv) && subdiv !== baseSubdiv ? clampTupletValue(subdiv) : null;
+      }
+    )
+  );
+  const grid = {};
+  (Array.isArray(state.instruments) ? state.instruments : []).forEach((inst) => {
+    const row = Array.isArray(state.grid?.[inst.id]) ? state.grid[inst.id] : [];
+    const events = [];
+    row.forEach((cell, idx) => {
+      if (cell === CELL.ACCENT) events.push([idx, 3]);
+      else if (cell === CELL.GHOST) events.push([idx, 2]);
+      else if (cell === CELL.ON) events.push([idx, 1]);
+    });
+    if (events.length) grid[inst.id] = events;
+  });
+  return {
+    v: 1,
+    kitInstrumentIds: kitInstrumentIds.length ? kitInstrumentIds : DRUMKIT_PRESETS.standard,
+    bars,
+    resolution,
+    timeSig,
+    bpm: Math.max(20, Math.min(400, Number(bpm) || 120)),
+    tupletsByBar,
+    grid,
+  };
+}
+
 function ArrangementPageHeaderSvg({ titleLine1, titleLine2, composer, dark = true }) {
   const line1 = String(titleLine1 || "").trim();
   const line2 = String(titleLine2 || "").trim();
@@ -1569,6 +1624,7 @@ export default function App() {
   const [keepTracksWithNotesEnabled, setKeepTracksWithNotesEnabled] = useState(true);
   const [showPresetChangeWarningEnabled, setShowPresetChangeWarningEnabled] = useState(false);
   const [isShareActionsDialogOpen, setIsShareActionsDialogOpen] = useState(false);
+  const [isTransportMenuOpen, setIsTransportMenuOpen] = useState(false);
   const [isPrintDialogOpen, setIsPrintDialogOpen] = useState(false);
   const [isArrangementPrintDialogOpen, setIsArrangementPrintDialogOpen] = useState(false);
   const [isMidiDialogOpen, setIsMidiDialogOpen] = useState(false);
@@ -2008,6 +2064,28 @@ export default function App() {
       return 1;
     }
   });
+  const [metronomeEnabled, setMetronomeEnabled] = useState(() => {
+    try {
+      return window.localStorage.getItem(METRONOME_ENABLED_STORAGE_KEY) === "true";
+    } catch (_) {
+      return false;
+    }
+  });
+  const [metronomeVolume, setMetronomeVolume] = useState(() => {
+    try {
+      const raw = Number(window.localStorage.getItem(METRONOME_VOLUME_STORAGE_KEY));
+      return Number.isFinite(raw) ? Math.max(0, Math.min(1, raw)) : 0.75;
+    } catch (_) {
+      return 0.75;
+    }
+  });
+  const [metronomeCountInEnabled, setMetronomeCountInEnabled] = useState(() => {
+    try {
+      return window.localStorage.getItem(METRONOME_COUNT_IN_ENABLED_STORAGE_KEY) === "true";
+    } catch (_) {
+      return false;
+    }
+  });
   const [isBraveBrowser, setIsBraveBrowser] = useState(false);
   const [showBraveAudioNotice, setShowBraveAudioNotice] = useState(true);
   const [shareCopied, setShareCopied] = useState(false);
@@ -2122,6 +2200,8 @@ export default function App() {
   const arrangementNotationMoreMenuButtonRef = React.useRef(null);
   const fileMenuRef = React.useRef(null);
   const fileMenuButtonRef = React.useRef(null);
+  const transportMenuRef = React.useRef(null);
+  const transportMenuButtonRef = React.useRef(null);
   const beatLibraryPanelRef = React.useRef(null);
   const midiImportInputRef = React.useRef(null);
   const kitOrderListRef = React.useRef(null);
@@ -2523,11 +2603,50 @@ export default function App() {
       window.removeEventListener("scroll", updateMenuPosition, true);
     };
   }, [isShareActionsDialogOpen]);
+  React.useEffect(() => {
+    if (!isTransportMenuOpen) return undefined;
+    const handlePointerDown = (event) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      const menu = transportMenuRef.current;
+      const button = transportMenuButtonRef.current;
+      if (menu instanceof HTMLElement && menu.contains(target)) return;
+      if (button instanceof HTMLElement && button.contains(target)) return;
+      setIsTransportMenuOpen(false);
+    };
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") setIsTransportMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", handlePointerDown, true);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown, true);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isTransportMenuOpen]);
   useEffect(() => {
     try {
       window.localStorage.setItem(PLAYBACK_RATE_STORAGE_KEY, String(playbackRate));
     } catch (_) {}
   }, [playbackRate]);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(METRONOME_ENABLED_STORAGE_KEY, metronomeEnabled ? "true" : "false");
+    } catch (_) {}
+  }, [metronomeEnabled]);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(METRONOME_VOLUME_STORAGE_KEY, String(metronomeVolume));
+    } catch (_) {}
+  }, [metronomeVolume]);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        METRONOME_COUNT_IN_ENABLED_STORAGE_KEY,
+        metronomeCountInEnabled ? "true" : "false"
+      );
+    } catch (_) {}
+  }, [metronomeCountInEnabled]);
   useEffect(() => {
     try {
       window.localStorage.setItem(
@@ -5806,6 +5925,8 @@ useEffect(() => {
       applyMode: session?.applyMode || "new",
       arrangementImportMode: session?.arrangementImportMode || "new-arrangement",
       bpm: session?.bpm || "",
+      timingShiftSixteenths: Math.max(-15, Math.min(15, Math.round(Number(session?.timingShiftSixteenths) || 0))),
+      suggestedShiftSixteenths: Math.max(-15, Math.min(15, Math.round(Number(imported?.suggestedShiftSixteenths) || 0))),
       presetId: "manual",
       usedInstrumentIds: Array.isArray(imported.usedInstrumentIds) ? imported.usedInstrumentIds : [],
       trackConflicts: imported.trackConflicts || [],
@@ -5823,6 +5944,7 @@ useEffect(() => {
       arrangementSplitBars: lastMidiImportSession.splitBars || midiImportSplitBars,
       noteAssignments: lastMidiImportSession.noteAssignments || {},
       noteVelocityModes: lastMidiImportSession.noteVelocityModes || {},
+      timingShiftSixteenths: lastMidiImportSession.timingShiftSixteenths || 0,
       velocityThresholds: midiImportVelocityThresholds,
     });
     setPendingMidiImportMapping(buildPendingMidiImportMappingState({
@@ -5845,6 +5967,7 @@ useEffect(() => {
         arrayBuffer: buffer,
         instruments: ALL_INSTRUMENTS,
         arrangementSplitBars: midiImportSplitBars,
+        timingShiftSixteenths: 0,
         velocityThresholds: midiImportVelocityThresholds,
       });
       if (imported.kind === "needs-mapping") {
@@ -5860,6 +5983,7 @@ useEffect(() => {
           applyMode: "new",
           arrangementImportMode: midiArrangementImportMode,
           splitBars: midiImportSplitBars,
+          timingShiftSixteenths: 0,
           noteAssignments: {},
           noteVelocityModes: {},
         }, imported));
@@ -5871,9 +5995,11 @@ useEffect(() => {
         arrayBuffer: buffer,
         noteAssignments: {},
         noteVelocityModes: {},
+        previewBarNumber: 1,
         applyMode: "new",
         arrangementImportMode: midiArrangementImportMode,
         splitBars: midiImportSplitBars,
+        timingShiftSixteenths: 0,
         titleLine1: imported.title || "",
         titleLine2: "",
         author: imported.composer || "",
@@ -5895,6 +6021,7 @@ useEffect(() => {
       arrangementSplitBars: midiImportSplitBars,
       noteAssignments: pendingMidiImportMapping.noteAssignments || {},
       noteVelocityModes: pendingMidiImportMapping.noteVelocityModes || {},
+      timingShiftSixteenths: pendingMidiImportMapping.timingShiftSixteenths || 0,
       velocityThresholds: midiImportVelocityThresholds,
     });
     if (imported.kind === "needs-mapping") {
@@ -5930,6 +6057,7 @@ useEffect(() => {
         composer: imported.composer || prev?.composer || "",
         splitBars:
           Math.max(1, Math.min(8, Math.round(Number(prev?.splitBars) || midiImportSplitBars))),
+        timingShiftSixteenths: pendingMidiImportMapping.timingShiftSixteenths || 0,
         bpm: nextBpm,
         noteAssignments: pendingMidiImportMapping.noteAssignments || {},
         noteVelocityModes: pendingMidiImportMapping.noteVelocityModes || {},
@@ -5965,6 +6093,8 @@ useEffect(() => {
       arrayBuffer: pendingMidiImportMapping.arrayBuffer,
       noteAssignments: pendingMidiImportMapping.noteAssignments || {},
         noteVelocityModes: pendingMidiImportMapping.noteVelocityModes || {},
+        previewBarNumber: 1,
+        timingShiftSixteenths: pendingMidiImportMapping.timingShiftSixteenths || 0,
         applyMode: pendingMidiImportMapping.applyMode || "new",
         arrangementImportMode:
           pendingMidiImportMapping.arrangementImportMode || "new-arrangement",
@@ -6001,6 +6131,7 @@ useEffect(() => {
               Math.max(1, Math.min(8, Math.round(Number(pendingMidiTempoPrompt.splitBars) || midiImportSplitBars))),
             noteAssignments: pendingMidiTempoPrompt.noteAssignments || {},
             noteVelocityModes: pendingMidiTempoPrompt.noteVelocityModes || {},
+            timingShiftSixteenths: pendingMidiTempoPrompt.timingShiftSixteenths || 0,
             velocityThresholds: midiImportVelocityThresholds,
           })
         : pendingMidiTempoPrompt.imported;
@@ -6016,6 +6147,7 @@ useEffect(() => {
       composer: importedForApply.composer || "",
       splitBars:
         Math.max(1, Math.min(8, Math.round(Number(pendingMidiTempoPrompt.splitBars) || midiImportSplitBars))),
+      timingShiftSixteenths: pendingMidiTempoPrompt.timingShiftSixteenths || 0,
       bpm: nextBpm,
       noteAssignments: pendingMidiTempoPrompt.noteAssignments || {},
       noteVelocityModes: pendingMidiTempoPrompt.noteVelocityModes || {},
@@ -6079,6 +6211,8 @@ useEffect(() => {
         noteAssignments,
         noteVelocityModes:
           pendingMidiImportMapping?.noteVelocityModes || pendingMidiTempoPrompt?.noteVelocityModes || {},
+        timingShiftSixteenths:
+          pendingMidiImportMapping?.timingShiftSixteenths || pendingMidiTempoPrompt?.timingShiftSixteenths || 0,
         velocityThresholds: midiImportVelocityThresholds,
       });
       return imported?.velocityRanges || null;
@@ -7005,6 +7139,9 @@ useEffect(() => {
     bpm: effectivePlaybackBpm,
     resolution,
     stepQuarterDurations,
+    timeSig,
+    metronomeEnabled,
+    metronomeVolume,
   });
   useEffect(() => {
     playheadRef.current = playback.playhead;
@@ -7029,11 +7166,13 @@ useEffect(() => {
   const togglePlaybackFromBeginning = React.useCallback(() => {
     if (playback.isPlaying) {
       playback.stop();
-} else {
+    } else {
+      const countInBeatDurSec = (60 / effectivePlaybackBpm) * (4 / Math.max(1, Number(timeSig?.d) || 4));
+      const countInBeats = metronomeCountInEnabled ? Math.max(1, Number(timeSig?.n) || 4) : 0;
       playback.setPlayhead(0);
-      playback.play({ startStep: 0 });
+      playback.play({ startStep: 0, countInBeats, countInBeatDurSec });
     }
-  }, [playback.isPlaying, playback.play, playback.stop, playback.setPlayhead]);
+  }, [playback.isPlaying, playback.play, playback.stop, playback.setPlayhead, effectivePlaybackBpm, timeSig, metronomeCountInEnabled]);
   const activeArrangementPlaybackEntry = React.useMemo(() => {
     if (!arrangementPlaybackEnabled) return null;
     return arrangementPlayableEntries[arrangementPlaybackIndex] || null;
@@ -7508,6 +7647,9 @@ useEffect(() => {
       const notationState = buildNotationStateFromPayload(payload);
       if (!notationState) return;
       const stepQuarterDurations = buildStepQuarterDurationsFromNotationState(notationState);
+      const entryTimeSig = payload?.timeSig || { n: 4, d: 4 };
+      const beatQuarterLength = 4 / Math.max(1, Number(entryTimeSig?.d) || 4);
+      const beatsPerBar = Math.max(1, Math.round(Number(entryTimeSig?.n) || 4));
       const beatBars = Math.max(1, Number(entry?.row?.beatBars) || 1);
       const repeatOffsetBars = Math.max(0, Number(entry?.repeatIndex) || 0) * beatBars;
       const globalBarBase =
@@ -7518,7 +7660,21 @@ useEffect(() => {
           (Math.max(20, Math.min(400, Number(entry?.row?.beatBpm || payload?.bpm || bpm) || bpm)) * playbackRate) * 100
         ) / 100
       );
+      let quarterPos = 0;
       for (let step = 0; step < stepQuarterDurations.length; step++) {
+        const beatPos = quarterPos / Math.max(1e-6, beatQuarterLength);
+        const nearestBeat = Math.round(beatPos);
+        if (metronomeEnabled && Math.abs(beatPos - nearestBeat) < 1e-6) {
+          const beatIndex = ((nearestBeat % beatsPerBar) + beatsPerBar) % beatsPerBar;
+          events.push({
+            timeSec,
+            hits: [{
+              instId: beatIndex === 0 ? "metronomeHi" : "metronomeLo",
+              state: "on",
+              gain: beatIndex === 0 ? 0.95 * metronomeVolume : 0.82 * metronomeVolume,
+            }],
+          });
+        }
         const hits = [];
         (notationState.instruments || []).forEach((inst) => {
           const state = notationState.grid?.[inst.id]?.[step] ?? CELL.OFF;
@@ -7546,6 +7702,7 @@ useEffect(() => {
           barStartTimes.set(globalBarIndex, timeSec);
         }
         timeSec += (60 / entryBpm) * stepQuarterDurations[step];
+        quarterPos += stepQuarterDurations[step];
       }
       boundaries.push({
         queueIndex: Number(entry?.__queueIndex ?? -1),
@@ -7638,7 +7795,7 @@ useEffect(() => {
       loop,
       barStartTimes: playbackBarStartTimes,
     };
-  }, [arrangementPlayableEntries, arrangementPlaybackLoopRange, normalizedArrangementBarLoopSelection, bpm, playbackRate]);
+  }, [arrangementPlayableEntries, arrangementPlaybackLoopRange, normalizedArrangementBarLoopSelection, bpm, playbackRate, metronomeEnabled, metronomeVolume]);
   useEffect(() => {
     arrangementPlaybackIndexRef.current = arrangementPlaybackIndex;
   }, [arrangementPlaybackIndex]);
@@ -7676,6 +7833,16 @@ useEffect(() => {
       0,
       Number(firstEventAtStart?.meta?.queueIndex ?? startBoundary?.queueIndex) || 0
     );
+    const startEntry = arrangementPlayableEntries[startIndex] || startBoundary;
+    const startPayload = startEntry?.row?.beat?.payload;
+    const startTimeSig = startPayload?.timeSig || { n: 4, d: 4 };
+    const startBpm = clampBpm(
+      Math.round(
+        (Math.max(20, Math.min(400, Number(startEntry?.row?.beatBpm || startPayload?.bpm || bpm) || bpm)) * playbackRate) * 100
+      ) / 100
+    );
+    const countInBeatDurSec = (60 / startBpm) * (4 / Math.max(1, Number(startTimeSig?.d) || 4));
+    const countInBeats = metronomeCountInEnabled ? Math.max(1, Number(startTimeSig?.n) || 4) : 0;
     setArrangementPlaybackIndex(startIndex);
     setArrangementPlaybackEnabled(true);
     window.requestAnimationFrame(() => {
@@ -7684,6 +7851,8 @@ useEffect(() => {
         startAtSec,
         totalDurationSec: Math.max(0, Number(plan.totalDurationSec) || 0),
         loop: plan.loop === true,
+        countInBeats,
+        countInBeatDurSec,
       }).then(() => {
         arrangementStartedRef.current = true;
       }).catch(() => {
@@ -7694,12 +7863,17 @@ useEffect(() => {
     });
   }, [
     arrangementCompiledPlayback,
+    arrangementPlayableEntries,
+    clampBpm,
+    bpm,
+    playbackRate,
     playback.playCompiled,
     playback.hardStop,
     playback.isPlaying,
     playback.setStopAtTime,
     normalizedArrangementBarSelection,
     normalizedArrangementSelection,
+    metronomeCountInEnabled,
   ]);
   const stopArrangementPlayback = React.useCallback(() => {
     playback.hardStop();
@@ -7946,6 +8120,7 @@ useEffect(() => {
           arrayBuffer: tempoPending.arrayBuffer,
           noteAssignments: tempoPending.noteAssignments || {},
           noteVelocityModes: tempoPending.noteVelocityModes || {},
+          timingShiftSixteenths: tempoPending.timingShiftSixteenths || 0,
           bpmOverride: tempoPending.bpm,
         }
       : mappingPending?.arrayBuffer
@@ -7953,6 +8128,7 @@ useEffect(() => {
             arrayBuffer: mappingPending.arrayBuffer,
             noteAssignments: mappingPending.noteAssignments || {},
             noteVelocityModes: mappingPending.noteVelocityModes || {},
+            timingShiftSixteenths: mappingPending.timingShiftSixteenths || 0,
             bpmOverride: null,
           }
         : null;
@@ -7990,6 +8166,7 @@ useEffect(() => {
         arrangementSplitBars: midiImportSplitBars,
         noteAssignments: previewSource.noteAssignments,
         noteVelocityModes: previewSource.noteVelocityModes,
+        timingShiftSixteenths: previewSource.timingShiftSixteenths || 0,
         velocityThresholds: midiImportVelocityThresholds,
       });
     } catch (_) {
@@ -8001,10 +8178,38 @@ useEffect(() => {
       return;
     }
     const preparedImported = buildPreparedImportedMidiResult(imported, previewSource.bpmOverride);
-    const previewPayload =
+    let previewPayload =
       preparedImported.kind === "arrangement"
         ? preparedImported.sections?.[0]?.payload
         : preparedImported.payload;
+    if (preparedImported.kind === "arrangement" && Array.isArray(preparedImported.sections) && preparedImported.sections.length) {
+      const fullNotation = mergeNotationStates(
+        preparedImported.sections
+          .map((section) => buildNotationStateFromPayload(section?.payload))
+          .filter(Boolean)
+      );
+      const totalBars = preparedImported.sections.reduce(
+        (sum, section) => sum + Math.max(1, Number(section?.payload?.bars) || 1),
+        0
+      );
+      const previewBarNumber = Math.max(
+        1,
+        Math.min(
+          totalBars,
+          Math.round(Number(tempoPending?.previewBarNumber) || 1)
+        )
+      );
+      const slicedNotation = fullNotation
+        ? sliceNotationStateByBars(fullNotation, previewBarNumber - 1, 1)
+        : null;
+      const slicedPayload = slicedNotation
+        ? buildPayloadFromNotationState(
+            slicedNotation,
+            Number(preparedImported.sections?.[0]?.payload?.bpm) || Number(previewSource.bpmOverride) || 120
+          )
+        : null;
+      if (slicedPayload) previewPayload = slicedPayload;
+    }
     if (!previewPayload) {
       restoreMidiImportPreviewSnapshot();
       return;
@@ -8023,6 +8228,7 @@ useEffect(() => {
       noteAssignments: previewSource.noteAssignments,
       thresholds: midiImportVelocityThresholds,
       splitBars: midiImportSplitBars,
+      previewBarNumber: tempoPending?.previewBarNumber || 1,
       title: preparedImported.title || "",
       payload: previewPayloadForEditor,
     });
@@ -9729,181 +9935,268 @@ useEffect(() => {
       </main>
 
       <footer className={`${isEmbedMode ? "hidden" : "mt-6 pt-1"}`} data-loopui='1'>
-        <div className="flex flex-wrap items-center justify-end gap-3">
-          <div className="flex items-center gap-2 text-xs text-neutral-500">
-            <a
-              href="/how-to-write-drum-notation.html"
-              className="hover:text-neutral-300 underline underline-offset-2"
-              title="How to write drum notation"
-            >
-              Guide
-            </a>
-            <span className="text-neutral-700">·</span>
-            <a
-              href="/drum-notation-cheat-sheet.html"
-              className="hover:text-neutral-300 underline underline-offset-2"
-              title="Drum notation cheat sheet"
-            >
-              Cheat Sheet
-            </a>
-            <span className="text-neutral-700">·</span>
-            <a
-              href="/drum-groove-notation-examples.html"
-              className="hover:text-neutral-300 underline underline-offset-2"
-              title="Drum groove notation examples"
-            >
-              Examples
-            </a>
-          </div>
-          <button
-            type="button"
-            onClick={() => {
-              setLegalTab("impressum");
-              setIsLegalDialogOpen(true);
-            }}
-            className="text-xs text-neutral-500 hover:text-neutral-300 underline underline-offset-2"
-            title="Legal information"
-          >
-            Legal
-          </button>
-          <button
-            type="button"
-            onClick={() => setIsPreferencesDialogOpen(true)}
-            className="text-xs text-neutral-500 hover:text-neutral-300 underline underline-offset-2"
-            title="Preferences"
-          >
-            Preferences
-          </button>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={handleTapTempo}
-              className="touch-none select-none px-3 py-1.5 rounded border text-sm bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
-              title="Tap tempo (starts after 3 taps)"
-            >
-              Tap
-            </button>
-            <span className="text-sm text-neutral-300">BPM</span>
-            <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
-              <button
-                type="button"
-                onPointerDown={() => startBpmRepeat(-1)}
-                onPointerUp={stopBpmRepeat}
-                onPointerCancel={stopBpmRepeat}
-                onPointerLeave={stopBpmRepeat}
-                className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                aria-label="Decrease BPM"
-              >
-                −
-              </button>
-
-              <input
-                type="number"
-                inputMode="numeric"
-                min={20}
-                max={400}
-                value={bpmDraft}
-                onPointerDown={handleBpmScrubPointerDown}
-                onFocus={(e) => e.target.select()}
-                onClick={(e) => e.target.select()}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  setBpmDraft(v);
-                  if (v === "") return;
-                  const n = Number(v);
-                  if (Number.isFinite(n)) {
-                    const rounded = Math.round(n);
-                    if (rounded >= 20 && rounded <= 400) setBpm(rounded);
-                  }
-                }}
-                onBlur={() => {
-                  if (bpmDraft === "") {
-                    setBpmDraft(String(bpm));
-                    return;
-                  }
-                  const n = Number(bpmDraft);
-                  if (!Number.isFinite(n)) {
-                    setBpmDraft(String(bpm));
-                    return;
-                  }
-                  const clamped = clampBpm(Math.round(n));
-                  setBpm(clamped);
-                  setBpmDraft(String(clamped));
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") e.currentTarget.blur();
-                }}
-                className="w-[70px] px-3 py-1 text-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700 outline-none appearance-none no-spinner touch-none cursor-ns-resize"
-                aria-label="BPM"
-              />
-
-              <button
-                type="button"
-                onPointerDown={() => startBpmRepeat(1)}
-                onPointerUp={stopBpmRepeat}
-                onPointerCancel={stopBpmRepeat}
-                onPointerLeave={stopBpmRepeat}
-                className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                aria-label="Increase BPM"
-              >
-                +
-              </button>
-            </div>
-            <div className="relative self-end pt-5 -translate-y-2">
-              <div className="pointer-events-none absolute inset-x-0 bottom-full -mb-4 text-center text-[11px] text-neutral-500 tabular-nums">
-                {`${Math.round(effectivePlaybackBpm)} BPM`}
-              </div>
-              <div
-                className={`flex items-stretch overflow-hidden rounded-md border ${
-                  Math.abs(playbackRate - 1) < 0.001
-                    ? "border-neutral-800 bg-neutral-900/60"
-                    : "border-neutral-700 bg-neutral-800"
-                }`}
-              >
-                <button
-                  type="button"
-                  onClick={() => setPlaybackRate((prev) => clampPlaybackRate(prev - 0.05))}
-                  className={`px-1.5 text-sm leading-none ${
-                    Math.abs(playbackRate - 1) < 0.001
-                      ? "text-neutral-500 hover:bg-neutral-800/40"
-                      : "text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                  }`}
-                  aria-label="Decrease playback speed"
-                  title="Decrease playback speed"
-                >
-                  −
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPlaybackRate((prev) => (Math.abs(prev - 1) < 0.001 ? prev : 1))}
-                  onPointerDown={handlePlaybackRateScrubPointerDown}
-                  className={`min-w-[50px] px-2 py-1 text-center text-xs border-l border-r tabular-nums ${
-                    Math.abs(playbackRate - 1) < 0.001
-                      ? "text-neutral-500 border-neutral-800 bg-neutral-900/60 hover:bg-neutral-800/40"
-                      : "text-white border-neutral-700 bg-neutral-800 hover:bg-neutral-700/40"
-                  } touch-none cursor-ns-resize select-none`}
-                  title="Reset playback speed to x1"
-                >
-                  {playbackRateLabel}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPlaybackRate((prev) => clampPlaybackRate(prev + 0.05))}
-                  className={`px-1.5 text-sm leading-none ${
-                    Math.abs(playbackRate - 1) < 0.001
-                      ? "text-neutral-500 hover:bg-neutral-800/40"
-                      : "text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                  }`}
-                  aria-label="Increase playback speed"
-                  title="Increase playback speed"
-                >
-                  +
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
+        <div className="flex justify-end" />
       </footer>
+      {!isEmbedMode &&
+        createPortal(
+          <div className="fixed bottom-4 left-1/2 z-[83] -translate-x-1/2">
+            <div className="flex flex-wrap items-center justify-center gap-2 text-xs text-neutral-500">
+              <a
+                href="/how-to-write-drum-notation.html"
+                className="hover:text-neutral-300 underline underline-offset-2"
+                title="How to write drum notation"
+              >
+                Guide
+              </a>
+              <span className="text-neutral-700">·</span>
+              <a
+                href="/drum-notation-cheat-sheet.html"
+                className="hover:text-neutral-300 underline underline-offset-2"
+                title="Drum notation cheat sheet"
+              >
+                Cheat Sheet
+              </a>
+              <span className="text-neutral-700">·</span>
+              <a
+                href="/drum-groove-notation-examples.html"
+                className="hover:text-neutral-300 underline underline-offset-2"
+                title="Drum groove notation examples"
+              >
+                Examples
+              </a>
+              <span className="text-neutral-700">·</span>
+              <button
+                type="button"
+                onClick={() => {
+                  setLegalTab("impressum");
+                  setIsLegalDialogOpen(true);
+                }}
+                className="text-xs text-neutral-500 hover:text-neutral-300 underline underline-offset-2"
+                title="Legal information"
+              >
+                Legal
+              </button>
+              <span className="text-neutral-700">·</span>
+              <button
+                type="button"
+                onClick={() => setIsPreferencesDialogOpen(true)}
+                className="text-xs text-neutral-500 hover:text-neutral-300 underline underline-offset-2"
+                title="Preferences"
+              >
+                Preferences
+              </button>
+            </div>
+          </div>,
+          document.body
+        )}
+      {!isEmbedMode &&
+        createPortal(
+          <>
+            <button
+              ref={transportMenuButtonRef}
+              type="button"
+              onClick={() => setIsTransportMenuOpen((v) => !v)}
+              className="fixed bottom-4 right-4 z-[140] rounded border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-sm text-neutral-300 shadow-2xl hover:bg-neutral-800/60"
+              title="Transport controls"
+            >
+              Tempo
+            </button>
+            {isTransportMenuOpen && (
+              <div
+                ref={transportMenuRef}
+                className="fixed bottom-16 right-4 z-[140] w-[18rem] rounded-xl border border-neutral-700 bg-neutral-900 p-3 shadow-2xl"
+                onMouseDown={(e) => e.stopPropagation()}
+              >
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-sm text-neutral-300">Tap</span>
+                    <button
+                      type="button"
+                      onClick={handleTapTempo}
+                      className="touch-none select-none rounded border border-neutral-700 bg-neutral-800 px-3 py-1.5 text-sm text-white hover:bg-neutral-700/60"
+                      title="Tap tempo (starts after 3 taps)"
+                    >
+                      Tap
+                    </button>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-sm text-neutral-300">BPM</span>
+                    <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
+                      <button
+                        type="button"
+                        onPointerDown={() => startBpmRepeat(-1)}
+                        onPointerUp={stopBpmRepeat}
+                        onPointerCancel={stopBpmRepeat}
+                        onPointerLeave={stopBpmRepeat}
+                        className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                        aria-label="Decrease BPM"
+                      >
+                        −
+                      </button>
+                      <input
+                        type="number"
+                        inputMode="numeric"
+                        min={20}
+                        max={400}
+                        value={bpmDraft}
+                        onPointerDown={handleBpmScrubPointerDown}
+                        onFocus={(e) => e.target.select()}
+                        onClick={(e) => e.target.select()}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setBpmDraft(v);
+                          if (v === "") return;
+                          const n = Number(v);
+                          if (Number.isFinite(n)) {
+                            const rounded = Math.round(n);
+                            if (rounded >= 20 && rounded <= 400) setBpm(rounded);
+                          }
+                        }}
+                        onBlur={() => {
+                          if (bpmDraft === "") {
+                            setBpmDraft(String(bpm));
+                            return;
+                          }
+                          const n = Number(bpmDraft);
+                          if (!Number.isFinite(n)) {
+                            setBpmDraft(String(bpm));
+                            return;
+                          }
+                          const clamped = clampBpm(Math.round(n));
+                          setBpm(clamped);
+                          setBpmDraft(String(clamped));
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") e.currentTarget.blur();
+                        }}
+                        className="w-[70px] border-l border-r border-neutral-700 bg-neutral-800 px-3 py-1 text-center text-sm text-white outline-none appearance-none no-spinner touch-none cursor-ns-resize"
+                        aria-label="BPM"
+                      />
+                      <button
+                        type="button"
+                        onPointerDown={() => startBpmRepeat(1)}
+                        onPointerUp={stopBpmRepeat}
+                        onPointerCancel={stopBpmRepeat}
+                        onPointerLeave={stopBpmRepeat}
+                        className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                        aria-label="Increase BPM"
+                      >
+                        +
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-sm text-neutral-300">Multiplier</span>
+                    <div className="text-right">
+                      <div className="mb-1 text-[11px] text-neutral-500 tabular-nums">
+                        {`${Math.round(effectivePlaybackBpm)} BPM`}
+                      </div>
+                      <div
+                        className={`flex items-stretch overflow-hidden rounded-md border ${
+                          Math.abs(playbackRate - 1) < 0.001
+                            ? "border-neutral-800 bg-neutral-900/60"
+                            : "border-neutral-700 bg-neutral-800"
+                        }`}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => setPlaybackRate((prev) => clampPlaybackRate(prev - 0.05))}
+                          className={`px-1.5 text-sm leading-none ${
+                            Math.abs(playbackRate - 1) < 0.001
+                              ? "text-neutral-500 hover:bg-neutral-800/40"
+                              : "text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                          }`}
+                          aria-label="Decrease playback speed"
+                        >
+                          −
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setPlaybackRate((prev) => (Math.abs(prev - 1) < 0.001 ? prev : 1))}
+                          onPointerDown={handlePlaybackRateScrubPointerDown}
+                          className={`min-w-[56px] border-l border-r px-2 py-1 text-center text-xs tabular-nums ${
+                            Math.abs(playbackRate - 1) < 0.001
+                              ? "text-neutral-500 border-neutral-800 bg-neutral-900/60 hover:bg-neutral-800/40"
+                              : "text-white border-neutral-700 bg-neutral-800 hover:bg-neutral-700/40"
+                          } touch-none cursor-ns-resize select-none`}
+                        >
+                          {playbackRateLabel}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setPlaybackRate((prev) => clampPlaybackRate(prev + 0.05))}
+                          className={`px-1.5 text-sm leading-none ${
+                            Math.abs(playbackRate - 1) < 0.001
+                              ? "text-neutral-500 hover:bg-neutral-800/40"
+                              : "text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                          }`}
+                          aria-label="Increase playback speed"
+                        >
+                          +
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-sm text-neutral-300">Metronome</span>
+                    <button
+                      type="button"
+                      onClick={() => setMetronomeEnabled((v) => !v)}
+                      className={`rounded border px-2.5 py-1 text-xs ${
+                        metronomeEnabled
+                          ? "border-neutral-700 bg-neutral-800 text-white hover:bg-neutral-700/60"
+                          : "border-neutral-800 bg-neutral-900/60 text-neutral-500 hover:bg-neutral-800/40"
+                      }`}
+                    >
+                      {metronomeEnabled ? "On" : "Off"}
+                    </button>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-sm text-neutral-300">Count-in</span>
+                    <button
+                      type="button"
+                      onClick={() => setMetronomeCountInEnabled((v) => !v)}
+                      className={`rounded border px-2.5 py-1 text-xs ${
+                        metronomeCountInEnabled
+                          ? "border-neutral-700 bg-neutral-800 text-white hover:bg-neutral-700/60"
+                          : "border-neutral-800 bg-neutral-900/60 text-neutral-500 hover:bg-neutral-800/40"
+                      }`}
+                    >
+                      {metronomeCountInEnabled ? "On" : "Off"}
+                    </button>
+                  </div>
+
+                  <label className="block">
+                    <div className="mb-1 flex items-center justify-between gap-3">
+                      <span className="text-sm text-neutral-300">Metronome volume</span>
+                      <span className="text-[11px] text-neutral-500 tabular-nums">
+                        {`${Math.round(metronomeVolume * 100)}%`}
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      step={1}
+                      value={Math.round(metronomeVolume * 100)}
+                      onChange={(e) =>
+                        setMetronomeVolume(
+                          Math.max(0, Math.min(1, (Number(e.target.value) || 0) / 100))
+                        )
+                      }
+                      className="w-full accent-neutral-300"
+                    />
+                  </label>
+                </div>
+              </div>
+            )}
+          </>,
+          document.body
+        )}
 
       {isBeatLibraryOpen && (
         <div className="fixed inset-0 z-50 pointer-events-none">
@@ -12242,7 +12535,7 @@ useEffect(() => {
 
       {pendingMidiImportMapping && (
         <div
-          className="fixed inset-0 z-[89] bg-black/60 p-4 flex items-center justify-center"
+          className="fixed inset-0 z-[150] bg-black/60 p-4 flex items-center justify-center"
           onMouseDown={cancelPendingMidiImport}
         >
           <div
@@ -12346,31 +12639,29 @@ useEffect(() => {
                         : "border-neutral-800 bg-neutral-950/40"
                     }`}
                   >
-                    <div className="grid grid-cols-[84px_84px_auto_minmax(0,180px)_144px] items-center gap-2 text-sm text-neutral-200">
+                    <div className="grid grid-cols-[84px_84px_20px_116px_minmax(0,180px)_144px] items-center gap-2 text-sm text-neutral-200">
                       <span>
                         {`MIDI ${entry.note} `}
                         <span className="text-neutral-500">{formatMidiNoteName(entry.note)}</span>
                       </span>
                       <span className="text-neutral-500 tabular-nums">{`${entry.count} hits`}</span>
-                      <div className="flex min-w-[130px] items-center gap-1.5 text-neutral-500">
-                        <span>-&gt;</span>
-                        <div className="flex flex-1 items-center justify-center gap-1.5">
-                          {!value && (
-                            <span className="rounded border border-red-700/40 bg-red-950/30 px-1.5 py-0.5 text-[11px] uppercase tracking-wide text-red-100">
-                              unassigned
-                            </span>
-                          )}
-                          {sameTargetCount > 1 && (
-                            <span className="rounded border border-sky-700/40 bg-sky-950/30 px-1.5 py-0.5 text-[11px] uppercase tracking-wide text-sky-100">
-                              same target
-                            </span>
-                          )}
-                          {conflict && (
-                            <span className="rounded border border-amber-600/40 bg-amber-900/30 px-1.5 py-0.5 text-[11px] uppercase tracking-wide text-amber-100">
-                              merges
-                            </span>
-                          )}
-                        </div>
+                      <span className="text-neutral-500">-&gt;</span>
+                      <div className="flex min-h-[24px] items-center justify-center gap-1.5 text-neutral-500">
+                        {!value && (
+                          <span className="rounded border border-red-700/40 bg-red-950/30 px-1.5 py-0.5 text-[11px] uppercase tracking-wide text-red-100">
+                            unassigned
+                          </span>
+                        )}
+                        {sameTargetCount > 1 && (
+                          <span className="rounded border border-sky-700/40 bg-sky-950/30 px-1.5 py-0.5 text-[11px] uppercase tracking-wide text-sky-100">
+                            same target
+                          </span>
+                        )}
+                        {conflict && (
+                          <span className="rounded border border-amber-600/40 bg-amber-900/30 px-1.5 py-0.5 text-[11px] uppercase tracking-wide text-amber-100">
+                            merges
+                          </span>
+                        )}
                       </div>
                       <div className="min-w-0">
                         <select
@@ -12539,7 +12830,7 @@ useEffect(() => {
 
       {pendingMidiTempoPrompt && (
         <div
-          className="fixed inset-0 z-[89] bg-black/60 p-4 flex items-center justify-center"
+          className="fixed inset-0 z-[150] bg-black/60 p-4 flex items-center justify-center"
           onMouseDown={cancelPendingMidiImport}
         >
           <div
@@ -12578,6 +12869,133 @@ useEffect(() => {
                 className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1.5 text-sm text-white"
               />
             </label>
+            <div className="mt-4 flex flex-wrap items-center gap-3">
+              <span className="text-sm text-neutral-300">Shift</span>
+              <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setPendingMidiTempoPrompt((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            timingShiftSixteenths: Math.max(-15, Math.min(15, (Number(prev.timingShiftSixteenths) || 0) - 1)),
+                          }
+                        : prev
+                    )
+                  }
+                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                  aria-label="Shift imported MIDI earlier"
+                >
+                  −
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setPendingMidiTempoPrompt((prev) =>
+                      prev ? { ...prev, timingShiftSixteenths: 0 } : prev
+                    )
+                  }
+                  className="min-w-[78px] border-l border-r border-neutral-700 px-2 py-1 text-center text-xs text-white hover:bg-neutral-700/30"
+                  title="Reset timing shift"
+                >
+                  {formatTimingShiftLabel(pendingMidiTempoPrompt.timingShiftSixteenths || 0)}
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setPendingMidiTempoPrompt((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            timingShiftSixteenths: Math.max(-15, Math.min(15, (Number(prev.timingShiftSixteenths) || 0) + 1)),
+                          }
+                        : prev
+                    )
+                  }
+                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                  aria-label="Shift imported MIDI later"
+                >
+                  +
+                </button>
+              </div>
+              {!!pendingMidiTempoPrompt.imported?.suggestedShiftSixteenths && (
+                <>
+                  <span className="text-sm text-neutral-500">
+                    Suggested: {formatTimingShiftLabel(pendingMidiTempoPrompt.imported?.suggestedShiftSixteenths || 0)}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setPendingMidiTempoPrompt((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              timingShiftSixteenths: Math.max(-15, Math.min(15, Number(prev.imported?.suggestedShiftSixteenths) || 0)),
+                            }
+                          : prev
+                      )
+                    }
+                    className="rounded border border-neutral-700 px-2.5 py-1 text-sm text-neutral-200 hover:bg-neutral-800/60"
+                    title="Apply suggested timing shift"
+                  >
+                    Use suggested
+                  </button>
+                </>
+              )}
+              {pendingMidiTempoPrompt.imported?.kind === "arrangement" && (
+                <>
+                  <span className="text-sm text-neutral-300">Preview bar</span>
+                  <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setPendingMidiTempoPrompt((prev) =>
+                          prev
+                            ? {
+                                ...prev,
+                                previewBarNumber: Math.max(1, (Number(prev.previewBarNumber) || 1) - 1),
+                              }
+                            : prev
+                        )
+                      }
+                      className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                      aria-label="Preview previous bar"
+                    >
+                      −
+                    </button>
+                    <div className="min-w-[70px] border-l border-r border-neutral-700 px-2 py-1 text-center text-xs text-white">
+                      {`Bar ${Math.max(1, Math.round(Number(pendingMidiTempoPrompt.previewBarNumber) || 1))}`}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setPendingMidiTempoPrompt((prev) => {
+                          if (!prev) return prev;
+                          const totalBars = prev.imported?.kind === "arrangement"
+                            ? (prev.imported.sections || []).reduce(
+                                (sum, section) => sum + Math.max(1, Number(section?.payload?.bars) || 1),
+                                0
+                              )
+                            : 1;
+                          return {
+                            ...prev,
+                            previewBarNumber: Math.min(
+                              Math.max(1, totalBars),
+                              (Number(prev.previewBarNumber) || 1) + 1
+                            ),
+                          };
+                        })
+                      }
+                      className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                      aria-label="Preview next bar"
+                    >
+                      +
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
             {pendingMidiTempoPrompt.imported?.kind === "arrangement" && (
               <div className="mt-4 grid grid-cols-1 gap-3">
                 <label className="text-sm text-neutral-300 flex flex-col gap-1">

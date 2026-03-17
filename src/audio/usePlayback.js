@@ -4,7 +4,17 @@ import { loadSamples } from "./sampleLoader";
 import { SAMPLE_MAP } from "./sampleMap";
 import { primeIOSAudioSync } from "./iosPrime";
 
-export function usePlayback({ instruments, grid, columns, bpm, resolution, stepQuarterDurations }) {
+export function usePlayback({
+  instruments,
+  grid,
+  columns,
+  bpm,
+  resolution,
+  stepQuarterDurations,
+  timeSig,
+  metronomeEnabled,
+  metronomeVolume,
+}) {
   const engine = useMemo(() => makeAudioEngine(), []);
   const [isReady, setIsReady] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -29,8 +39,11 @@ export function usePlayback({ instruments, grid, columns, bpm, resolution, stepQ
       nextResolution: resolution,
       nextColumns: columns,
       nextStepQuarterDurations: stepQuarterDurations,
+      nextTimeSig: timeSig,
+      nextMetronomeEnabled: metronomeEnabled,
+      nextMetronomeVolume: metronomeVolume,
     });
-  }, [engine, bpm, resolution, columns, stepQuarterDurations]);
+  }, [engine, bpm, resolution, columns, stepQuarterDurations, timeSig, metronomeEnabled, metronomeVolume]);
 
   useEffect(() => {
     engine.setOnStep((step, meta) => {
@@ -99,12 +112,20 @@ export function usePlayback({ instruments, grid, columns, bpm, resolution, stepQ
         }
 
         try {
-          await engine.play(() => snapRef.current, { startStep });
+          await engine.play(() => snapRef.current, {
+            startStep,
+            countInBeats: opts.countInBeats,
+            countInBeatDurSec: opts.countInBeatDurSec,
+          });
         } catch (err) {
           // One retry after explicit unlock/resume helps on strict Chromium autoplay states.
           await engine.unlock();
           await engine.resumeIfNeeded();
-          await engine.play(() => snapRef.current, { startStep });
+          await engine.play(() => snapRef.current, {
+            startStep,
+            countInBeats: opts.countInBeats,
+            countInBeatDurSec: opts.countInBeatDurSec,
+          });
         }
         setIsPlaying(true);
       } catch (e) {
@@ -140,7 +161,14 @@ export function usePlayback({ instruments, grid, columns, bpm, resolution, stepQ
     setPlayhead(Math.max(0, Math.floor(Number(stepIndex) || 0)));
   }, [engine]);
   const playCompiled = useCallback(
-    async ({ events = [], startAtSec = 0, totalDurationSec = 0, loop = false } = {}) => {
+    async ({
+      events = [],
+      startAtSec = 0,
+      totalDurationSec = 0,
+      loop = false,
+      countInBeats = 0,
+      countInBeatDurSec = 0,
+    } = {}) => {
       try {
         primeIOSAudioSync();
         engine.unlock();
@@ -159,6 +187,8 @@ export function usePlayback({ instruments, grid, columns, bpm, resolution, stepQ
           startAtSec,
           totalDurationSec,
           loop,
+          countInBeats,
+          countInBeatDurSec,
         });
         setIsPlaying(true);
         return startedAt;
