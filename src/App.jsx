@@ -2066,17 +2066,18 @@ export default function App() {
   });
   const [metronomeEnabled, setMetronomeEnabled] = useState(() => {
     try {
-      return window.localStorage.getItem(METRONOME_ENABLED_STORAGE_KEY) === "true";
+      const raw = window.localStorage.getItem(METRONOME_ENABLED_STORAGE_KEY);
+      return raw == null ? true : raw === "true";
     } catch (_) {
-      return false;
+      return true;
     }
   });
   const [metronomeVolume, setMetronomeVolume] = useState(() => {
     try {
       const raw = Number(window.localStorage.getItem(METRONOME_VOLUME_STORAGE_KEY));
-      return Number.isFinite(raw) ? Math.max(0, Math.min(1, raw)) : 0.75;
+      return Number.isFinite(raw) ? Math.max(0, Math.min(1, raw)) : 0.3;
     } catch (_) {
-      return 0.75;
+      return 0.3;
     }
   });
   const [metronomeCountInEnabled, setMetronomeCountInEnabled] = useState(() => {
