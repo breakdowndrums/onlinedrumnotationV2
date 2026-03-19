@@ -1744,7 +1744,9 @@ export default function App() {
   const [isLegalDialogOpen, setIsLegalDialogOpen] = useState(false);
   const [isPreferencesDialogOpen, setIsPreferencesDialogOpen] = useState(false);
   const [isAuthDialogOpen, setIsAuthDialogOpen] = useState(false);
+  const [authMode, setAuthMode] = useState("sign-in");
   const [authEmailInput, setAuthEmailInput] = useState("");
+  const [authPasswordInput, setAuthPasswordInput] = useState("");
   const [authPending, setAuthPending] = useState(false);
   const [authMessage, setAuthMessage] = useState("");
   const [authError, setAuthError] = useState("");
@@ -2370,7 +2372,9 @@ export default function App() {
   const openAuthDialog = React.useCallback(() => {
     setAuthError("");
     setAuthMessage("");
+    setAuthMode("sign-in");
     setAuthEmailInput(authUserEmail || authEmailInput);
+    setAuthPasswordInput("");
     setIsAuthDialogOpen(true);
   }, [authUserEmail, authEmailInput]);
 
@@ -2397,7 +2401,87 @@ export default function App() {
       setAuthError(error.message || "Failed to send login link.");
       return;
     }
-    setAuthMessage(`Magic link sent to ${email}.`);
+    setIsAuthDialogOpen(false);
+  }, [authEmailInput]);
+
+  const handlePasswordSignIn = React.useCallback(async () => {
+    if (!hasSupabaseEnabled || !supabase) {
+      setAuthError("Supabase is not configured.");
+      return;
+    }
+    const email = String(authEmailInput || "").trim();
+    const password = String(authPasswordInput || "");
+    if (!email) {
+      setAuthError("Enter an email address.");
+      return;
+    }
+    if (!password) {
+      setAuthError("Enter a password.");
+      return;
+    }
+    setAuthPending(true);
+    setAuthError("");
+    setAuthMessage("");
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    setAuthPending(false);
+    if (error) {
+      setAuthError(error.message || "Failed to sign in.");
+    }
+  }, [authEmailInput, authPasswordInput]);
+
+  const handlePasswordSignUp = React.useCallback(async () => {
+    if (!hasSupabaseEnabled || !supabase) {
+      setAuthError("Supabase is not configured.");
+      return;
+    }
+    const email = String(authEmailInput || "").trim();
+    const password = String(authPasswordInput || "");
+    if (!email) {
+      setAuthError("Enter an email address.");
+      return;
+    }
+    if (password.length < 6) {
+      setAuthError("Password must be at least 6 characters.");
+      return;
+    }
+    setAuthPending(true);
+    setAuthError("");
+    setAuthMessage("");
+    const redirectTo = `${window.location.origin}${window.location.pathname}${window.location.search}`;
+    const { error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: { emailRedirectTo: redirectTo },
+    });
+    setAuthPending(false);
+    if (error) {
+      setAuthError(error.message || "Failed to sign up.");
+      return;
+    }
+    setAuthMessage("Check your email to confirm your account.");
+  }, [authEmailInput, authPasswordInput]);
+
+  const handlePasswordReset = React.useCallback(async () => {
+    if (!hasSupabaseEnabled || !supabase) {
+      setAuthError("Supabase is not configured.");
+      return;
+    }
+    const email = String(authEmailInput || "").trim();
+    if (!email) {
+      setAuthError("Enter an email address.");
+      return;
+    }
+    setAuthPending(true);
+    setAuthError("");
+    setAuthMessage("");
+    const redirectTo = `${window.location.origin}${window.location.pathname}${window.location.search}`;
+    const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo });
+    setAuthPending(false);
+    if (error) {
+      setAuthError(error.message || "Failed to send reset email.");
+      return;
+    }
+    setAuthMessage("Check your email to reset your password.");
   }, [authEmailInput]);
 
   const handleSignOut = React.useCallback(async () => {
@@ -6376,6 +6460,18 @@ useEffect(() => {
     midiImportSplitBars,
     midiImportVelocityThresholds,
   ]);
+  const pendingMidiImportMappingLooksReady = React.useMemo(() => {
+    if (!pendingMidiImportMapping) return false;
+    const entries = pendingMidiImportMapping.mappingEntries || [];
+    if (!entries.length) return false;
+    return entries.every((entry) =>
+      String(
+        pendingMidiImportMapping.noteAssignments?.[String(entry.sourceKey || entry.note)] ||
+          pendingMidiImportMapping.noteAssignments?.[String(entry.note)] ||
+          ""
+      ).trim()
+    );
+  }, [pendingMidiImportMapping]);
   const handleMidiImportFile = React.useCallback(
     async (file) => {
       if (!file) return;
@@ -6387,48 +6483,25 @@ useEffect(() => {
         timingShiftSixteenths: 0,
         velocityThresholds: midiImportVelocityThresholds,
       });
-      if (imported.kind === "needs-mapping") {
-        setPendingMidiImportMapping(buildPendingMidiImportMappingState({
-          arrayBuffer: buffer,
-          fileName: file.name,
-          lastModified: file.lastModified || "",
-          title: imported.title || "",
-          titleLine1: imported.title || "",
-          titleLine2: "",
-          author: imported.composer || "",
-          composer: imported.composer || "",
-          applyMode: "new",
-          arrangementImportMode: midiArrangementImportMode,
-          splitBars: midiImportSplitBars,
-          timingShiftSixteenths: 0,
-          noteAssignments: {},
-          noteVelocityModes: {},
-        }, imported));
-        setIsShareActionsDialogOpen(false);
-        return;
-      }
-      setPendingMidiTempoPrompt({
-        imported,
+      setPendingMidiImportMapping(buildPendingMidiImportMappingState({
         arrayBuffer: buffer,
-        noteAssignments: {},
-        noteVelocityModes: {},
-        previewBarNumber: 1,
+        fileName: file.name,
+        lastModified: file.lastModified || "",
+        title: imported.title || "",
+        titleLine1: imported.title || "",
+        titleLine2: "",
+        author: imported.composer || "",
+        composer: imported.composer || "",
         applyMode: "new",
         arrangementImportMode: midiArrangementImportMode,
         splitBars: midiImportSplitBars,
         timingShiftSixteenths: 0,
-        titleLine1: imported.title || "",
-        titleLine2: "",
-        author: imported.composer || "",
-        fileMeta: {
-          fileName: file.name,
-          lastModified: file.lastModified || "",
-        },
-        bpm: getSuggestedImportedMidiBpm(imported, bpm),
-      });
+        noteAssignments: {},
+        noteVelocityModes: {},
+      }, imported));
       setIsShareActionsDialogOpen(false);
     },
-    [bpm, buildPendingMidiImportMappingState, getSuggestedImportedMidiBpm, midiArrangementImportMode, midiImportSplitBars, midiImportVelocityThresholds]
+    [buildPendingMidiImportMappingState, midiArrangementImportMode, midiImportSplitBars, midiImportVelocityThresholds]
   );
   const confirmPendingMidiImportMapping = React.useCallback(() => {
     if (!pendingMidiImportMapping?.arrayBuffer) return;
@@ -13338,7 +13411,7 @@ useEffect(() => {
           >
             <h3 className="text-base font-semibold">Map MIDI Notes</h3>
             <p className="mt-2 text-sm text-neutral-300">
-              Some MIDI notes are not in the current drum map. Assign each note to an instrument or choose Ignore.
+              Review the detected MIDI mapping before import. Assign each note to an instrument or choose Ignore.
             </p>
             <div className="mt-4 flex items-center gap-3">
               <span className="text-sm text-neutral-300">Mapping preset</span>
@@ -13612,7 +13685,9 @@ useEffect(() => {
                       ).trim()
                   )
                     ? "border-neutral-800 text-neutral-500 bg-neutral-900/60 cursor-not-allowed"
-                    : "border-neutral-700 text-white bg-neutral-800 hover:bg-neutral-700/60"
+                    : pendingMidiImportMappingLooksReady
+                      ? "border-sky-700/80 text-white bg-sky-700 hover:bg-sky-600"
+                      : "border-neutral-700 text-white bg-neutral-800 hover:bg-neutral-700/60"
                 }`}
               >
                 {pendingMidiImportMapping.applyMode === "update-last" ? "Update" : "Import"}
@@ -14158,14 +14233,23 @@ useEffect(() => {
       />
       <AuthDialog
         isOpen={isAuthDialogOpen}
+        mode={authMode}
+        onModeChange={setAuthMode}
         emailInputRef={authEmailInputRef}
         email={authEmailInput}
         onEmailChange={setAuthEmailInput}
+        password={authPasswordInput}
+        onPasswordChange={setAuthPasswordInput}
         onCancel={() => {
           setIsAuthDialogOpen(false);
           setAuthError("");
         }}
-        onSubmit={handleMagicLinkSignIn}
+        onSubmit={() => {
+          if (authMode === "sign-up") return handlePasswordSignUp();
+          if (authMode === "reset") return handlePasswordReset();
+          if (authMode === "magic-link") return handleMagicLinkSignIn();
+          return handlePasswordSignIn();
+        }}
         pending={authPending}
         error={authError}
         message={authMessage}
