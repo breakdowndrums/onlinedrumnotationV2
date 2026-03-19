@@ -2351,10 +2351,17 @@ export default function App() {
       });
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
+    } = supabase.auth.onAuthStateChange((event, session) => {
       setAuthSession(session || null);
       setAuthPending(false);
       setAuthError("");
+      if (event === "PASSWORD_RECOVERY") {
+        setAuthMode("new-password");
+        setAuthPasswordInput("");
+        setAuthMessage("");
+        setIsAuthDialogOpen(true);
+        return;
+      }
       if (session?.user) {
         setAuthMessage("Login successful.");
         setIsAuthDialogOpen(false);
@@ -2489,6 +2496,30 @@ export default function App() {
     }
     setAuthMessage("Check your email to reset your password.");
   }, [authEmailInput]);
+  const handleSetNewPassword = React.useCallback(async () => {
+    if (!hasSupabaseEnabled || !supabase) {
+      setAuthError("Supabase is not configured.");
+      return;
+    }
+    const password = String(authPasswordInput || "");
+    if (password.length < 6) {
+      setAuthError("Password must be at least 6 characters.");
+      return;
+    }
+    setAuthPending(true);
+    setAuthError("");
+    setAuthMessage("");
+    const { error } = await supabase.auth.updateUser({ password });
+    setAuthPending(false);
+    if (error) {
+      setAuthError(error.message || "Failed to update password.");
+      return;
+    }
+    setAuthMessage("Password updated.");
+    setIsAuthDialogOpen(false);
+    setAuthMode("sign-in");
+    setAuthPasswordInput("");
+  }, [authPasswordInput]);
 
   const handleSignOut = React.useCallback(async () => {
     if (!hasSupabaseEnabled || !supabase) return;
@@ -14040,6 +14071,7 @@ useEffect(() => {
         }}
         onSubmit={() => {
           if (authMode === "sign-up") return handlePasswordSignUp();
+          if (authMode === "new-password") return handleSetNewPassword();
           if (authMode === "reset") return handlePasswordReset();
           if (authMode === "magic-link") return handleMagicLinkSignIn();
           return handlePasswordSignIn();
