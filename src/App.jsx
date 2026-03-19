@@ -4,6 +4,9 @@ import { exportNotationPdf } from "./utils/exportNotationPdf";
 import { exportArrangementPdf } from "./utils/exportArrangementPdf";
 import { exportArrangementMidi, exportDrumMidi } from "./utils/exportMidi";
 import { importDrumMidi } from "./utils/importMidi";
+import AuthDialog from "./components/AuthDialog";
+import LegalDialog from "./components/LegalDialog";
+import { hasSupabaseEnabled, supabase } from "./lib/supabase";
 import QRCode from "qrcode";
 import { usePlayback } from "./audio/usePlayback";
 import * as Vex from "vexflow";
@@ -454,6 +457,112 @@ function normalizeArrangementItems(items) {
       notationSpacingPreset: normalizeSpacingPreset(item?.notationSpacingPreset),
     }))
     .filter((item) => item.id && item.beatId);
+}
+
+function readStoredLocalBeats() {
+  try {
+    const raw = window.localStorage.getItem(LOCAL_BEAT_LIBRARY_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function readStoredSavedArrangements() {
+  try {
+    const raw = window.localStorage.getItem(SONG_ARRANGEMENT_LIBRARY_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((entry) => ({
+        id: String(entry?.id || ""),
+        name: String(entry?.name || "").trim(),
+        titleLine1: String(entry?.titleLine1 || ""),
+        titleLine2: String(entry?.titleLine2 || ""),
+        composer: String(entry?.composer || ""),
+        updatedAt: String(entry?.updatedAt || entry?.createdAt || ""),
+        createdAt: String(entry?.createdAt || entry?.updatedAt || ""),
+        items: normalizeArrangementItems(entry?.items),
+      }))
+      .filter((entry) => entry.id && entry.name);
+  } catch (_) {
+    return [];
+  }
+}
+
+function normalizeCloudBeatRow(row) {
+  if (!row || typeof row !== "object") return null;
+  const payload = row.payload && typeof row.payload === "object" ? row.payload : null;
+  if (!payload) return null;
+  return {
+    id: String(row.id || ""),
+    name: String(row.name || "").trim() || "Untitled Beat",
+    category: "Groove",
+    style: undefined,
+    timeSigCategory: `${payload?.timeSig?.n || 4}/${payload?.timeSig?.d || 4}`,
+    bpm: Math.max(20, Math.min(400, Number(payload?.bpm) || 120)),
+    createdAt: String(row.created_at || row.updated_at || ""),
+    updatedAt: String(row.updated_at || row.created_at || ""),
+    payload,
+    source: "local",
+  };
+}
+
+function normalizeCloudArrangementRow(row) {
+  if (!row || typeof row !== "object") return null;
+  const items = normalizeArrangementItems(row.rows);
+  return {
+    id: String(row.id || ""),
+    name: String(row.name || "").trim() || "Untitled Arrangement",
+    titleLine1: String(row.title_line_1 || ""),
+    titleLine2: String(row.title_line_2 || ""),
+    composer: String(row.author || ""),
+    updatedAt: String(row.updated_at || row.created_at || ""),
+    createdAt: String(row.created_at || row.updated_at || ""),
+    items,
+  };
+}
+
+function makeShortShareId() {
+  const bytes = new Uint8Array(6);
+  window.crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(36).padStart(2, "0")).join("").slice(0, 10);
+}
+
+function normalizePublishedBeatEntry(row) {
+  const payload = row?.payload;
+  if (!payload || payload.kind !== "beat-default" || !payload.beatPayload) return null;
+  const beatPayload = payload.beatPayload;
+  return {
+    id: String(row.id || ""),
+    name: String(payload.name || "").trim() || "Untitled Beat",
+    composer: String(payload.composer || ""),
+    category: String(payload.category || "Groove"),
+    style: String(payload.style || "") || undefined,
+    timeSigCategory: `${beatPayload?.timeSig?.n || 4}/${beatPayload?.timeSig?.d || 4}`,
+    bpm: Math.max(20, Math.min(400, Number(beatPayload?.bpm) || 120)),
+    createdAt: String(row.created_at || payload.createdAt || ""),
+    payload: beatPayload,
+    source: "public",
+    publishedShareId: String(row.id || ""),
+  };
+}
+
+function normalizePublishedArrangementEntry(row) {
+  const payload = row?.payload;
+  if (!payload || payload.kind !== "arrangement-default" || !Array.isArray(payload.items)) return null;
+  return {
+    id: String(row.id || ""),
+    name: String(payload.name || "").trim() || "Untitled Arrangement",
+    titleLine1: String(payload.titleLine1 || ""),
+    titleLine2: String(payload.titleLine2 || ""),
+    composer: String(payload.composer || ""),
+    updatedAt: String(row.created_at || payload.createdAt || ""),
+    createdAt: String(row.created_at || payload.createdAt || ""),
+    items: normalizeArrangementItems(payload.items),
+    publishedShareId: String(row.id || ""),
+  };
 }
 
 function getArrangementNameFromTitles(titleLine1, titleLine2, fallback = "Arrangement") {
@@ -1634,6 +1743,12 @@ export default function App() {
   const [lastMidiImportSession, setLastMidiImportSession] = useState(null);
   const [isLegalDialogOpen, setIsLegalDialogOpen] = useState(false);
   const [isPreferencesDialogOpen, setIsPreferencesDialogOpen] = useState(false);
+  const [isAuthDialogOpen, setIsAuthDialogOpen] = useState(false);
+  const [authEmailInput, setAuthEmailInput] = useState("");
+  const [authPending, setAuthPending] = useState(false);
+  const [authMessage, setAuthMessage] = useState("");
+  const [authError, setAuthError] = useState("");
+  const [authSession, setAuthSession] = useState(null);
   const [preferencesCategory, setPreferencesCategory] = useState(() => {
     try {
       const raw = (window.localStorage.getItem(PREFERENCES_CATEGORY_STORAGE_KEY) || "").toLowerCase();
@@ -1872,25 +1987,7 @@ export default function App() {
     }
   });
   const [savedArrangements, setSavedArrangements] = useState(() => {
-    try {
-      const raw = window.localStorage.getItem(SONG_ARRANGEMENT_LIBRARY_STORAGE_KEY);
-      const parsed = raw ? JSON.parse(raw) : [];
-      if (!Array.isArray(parsed)) return [];
-      return parsed
-        .map((entry) => ({
-          id: String(entry?.id || ""),
-          name: String(entry?.name || "").trim(),
-          titleLine1: String(entry?.titleLine1 || ""),
-          titleLine2: String(entry?.titleLine2 || ""),
-          composer: String(entry?.composer || ""),
-          updatedAt: String(entry?.updatedAt || entry?.createdAt || ""),
-          createdAt: String(entry?.createdAt || entry?.updatedAt || ""),
-          items: normalizeArrangementItems(entry?.items),
-        }))
-        .filter((entry) => entry.id && entry.name);
-    } catch (_) {
-      return [];
-    }
+    return readStoredSavedArrangements();
   });
   const [arrangementNameDraft, setArrangementNameDraft] = useState("");
   const [arrangementTitleLine1Draft, setArrangementTitleLine1Draft] = useState(() => {
@@ -1955,18 +2052,15 @@ export default function App() {
   const [midiImportSplitBars, setMidiImportSplitBars] = useState(1);
   const [midiArrangementImportMode, setMidiArrangementImportMode] = useState("new-arrangement");
   const [localBeats, setLocalBeats] = useState(() => {
-    try {
-      const raw = window.localStorage.getItem(LOCAL_BEAT_LIBRARY_STORAGE_KEY);
-      const parsed = raw ? JSON.parse(raw) : [];
-      return Array.isArray(parsed) ? parsed : [];
-    } catch (_) {
-      return [];
-    }
+    return readStoredLocalBeats();
   });
   const [localBeatPast, setLocalBeatPast] = useState([]);
   const [localBeatFuture, setLocalBeatFuture] = useState([]);
   const [publicBeats, setPublicBeats] = useState([]);
+  const [publicArrangements, setPublicArrangements] = useState([]);
+  const [selectedPublicArrangementId, setSelectedPublicArrangementId] = useState("");
   const [publicLibraryLoading, setPublicLibraryLoading] = useState(false);
+  const [publicArrangementLibraryLoading, setPublicArrangementLibraryLoading] = useState(false);
   const [publicLibraryError, setPublicLibraryError] = useState("");
   const [libraryFiltersOpen, setLibraryFiltersOpen] = useState(false);
   const libraryFiltersRef = useRef(null);
@@ -2201,6 +2295,7 @@ export default function App() {
   const arrangementNotationMoreMenuButtonRef = React.useRef(null);
   const fileMenuRef = React.useRef(null);
   const fileMenuButtonRef = React.useRef(null);
+  const authEmailInputRef = React.useRef(null);
   const transportMenuRef = React.useRef(null);
   const transportMenuButtonRef = React.useRef(null);
   const beatLibraryPanelRef = React.useRef(null);
@@ -2223,6 +2318,175 @@ export default function App() {
   const appliedSharedKeyRef = React.useRef(null);
   const gridMenuRowPrimaryRef = React.useRef(null);
   const gridMenuRowSecondaryRef = React.useRef(null);
+  const authUser = authSession?.user || null;
+  const authUserEmail = String(authUser?.email || "").trim();
+  const authUserLabel = authUserEmail || "Account";
+  const adminEmail = String(import.meta.env.VITE_ADMIN_EMAIL || "").trim().toLowerCase();
+  const isAdminUser = Boolean(authUser?.id && adminEmail && authUserEmail.toLowerCase() === adminEmail);
+
+  useEffect(() => {
+    if (!hasSupabaseEnabled || !supabase) return undefined;
+    let alive = true;
+    supabase.auth
+      .getSession()
+      .then(({ data, error }) => {
+        if (!alive) return;
+        if (error) {
+          setAuthError(error.message || "Failed to load login state.");
+          return;
+        }
+        setAuthSession(data?.session || null);
+      })
+      .catch((error) => {
+        if (!alive) return;
+        setAuthError(error?.message || "Failed to load login state.");
+      });
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setAuthSession(session || null);
+      setAuthPending(false);
+      setAuthError("");
+      if (session?.user) {
+        setAuthMessage("Login successful.");
+        setIsAuthDialogOpen(false);
+      }
+    });
+    return () => {
+      alive = false;
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isAuthDialogOpen) return;
+    const timer = window.setTimeout(() => {
+      authEmailInputRef.current?.focus();
+      authEmailInputRef.current?.select?.();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [isAuthDialogOpen]);
+
+  const openAuthDialog = React.useCallback(() => {
+    setAuthError("");
+    setAuthMessage("");
+    setAuthEmailInput(authUserEmail || authEmailInput);
+    setIsAuthDialogOpen(true);
+  }, [authUserEmail, authEmailInput]);
+
+  const handleMagicLinkSignIn = React.useCallback(async () => {
+    if (!hasSupabaseEnabled || !supabase) {
+      setAuthError("Supabase is not configured.");
+      return;
+    }
+    const email = String(authEmailInput || "").trim();
+    if (!email) {
+      setAuthError("Enter an email address.");
+      return;
+    }
+    setAuthPending(true);
+    setAuthError("");
+    setAuthMessage("");
+    const redirectTo = `${window.location.origin}${window.location.pathname}${window.location.search}`;
+    const { error } = await supabase.auth.signInWithOtp({
+      email,
+      options: { emailRedirectTo: redirectTo },
+    });
+    setAuthPending(false);
+    if (error) {
+      setAuthError(error.message || "Failed to send login link.");
+      return;
+    }
+    setAuthMessage(`Magic link sent to ${email}.`);
+  }, [authEmailInput]);
+
+  const handleSignOut = React.useCallback(async () => {
+    if (!hasSupabaseEnabled || !supabase) return;
+    setAuthPending(true);
+    setAuthError("");
+    const { error } = await supabase.auth.signOut();
+    setAuthPending(false);
+    if (error) {
+      setAuthError(error.message || "Failed to sign out.");
+      return;
+    }
+    setAuthMessage("Signed out.");
+  }, []);
+  const refreshPublicArrangementLibrary = React.useCallback(async () => {
+    setPublicArrangementLibraryLoading(true);
+    setPublicLibraryError("");
+    try {
+      if (hasSupabaseEnabled && supabase) {
+        const { data, error } = await supabase
+          .from("share_links")
+          .select("id,payload,created_at")
+          .eq("kind", "arrangement")
+          .order("created_at", { ascending: false })
+          .limit(300);
+        if (error) {
+          setPublicLibraryError(error.message || "Failed to load public arrangements");
+        } else {
+          setPublicArrangements(
+            (Array.isArray(data) ? data : [])
+              .map(normalizePublishedArrangementEntry)
+              .filter(Boolean)
+          );
+        }
+        setPublicArrangementLibraryLoading(false);
+        return;
+      }
+      setPublicArrangements([]);
+    } catch (_) {
+      setPublicLibraryError("Failed to load public arrangements");
+    } finally {
+      setPublicArrangementLibraryLoading(false);
+    }
+  }, []);
+  useEffect(() => {
+    if (!hasSupabaseEnabled || !supabase) return undefined;
+    if (!authUser?.id) {
+      const nextLocalBeats = readStoredLocalBeats();
+      const nextSavedArrangements = readStoredSavedArrangements();
+      setLocalBeats(nextLocalBeats);
+      setSavedArrangements(nextSavedArrangements);
+      return undefined;
+    }
+    let cancelled = false;
+    const loadCloudLibrary = async () => {
+      const [{ data: beatRows, error: beatsError }, { data: arrangementRows, error: arrangementsError }] =
+        await Promise.all([
+          supabase
+            .from("beats")
+            .select("id,name,payload,created_at,updated_at")
+            .order("updated_at", { ascending: false }),
+          supabase
+            .from("arrangements")
+            .select("id,name,title_line_1,title_line_2,author,rows,created_at,updated_at")
+            .order("updated_at", { ascending: false }),
+        ]);
+      if (cancelled) return;
+      if (beatsError || arrangementsError) {
+        setAuthError(
+          beatsError?.message ||
+            arrangementsError?.message ||
+            "Failed to load cloud library."
+        );
+        return;
+      }
+      const nextBeats = Array.isArray(beatRows)
+        ? beatRows.map(normalizeCloudBeatRow).filter(Boolean)
+        : [];
+      const nextArrangements = Array.isArray(arrangementRows)
+        ? arrangementRows.map(normalizeCloudArrangementRow).filter(Boolean)
+        : [];
+      setLocalBeats(nextBeats);
+      setSavedArrangements(nextArrangements);
+    };
+    loadCloudLibrary();
+    return () => {
+      cancelled = true;
+    };
+  }, [authUser?.id]);
   const notationMenuRowRef = React.useRef(null);
   const selectionMenuRowRef = React.useRef(null);
 
@@ -2245,12 +2509,13 @@ export default function App() {
   }, [arrangementItems]);
   useEffect(() => {
     try {
+      if (authUser?.id) return;
       window.localStorage.setItem(
         SONG_ARRANGEMENT_LIBRARY_STORAGE_KEY,
         JSON.stringify(savedArrangements)
       );
     } catch (_) {}
-  }, [savedArrangements]);
+  }, [savedArrangements, authUser?.id]);
   useEffect(() => {
     try {
       if (loadedArrangementId) {
@@ -2693,6 +2958,20 @@ export default function App() {
     const controller = new AbortController();
     const load = async () => {
       try {
+        if (hasSupabaseEnabled && supabase) {
+          const { data, error } = await supabase
+            .from("share_links")
+            .select("payload")
+            .eq("id", String(routeOptions.shareId))
+            .maybeSingle();
+          if (!cancelled && !error) {
+            const payload = data?.payload;
+            if (payload && typeof payload === "object") {
+              setResolvedSharedState(payload);
+              return;
+            }
+          }
+        }
         const res = await fetch(`/api/share/${encodeURIComponent(routeOptions.shareId)}`, {
           method: "GET",
           signal: controller.signal,
@@ -4296,14 +4575,42 @@ useEffect(() => {
     setArrangementPlaybackIndex(0);
     setLoopRepeats("all");
   }, [pushLocalBeatHistory]);
-  const handleDeleteLocalBeatClick = React.useCallback((event, beatId) => {
+  const handleDeleteLocalBeatClick = React.useCallback(async (event, beatId) => {
     event.stopPropagation();
     if (event.metaKey || event.ctrlKey) {
       clearAllLocalBeats();
       return;
     }
+    if (authUser?.id && hasSupabaseEnabled && supabase) {
+      const { error } = await supabase
+        .from("beats")
+        .delete()
+        .eq("id", String(beatId))
+        .eq("user_id", authUser.id);
+      if (error) {
+        alert(error.message || "Failed to delete beat");
+        return;
+      }
+    }
     setLocalBeatsWithUndo((prev) => prev.filter((beat) => String(beat?.id) !== String(beatId)));
-  }, [clearAllLocalBeats, setLocalBeatsWithUndo]);
+  }, [authUser?.id, clearAllLocalBeats, setLocalBeatsWithUndo]);
+  const handleDeletePublicBeatClick = React.useCallback(async (event, beatId) => {
+    event.stopPropagation();
+    if (!isAdminUser || !authUser?.id || !hasSupabaseEnabled || !supabase) {
+      setPublicLibraryError("Admin login required.");
+      return;
+    }
+    const { error } = await supabase
+      .from("share_links")
+      .delete()
+      .eq("id", String(beatId))
+      .eq("owner_user_id", authUser.id);
+    if (error) {
+      setPublicLibraryError(error.message || "Failed to delete public beat");
+      return;
+    }
+    setPublicBeats((prev) => prev.filter((beat) => String(beat?.publishedShareId || beat?.id) !== String(beatId)));
+  }, [isAdminUser, authUser?.id]);
   const handleMainTrashClick = React.useCallback((event) => {
     if (event.metaKey || event.ctrlKey) {
       clearAllLocalLibrary();
@@ -4456,9 +4763,10 @@ useEffect(() => {
   }, [savedPresets]);
   useEffect(() => {
     try {
+      if (authUser?.id) return;
       window.localStorage.setItem(LOCAL_BEAT_LIBRARY_STORAGE_KEY, JSON.stringify(localBeats));
     } catch (_) {}
-  }, [localBeats]);
+  }, [localBeats, authUser?.id]);
 
   const getPresetIds = React.useCallback(
     (presetName) => {
@@ -5420,7 +5728,7 @@ useEffect(() => {
       )
     );
   }, [setArrangementItemsWithUndo]);
-  const saveArrangementSnapshot = React.useCallback((options = {}) => {
+  const saveArrangementSnapshot = React.useCallback(async (options = {}) => {
     const normalizedItems = normalizeArrangementItems(arrangementItems);
     const { mode = "auto" } = options;
     const now = new Date().toISOString();
@@ -5455,6 +5763,60 @@ useEffect(() => {
       updatedAt: now,
       items: normalizedItems,
     };
+    if (authUser?.id && hasSupabaseEnabled && supabase) {
+      const payload = {
+        user_id: authUser.id,
+        name: nextEntry.name,
+        title_line_1: nextEntry.titleLine1,
+        title_line_2: nextEntry.titleLine2,
+        author: nextEntry.composer,
+        rows: normalizedItems,
+        settings: {},
+        updated_at: now,
+      };
+      const query =
+        target?.id && mode === "update"
+          ? supabase
+              .from("arrangements")
+              .update(payload)
+              .eq("id", String(target.id))
+              .eq("user_id", authUser.id)
+              .select("id,name,title_line_1,title_line_2,author,rows,created_at,updated_at")
+              .single()
+          : supabase
+              .from("arrangements")
+              .insert({ ...payload, created_at: now })
+              .select("id,name,title_line_1,title_line_2,author,rows,created_at,updated_at")
+              .single();
+      const { data, error } = await query;
+      if (error) {
+        alert(error.message || "Failed to save arrangement");
+        return;
+      }
+      const savedEntry = normalizeCloudArrangementRow(data);
+      if (!savedEntry) return;
+      pushLocalBeatHistory();
+      setSavedArrangements((prev) => {
+        const idx = prev.findIndex((entry) => entry.id === savedEntry.id);
+        if (idx < 0) return [savedEntry, ...prev];
+        const out = [...prev];
+        out[idx] = savedEntry;
+        return out;
+      });
+      setArrangementNameDraft(
+        getArrangementNameFromTitles(
+          savedEntry.titleLine1,
+          savedEntry.titleLine2,
+          savedEntry.name
+        )
+      );
+      setArrangementTitleLine1Draft(savedEntry.titleLine1);
+      setArrangementTitleLine2Draft(savedEntry.titleLine2);
+      setArrangementComposerDraft(savedEntry.composer);
+      setLoadedArrangementId(savedEntry.id);
+      setArrangementSaveAsOpen(false);
+      return;
+    }
     pushLocalBeatHistory();
     setSavedArrangements((prev) => {
       const idx = prev.findIndex((entry) => entry.id === nextId);
@@ -5475,8 +5837,8 @@ useEffect(() => {
     setArrangementComposerDraft(nextEntry.composer);
     setLoadedArrangementId(nextId);
     setArrangementSaveAsOpen(false);
-  }, [arrangementItems, arrangementTitleLine1Draft, arrangementTitleLine2Draft, arrangementComposerDraft, savedArrangements, loadedArrangementId, pushLocalBeatHistory]);
-  const createNewArrangement = React.useCallback(() => {
+  }, [authUser?.id, arrangementItems, arrangementTitleLine1Draft, arrangementTitleLine2Draft, arrangementComposerDraft, savedArrangements, loadedArrangementId, pushLocalBeatHistory]);
+  const createNewArrangement = React.useCallback(async () => {
     const now = new Date().toISOString();
     const nextId = `arrlib-${Math.random().toString(36).slice(2, 10)}`;
     const nextEntry = {
@@ -5489,6 +5851,49 @@ useEffect(() => {
       updatedAt: now,
       items: [],
     };
+    if (authUser?.id && hasSupabaseEnabled && supabase) {
+      const { data, error } = await supabase
+        .from("arrangements")
+        .insert({
+          user_id: authUser.id,
+          name: nextEntry.name,
+          title_line_1: "",
+          title_line_2: "",
+          author: "",
+          rows: [],
+          settings: {},
+          created_at: now,
+          updated_at: now,
+        })
+        .select("id,name,title_line_1,title_line_2,author,rows,created_at,updated_at")
+        .single();
+      if (error) {
+        alert(error.message || "Failed to create arrangement");
+        return;
+      }
+      const savedEntry = normalizeCloudArrangementRow(data);
+      if (!savedEntry) return;
+      pushLocalBeatHistory();
+      setSavedArrangements((prev) => [savedEntry, ...prev]);
+      setArrangementItems([]);
+      setArrangementSelection(null);
+      setArrangementSelectionAnchor(null);
+      setArrangementBarSelection(null);
+      setArrangementBarSelectionAnchor(null);
+      setArrangementNameDraft(
+        getArrangementNameFromTitles(savedEntry.titleLine1, savedEntry.titleLine2, savedEntry.name)
+      );
+      setArrangementTitleLine1Draft("");
+      setArrangementTitleLine2Draft("");
+      setArrangementComposerDraft("");
+      setLoadedArrangementId(savedEntry.id);
+      setArrangementSaveAsOpen(false);
+      setArrangementSourcesCollapsed(false);
+      setArrangementDetailsCollapsed(false);
+      setArrangementSourceTab("local");
+      setIsArrangementOpen(true);
+      return;
+    }
     pushLocalBeatHistory();
     setSavedArrangements((prev) => [nextEntry, ...prev]);
     setArrangementItems([]);
@@ -5512,7 +5917,7 @@ useEffect(() => {
     setArrangementDetailsCollapsed(false);
     setArrangementSourceTab("local");
     setIsArrangementOpen(true);
-  }, [pushLocalBeatHistory, savedArrangements.length]);
+  }, [authUser?.id, pushLocalBeatHistory, savedArrangements.length]);
   const loadSavedArrangement = React.useCallback(
     (entry) => {
       if (!entry || !Array.isArray(entry.items)) return;
@@ -5537,12 +5942,23 @@ useEffect(() => {
     },
     [arrangementPlaybackEnabled, pushLocalBeatHistory]
   );
-  const deleteSavedArrangement = React.useCallback((entryId) => {
+  const deleteSavedArrangement = React.useCallback(async (entryId) => {
+    if (authUser?.id && hasSupabaseEnabled && supabase) {
+      const { error } = await supabase
+        .from("arrangements")
+        .delete()
+        .eq("id", String(entryId))
+        .eq("user_id", authUser.id);
+      if (error) {
+        alert(error.message || "Failed to delete arrangement");
+        return;
+      }
+    }
     pushLocalBeatHistory();
     setSavedArrangements((prev) => prev.filter((entry) => entry.id !== entryId));
     setLoadedArrangementId((prev) => (prev === entryId ? null : prev));
     setArrangementSaveAsOpen(false);
-  }, [pushLocalBeatHistory]);
+  }, [authUser?.id, pushLocalBeatHistory]);
   const requestDeleteSavedArrangement = React.useCallback((entry) => {
     if (!entry?.id) return;
     if (Array.isArray(entry.items) && entry.items.length > 0) {
@@ -8332,10 +8748,11 @@ useEffect(() => {
     setSharedArrangementBeats([]);
     applyImportedBeatPayload(effectiveSharedState, shareSourceKey);
   }, [requestedSharedState, resolvedSharedState, routeOptions.shared, routeOptions.shareId, applyImportedBeatPayload, applyImportedArrangementPayload]);
-  const saveCurrentBeatLocal = React.useCallback(() => {
+  const saveCurrentBeatLocal = React.useCallback(async () => {
     const fallbackName = `Beat ${localBeats.length + 1}`;
     const name = beatNameDraft.trim() || fallbackName;
     const now = new Date().toISOString();
+    const payload = buildCurrentBeatPayload();
     const item = {
       id: `local-${Math.random().toString(36).slice(2, 10)}`,
       name,
@@ -8344,12 +8761,36 @@ useEffect(() => {
       timeSigCategory: `${timeSig.n}/${timeSig.d}`,
       bpm,
       createdAt: now,
-      payload: buildCurrentBeatPayload(),
+      updatedAt: now,
+      payload,
       source: "local",
     };
+    if (authUser?.id && hasSupabaseEnabled && supabase) {
+      const { data, error } = await supabase
+        .from("beats")
+        .insert({
+          user_id: authUser.id,
+          name,
+          payload,
+          created_at: now,
+          updated_at: now,
+        })
+        .select("id,name,payload,created_at,updated_at")
+        .single();
+      if (error) {
+        alert(error.message || "Failed to save beat to cloud");
+        return;
+      }
+      const nextItem = normalizeCloudBeatRow(data);
+      if (!nextItem) return;
+      setLocalBeatsWithUndo((prev) => [nextItem, ...prev].slice(0, 500));
+      setLoadedLocalBeatId(nextItem.id);
+      return;
+    }
     setLocalBeatsWithUndo((prev) => [item, ...prev].slice(0, 500));
     setLoadedLocalBeatId(item.id);
   }, [
+    authUser?.id,
     beatNameDraft,
     beatCategoryDraft,
     beatStyleDraft,
@@ -8359,12 +8800,36 @@ useEffect(() => {
     localBeats.length,
     setLocalBeatsWithUndo,
   ]);
-  const updateCurrentLoadedBeatLocal = React.useCallback(() => {
+  const updateCurrentLoadedBeatLocal = React.useCallback(async () => {
     if (!loadedLocalBeatId) return;
     const name = beatNameDraft.trim() || String(loadedLocalBeat?.name || "Untitled Beat");
     const payload = buildCurrentBeatPayload();
     const category = beatCategoryDraft === "all" ? "Groove" : beatCategoryDraft;
     const style = beatStyleDraft === "all" ? undefined : beatStyleDraft.trim() || undefined;
+    if (authUser?.id && hasSupabaseEnabled && supabase) {
+      const now = new Date().toISOString();
+      const { data, error } = await supabase
+        .from("beats")
+        .update({
+          name,
+          payload,
+          updated_at: now,
+        })
+        .eq("id", String(loadedLocalBeatId))
+        .eq("user_id", authUser.id)
+        .select("id,name,payload,created_at,updated_at")
+        .single();
+      if (error) {
+        alert(error.message || "Failed to update beat");
+        return;
+      }
+      const nextItem = normalizeCloudBeatRow(data);
+      if (!nextItem) return;
+      setLocalBeatsWithUndo((prev) =>
+        prev.map((beat) => (String(beat?.id || "") === String(loadedLocalBeatId) ? nextItem : beat))
+      );
+      return;
+    }
     setLocalBeatsWithUndo((prev) =>
       prev.map((beat) =>
         String(beat?.id || "") === String(loadedLocalBeatId)
@@ -8381,6 +8846,7 @@ useEffect(() => {
       )
     );
   }, [
+    authUser?.id,
     loadedLocalBeatId,
     loadedLocalBeat,
     beatNameDraft,
@@ -8401,7 +8867,41 @@ useEffect(() => {
     const name = titleInput;
     if (!name) return false;
     setPublicLibraryError("");
+    if (!isAdminUser) {
+      setPublicLibraryError("Admin login required.");
+      return false;
+    }
     try {
+      if (hasSupabaseEnabled && supabase && authUser?.id) {
+        const id = `pubbeat-${makeShortShareId()}`;
+        const beatPayload = buildCurrentBeatPayload();
+        const { data, error } = await supabase
+          .from("share_links")
+          .insert({
+            id,
+            kind: "beat",
+            owner_user_id: authUser.id,
+            payload: {
+              kind: "beat-default",
+              publishedDefault: true,
+              name,
+              composer: composerInput || "",
+              category: categoryInput === "all" ? "Groove" : categoryInput,
+              style: styleInput === "all" ? "" : styleInput || "",
+              createdAt: new Date().toISOString(),
+              beatPayload,
+            },
+          })
+          .select("id,payload,created_at")
+          .single();
+        if (error) {
+          setPublicLibraryError(error.message || "Failed to submit beat");
+          return false;
+        }
+        const nextBeat = normalizePublishedBeatEntry(data);
+        if (nextBeat) setPublicBeats((prev) => [nextBeat, ...prev]);
+        return true;
+      }
       const res = await fetch("/api/beats", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -8427,7 +8927,7 @@ useEffect(() => {
       setPublicLibraryError("Failed to submit beat");
       return false;
     }
-  }, [beatNameDraft, printComposer, beatCategoryDraft, beatStyleDraft, timeSig, bpm, buildCurrentBeatPayload]);
+  }, [isAdminUser, authUser?.id, beatNameDraft, printComposer, beatCategoryDraft, beatStyleDraft, timeSig, bpm, buildCurrentBeatPayload]);
   const openPublicSubmitDialog = React.useCallback(() => {
     const nextTitle = (printTitle || beatNameDraft || "").trim();
     const nextComposer = (lockedPublicComposer || printComposer || "").trim();
@@ -8479,6 +8979,26 @@ useEffect(() => {
     setPublicLibraryLoading(true);
     setPublicLibraryError("");
     try {
+      if (hasSupabaseEnabled && supabase) {
+        const { data, error } = await supabase
+          .from("share_links")
+          .select("id,payload,created_at")
+          .eq("kind", "beat")
+          .order("created_at", { ascending: false })
+          .limit(500);
+        if (error) {
+          setPublicLibraryError(error.message || "Failed to load public library");
+          setPublicLibraryLoading(false);
+          return;
+        }
+        setPublicBeats(
+          (Array.isArray(data) ? data : [])
+            .map(normalizePublishedBeatEntry)
+            .filter(Boolean)
+        );
+        setPublicLibraryLoading(false);
+        return;
+      }
       const params = new URLSearchParams();
       params.set("sort", librarySort === "oldest" ? "oldest" : "latest");
       if (beatCategoryDraft !== "all") params.set("category", beatCategoryDraft);
@@ -8500,14 +9020,126 @@ useEffect(() => {
   }, [librarySort, beatCategoryDraft, libraryTimeSigFilter, beatStyleDraft]);
   useEffect(() => {
     const libraryVisibleInCombinedWindow = isArrangementOpen && arrangementSourceTab === "public";
-    if (!libraryVisibleInCombinedWindow) return;
+    if (!isBeatLibraryOpen && !libraryVisibleInCombinedWindow) return;
     refreshPublicLibrary();
-  }, [isArrangementOpen, arrangementSourceTab, refreshPublicLibrary]);
+  }, [isArrangementOpen, arrangementSourceTab, isBeatLibraryOpen, refreshPublicLibrary]);
   useEffect(() => {
     const libraryVisibleInCombinedWindow = isArrangementOpen && arrangementSourceTab === "public";
     if (libraryVisibleInCombinedWindow) return;
     setPublicLibraryError("");
   }, [isArrangementOpen, arrangementSourceTab]);
+  const selectedPublicArrangementEntry = React.useMemo(
+    () => publicArrangements.find((entry) => entry.id === selectedPublicArrangementId) || null,
+    [publicArrangements, selectedPublicArrangementId]
+  );
+  const publishCurrentArrangementPublic = React.useCallback(async () => {
+    if (!isAdminUser || !authUser?.id || !hasSupabaseEnabled || !supabase) {
+      setPublicLibraryError("Admin login required.");
+      return;
+    }
+    const normalizedItems = normalizeArrangementItems(arrangementItems);
+    if (!normalizedItems.length) {
+      setPublicLibraryError("Arrangement is empty.");
+      return;
+    }
+    const now = new Date().toISOString();
+    const nextPayload = {
+      kind: "arrangement-default",
+      publishedDefault: true,
+      name: arrangementDisplayName || "Arrangement",
+      titleLine1: String(arrangementTitleLine1Draft || ""),
+      titleLine2: String(arrangementTitleLine2Draft || ""),
+      composer: String(arrangementComposerDraft || ""),
+      createdAt: now,
+      items: normalizedItems,
+    };
+    const targetId = selectedPublicArrangementEntry?.publishedShareId || `pubarr-${makeShortShareId()}`;
+    const query = selectedPublicArrangementEntry
+      ? supabase
+          .from("share_links")
+          .update({
+            payload: nextPayload,
+            owner_user_id: authUser.id,
+          })
+          .eq("id", targetId)
+          .select("id,payload,created_at")
+          .single()
+      : supabase
+          .from("share_links")
+          .insert({
+            id: targetId,
+            kind: "arrangement",
+            owner_user_id: authUser.id,
+            payload: nextPayload,
+          })
+          .select("id,payload,created_at")
+          .single();
+    const { data, error } = await query;
+    if (error) {
+      setPublicLibraryError(error.message || "Failed to publish arrangement");
+      return;
+    }
+    const nextEntry = normalizePublishedArrangementEntry(data);
+    if (!nextEntry) return;
+    setPublicArrangements((prev) => {
+      const idx = prev.findIndex((entry) => entry.id === nextEntry.id);
+      if (idx < 0) return [nextEntry, ...prev];
+      const out = [...prev];
+      out[idx] = nextEntry;
+      return out;
+    });
+    setSelectedPublicArrangementId(nextEntry.id);
+  }, [
+    isAdminUser,
+    authUser?.id,
+    arrangementItems,
+    arrangementDisplayName,
+    arrangementTitleLine1Draft,
+    arrangementTitleLine2Draft,
+    arrangementComposerDraft,
+    selectedPublicArrangementEntry,
+  ]);
+  const deletePublicArrangement = React.useCallback(async (entryId) => {
+    if (!isAdminUser || !authUser?.id || !hasSupabaseEnabled || !supabase) {
+      setPublicLibraryError("Admin login required.");
+      return;
+    }
+    const { error } = await supabase
+      .from("share_links")
+      .delete()
+      .eq("id", String(entryId))
+      .eq("owner_user_id", authUser.id);
+    if (error) {
+      setPublicLibraryError(error.message || "Failed to delete public arrangement");
+      return;
+    }
+    setPublicArrangements((prev) => prev.filter((entry) => entry.id !== entryId));
+    setSelectedPublicArrangementId((prev) => (prev === entryId ? "" : prev));
+  }, [isAdminUser, authUser?.id]);
+  const loadPublishedArrangement = React.useCallback((entry) => {
+    if (!entry || !Array.isArray(entry.items)) return;
+    if (arrangementPlaybackEnabled) {
+      setArrangementPlaybackEnabled(false);
+      setArrangementPlaybackIndex(0);
+    }
+    pushLocalBeatHistory();
+    setArrangementItems(normalizeArrangementItems(entry.items));
+    setArrangementSelection(null);
+    setArrangementSelectionAnchor(null);
+    setArrangementBarSelection(null);
+    setArrangementBarSelectionAnchor(null);
+    setArrangementNameDraft(getArrangementNameFromTitles(entry.titleLine1, entry.titleLine2, entry.name));
+    setArrangementTitleLine1Draft(String(entry.titleLine1 || ""));
+    setArrangementTitleLine2Draft(String(entry.titleLine2 || ""));
+    setArrangementComposerDraft(String(entry.composer || ""));
+    setLoadedArrangementId(null);
+    setArrangementSaveAsOpen(false);
+    setSelectedPublicArrangementId(String(entry.id || ""));
+  }, [arrangementPlaybackEnabled, pushLocalBeatHistory]);
+  useEffect(() => {
+    if (!isArrangementOpen || arrangementDetailsCollapsed) return;
+    refreshPublicArrangementLibrary();
+  }, [isArrangementOpen, arrangementDetailsCollapsed, refreshPublicArrangementLibrary]);
 
   const createShareLink = React.useCallback(async (mode = "beat", options = {}) => {
     const { requireShort = false } = options || {};
@@ -8518,6 +9150,29 @@ useEffect(() => {
     let text = "";
     let usedShortLink = false;
     try {
+      if (hasSupabaseEnabled && supabase && authUser?.id) {
+        let id = "";
+        let inserted = false;
+        for (let i = 0; i < 6; i++) {
+          const candidate = makeShortShareId();
+          const { error } = await supabase.from("share_links").insert({
+            id: candidate,
+            kind: mode === "arrangement" ? "arrangement" : "beat",
+            owner_user_id: authUser.id,
+            payload,
+          });
+          if (!error) {
+            id = candidate;
+            inserted = true;
+            break;
+          }
+        }
+        if (inserted && id) {
+          text = `${window.location.origin}/g/${encodeURIComponent(id)}`;
+          usedShortLink = true;
+        }
+      }
+      if (!text) {
       const res = await fetch("/api/share", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -8530,6 +9185,7 @@ useEffect(() => {
           text = `${window.location.origin}/g/${encodeURIComponent(id)}`;
           usedShortLink = true;
         }
+      }
       }
     } catch (_) {
       // fall through to local URL state fallback
@@ -8552,6 +9208,7 @@ useEffect(() => {
       mode,
     };
   }, [
+    authUser?.id,
     buildCurrentBeatPayload,
     buildCurrentArrangementSharePayload,
   ]);
@@ -9256,6 +9913,36 @@ useEffect(() => {
                 <path d="M9.5 1.75V5h3.25" />
               </svg>
             </button>
+            {hasSupabaseEnabled && (
+              <>
+                {isAdminUser ? (
+                  <span className="hidden md:inline-block rounded border border-amber-700/60 bg-amber-950/30 px-2 py-1 text-[11px] text-amber-200">
+                    Admin
+                  </span>
+                ) : null}
+                {authUserEmail ? (
+                  <span
+                    className="hidden md:inline-block max-w-[170px] truncate text-xs text-neutral-500"
+                    title={authUserEmail}
+                  >
+                    {authUserEmail}
+                  </span>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={authUser ? handleSignOut : openAuthDialog}
+                  disabled={authPending}
+                  className={`touch-none select-none px-3 py-1.5 rounded border text-sm ${
+                    authPending
+                      ? "bg-neutral-900 border-neutral-800 text-neutral-500 cursor-not-allowed"
+                      : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
+                  }`}
+                  title={authUser ? `Sign out ${authUserLabel}` : "Sign in with email"}
+                >
+                  {authPending ? "…" : authUser ? "Sign out" : "Sign in"}
+                </button>
+              </>
+            )}
           </div>
 
         </div>
@@ -9990,6 +10677,16 @@ useEffect(() => {
               >
                 Preferences
               </button>
+              <span className="text-neutral-700">·</span>
+              <a
+                href="https://buymeacoffee.com/onlinedrumnotation"
+                target="_blank"
+                rel="noreferrer"
+                className="hover:text-neutral-300 underline underline-offset-2"
+                title="Buy me a coffee"
+              >
+                Buy me a coffee
+              </a>
             </div>
           </div>,
           document.body
@@ -10352,10 +11049,15 @@ useEffect(() => {
               <button
                 type="button"
                 onClick={openPublicSubmitDialog}
-                className="px-2.5 py-1 rounded border text-sm border-neutral-800 text-neutral-500 bg-neutral-900/60 hover:bg-neutral-800/40"
-                title="Submit to public beat library"
+                disabled={!isAdminUser}
+                className={`px-2.5 py-1 rounded border text-sm ${
+                  isAdminUser
+                    ? "border-neutral-700 text-white bg-neutral-800 hover:bg-neutral-700/60"
+                    : "border-neutral-800 text-neutral-500 bg-neutral-900/60 cursor-not-allowed"
+                }`}
+                title={isAdminUser ? "Publish to public beat library" : "Admin login required"}
               >
-                Submit public
+                Publish public
               </button>
             </div>
 
@@ -10504,6 +11206,17 @@ useEffect(() => {
                             className="px-2.5 py-1 rounded border border-red-900 text-sm text-red-200 hover:bg-red-900/30"
                             aria-label="Delete beat"
                             title="Delete beat (Cmd/Ctrl+click: clear all)"
+                          >
+                            ×
+                          </button>
+                        )}
+                        {beatLibraryTab === "public" && isAdminUser && (
+                          <button
+                            type="button"
+                            onClick={(e) => handleDeletePublicBeatClick(e, beat.publishedShareId || beat.id)}
+                            className="px-2.5 py-1 rounded border border-red-900 text-sm text-red-200 hover:bg-red-900/30"
+                            aria-label="Delete public beat"
+                            title="Delete public beat"
                           >
                             ×
                           </button>
@@ -10717,14 +11430,15 @@ useEffect(() => {
                   <button
                     type="button"
                     onClick={openPublicSubmitDialog}
+                    disabled={!isAdminUser}
                     className={`px-2.5 py-1 rounded border text-sm ${
-                      arrangementSourceTab === "public"
+                      arrangementSourceTab === "public" && isAdminUser
                         ? "border-neutral-700 text-white bg-neutral-800 hover:bg-neutral-700/60"
-                        : "border-neutral-800 text-neutral-500 bg-neutral-900/60"
+                        : "border-neutral-800 text-neutral-500 bg-neutral-900/60 cursor-not-allowed"
                     }`}
-                    title="Submit to public beat library"
+                    title={isAdminUser ? "Publish to public beat library" : "Admin login required"}
                   >
-                    Submit public
+                    Publish public
                   </button>
                 </div>
                 {libraryFiltersOpen && (
@@ -10883,6 +11597,17 @@ useEffect(() => {
                                 className="px-2 py-1 rounded border border-red-900 text-xs text-red-200 hover:bg-red-900/30"
                                 aria-label="Delete beat"
                                 title="Delete beat (Cmd/Ctrl+click: clear all)"
+                              >
+                                ×
+                              </button>
+                            )}
+                            {arrangementSourceTab === "public" && isAdminUser && (
+                              <button
+                                type="button"
+                                onClick={(e) => handleDeletePublicBeatClick(e, beat.publishedShareId || beat.id)}
+                                className="px-2 py-1 rounded border border-red-900 text-xs text-red-200 hover:bg-red-900/30"
+                                aria-label="Delete public beat"
+                                title="Delete public beat"
                               >
                                 ×
                               </button>
@@ -11124,6 +11849,69 @@ useEffect(() => {
                     </div>
                   </div>
                 )}
+                <div className="mt-3 rounded border border-neutral-800 bg-neutral-950/30 p-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-xs text-neutral-400">Public arrangements</div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={refreshPublicArrangementLibrary}
+                        className="px-2 py-0.5 rounded border border-neutral-700 text-xs text-neutral-300 hover:bg-neutral-800/50"
+                      >
+                        Refresh
+                      </button>
+                      {isAdminUser && (
+                        <button
+                          type="button"
+                          onClick={publishCurrentArrangementPublic}
+                          className="px-2 py-0.5 rounded border border-neutral-700 text-xs text-white bg-neutral-800 hover:bg-neutral-700/60"
+                          title="Publish current arrangement as a public default"
+                        >
+                          {selectedPublicArrangementEntry ? "Update public" : "Publish public"}
+                        </button>
+                      )}
+                      {isAdminUser && selectedPublicArrangementEntry && (
+                        <button
+                          type="button"
+                          onClick={() => deletePublicArrangement(selectedPublicArrangementEntry.id)}
+                          className="px-2 py-0.5 rounded border border-red-900 text-xs text-red-200 hover:bg-red-900/30"
+                          title="Delete selected public arrangement"
+                        >
+                          Delete
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  <div className="mt-2 flex items-center gap-2">
+                    <select
+                      value={selectedPublicArrangementId}
+                      onChange={(e) => setSelectedPublicArrangementId(e.target.value)}
+                      className="min-w-0 flex-1 bg-neutral-900 border border-neutral-700 rounded px-2 py-1 text-xs text-white"
+                    >
+                      <option value="">Select public arrangement</option>
+                      {publicArrangements.map((entry) => (
+                        <option key={`public-arr-opt-${entry.id}`} value={entry.id}>
+                          {entry.name}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={() => loadPublishedArrangement(selectedPublicArrangementEntry)}
+                      disabled={!selectedPublicArrangementEntry}
+                      className={`px-2 py-1 rounded border text-xs ${
+                        selectedPublicArrangementEntry
+                          ? "border-neutral-700 text-white bg-neutral-800 hover:bg-neutral-700/60"
+                          : "border-neutral-800 text-neutral-500 bg-neutral-900/60 cursor-not-allowed"
+                      }`}
+                    >
+                      Load
+                    </button>
+                  </div>
+                  {publicArrangementLibraryLoading ? (
+                    <div className="mt-2 text-[11px] text-neutral-500">Loading public arrangements…</div>
+                  ) : null}
+                </div>
                 <div ref={arrangementListRef} className="mt-3 max-h-[52vh] overflow-auto pr-1">
                   <DndContext
                     sensors={arrangementOrderSensors}
@@ -13360,140 +14148,28 @@ useEffect(() => {
         </div>
       )}
 
-      {isLegalDialogOpen && (
-        <div
-          className="fixed inset-0 z-[92] bg-black/60 p-4 flex items-center justify-center"
-          onMouseDown={() => setIsLegalDialogOpen(false)}
-        >
-          <div
-            className="w-full max-w-lg rounded-xl border border-neutral-700 bg-neutral-900 p-4 md:p-5"
-            onMouseDown={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between gap-3">
-              <h3 className="text-base font-semibold">Legal</h3>
-              <button
-                type="button"
-                onClick={() => setIsLegalDialogOpen(false)}
-                className="px-2 py-1 rounded border border-neutral-700 text-xs text-neutral-300 hover:bg-neutral-800/60"
-              >
-                Close
-              </button>
-            </div>
-            <div className="mt-3 flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setLegalTab("impressum")}
-                className={`px-2.5 py-1 rounded border text-sm ${
-                  legalTab === "impressum"
-                    ? "border-neutral-600 bg-neutral-800 text-white"
-                    : "border-neutral-800 bg-neutral-900 text-neutral-400 hover:bg-neutral-800/50"
-                }`}
-              >
-                Impressum
-              </button>
-              <button
-                type="button"
-                onClick={() => setLegalTab("privacy")}
-                className={`px-2.5 py-1 rounded border text-sm ${
-                  legalTab === "privacy"
-                    ? "border-neutral-600 bg-neutral-800 text-white"
-                    : "border-neutral-800 bg-neutral-900 text-neutral-400 hover:bg-neutral-800/50"
-                }`}
-              >
-                Privacy
-              </button>
-            </div>
-            {legalTab === "impressum" ? (
-              <div className="mt-4 text-sm text-neutral-200 space-y-3 leading-relaxed">
-                <p className="font-medium">Impressum</p>
-                <p>
-                  Arne Hertstein
-                  <br />
-                  Rathenaustraße 3
-                  <br />
-                  55131 Mainz
-                  <br />
-                  E-Mail:{" "}
-                  {showLegalEmail ? (
-                    <span>breakdowndrums@gmail.com</span>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => setShowLegalEmail(true)}
-                      className="underline underline-offset-2 text-neutral-200 hover:text-white"
-                    >
-                      Click to reveal email
-                    </button>
-                  )}
-                </p>
-              </div>
-            ) : (
-              <div className="mt-4 text-sm text-neutral-200 space-y-3 leading-relaxed">
-                <p className="font-medium">Datenschutzerklärung / Privacy Policy (GDPR)</p>
-                <p>
-                  Verantwortlich / Controller:
-                  <br />
-                  Arne Hertstein, Rathenaustraße 3, 55131 Mainz,
-                  <br />
-                  {showLegalEmail ? (
-                    <span>breakdowndrums@gmail.com</span>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => setShowLegalEmail(true)}
-                      className="underline underline-offset-2 text-neutral-200 hover:text-white"
-                    >
-                      Click to reveal email
-                    </button>
-                  )}
-                </p>
-                <p>
-                  Hosting:
-                  <br />
-                  This site is hosted via Vercel. When visiting the site, technically required server/CDN logs
-                  (e.g. IP address, timestamp, requested resource, user agent) may be processed to provide, secure,
-                  and operate the service (Art. 6(1)(f) GDPR).
-                </p>
-                <p>
-                  Cookies:
-                  <br />
-                  The app itself does not set non-essential tracking or marketing cookies.
-                </p>
-                <p>
-                  LocalStorage:
-                  <br />
-                  The app stores user-created preset data in your browser under the key
-                  <span className="mx-1 font-mono">drum-grid-user-presets-v1</span>
-                  to keep your saved drumkit presets on your device (Art. 6(1)(b) GDPR).
-                  You can remove this data anytime by clearing site storage in your browser.
-                </p>
-                <p>
-                  Contact by email:
-                  <br />
-                  If you contact us by email, your message data is processed only to handle your request
-                  (Art. 6(1)(b) or (f) GDPR) and retained only as long as necessary.
-                </p>
-                <p>
-                  You may have rights under GDPR (access, rectification, erasure, restriction, portability, objection,
-                  complaint to a supervisory authority). Contact:{" "}
-                  {showLegalEmail ? (
-                    <span>breakdowndrums@gmail.com</span>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => setShowLegalEmail(true)}
-                      className="underline underline-offset-2 text-neutral-200 hover:text-white"
-                    >
-                      Click to reveal email
-                    </button>
-                  )}
-                  .
-                </p>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
+      <LegalDialog
+        isOpen={isLegalDialogOpen}
+        legalTab={legalTab}
+        onClose={() => setIsLegalDialogOpen(false)}
+        onSetLegalTab={setLegalTab}
+        showLegalEmail={showLegalEmail}
+        onRevealEmail={() => setShowLegalEmail(true)}
+      />
+      <AuthDialog
+        isOpen={isAuthDialogOpen}
+        emailInputRef={authEmailInputRef}
+        email={authEmailInput}
+        onEmailChange={setAuthEmailInput}
+        onCancel={() => {
+          setIsAuthDialogOpen(false);
+          setAuthError("");
+        }}
+        onSubmit={handleMagicLinkSignIn}
+        pending={authPending}
+        error={authError}
+        message={authMessage}
+      />
       {isPreferencesDialogOpen && (
         <div
           className="fixed inset-0 z-[92] bg-black/60 p-4 flex items-center justify-center"
