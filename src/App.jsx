@@ -2305,6 +2305,7 @@ export default function App() {
   const fileMenuButtonRef = React.useRef(null);
   const authEmailInputRef = React.useRef(null);
   const authRecoveryFlowRef = React.useRef(false);
+  const authRecoveryUrlFlowRef = React.useRef(false);
   const transportMenuRef = React.useRef(null);
   const transportMenuButtonRef = React.useRef(null);
   const beatLibraryPanelRef = React.useRef(null);
@@ -2341,6 +2342,7 @@ export default function App() {
     const isRecoveryLink =
       hashParams.get("type") === "recovery" ||
       searchParams.get("type") === "recovery";
+    authRecoveryUrlFlowRef.current = isRecoveryLink;
     if (isRecoveryLink) {
       authRecoveryFlowRef.current = true;
       setAuthMode("new-password");
@@ -2369,6 +2371,7 @@ export default function App() {
       setAuthPending(false);
       setAuthError("");
       if (event === "PASSWORD_RECOVERY") {
+        if (!authRecoveryUrlFlowRef.current) return;
         authRecoveryFlowRef.current = true;
         setAuthMode("new-password");
         setAuthPasswordInput("");
@@ -2531,6 +2534,7 @@ export default function App() {
       return;
     }
     authRecoveryFlowRef.current = false;
+    authRecoveryUrlFlowRef.current = false;
     setAuthMessage("Password updated.");
     setIsAuthDialogOpen(false);
     setAuthMode("sign-in");
