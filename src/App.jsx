@@ -2304,6 +2304,7 @@ export default function App() {
   const fileMenuRef = React.useRef(null);
   const fileMenuButtonRef = React.useRef(null);
   const authEmailInputRef = React.useRef(null);
+  const authRecoveryFlowRef = React.useRef(false);
   const transportMenuRef = React.useRef(null);
   const transportMenuButtonRef = React.useRef(null);
   const beatLibraryPanelRef = React.useRef(null);
@@ -2335,6 +2336,18 @@ export default function App() {
   useEffect(() => {
     if (!hasSupabaseEnabled || !supabase) return undefined;
     let alive = true;
+    const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+    const searchParams = new URLSearchParams(window.location.search);
+    const isRecoveryLink =
+      hashParams.get("type") === "recovery" ||
+      searchParams.get("type") === "recovery";
+    if (isRecoveryLink) {
+      authRecoveryFlowRef.current = true;
+      setAuthMode("new-password");
+      setAuthPasswordInput("");
+      setAuthMessage("");
+      setIsAuthDialogOpen(true);
+    }
     supabase.auth
       .getSession()
       .then(({ data, error }) => {
@@ -2356,12 +2369,14 @@ export default function App() {
       setAuthPending(false);
       setAuthError("");
       if (event === "PASSWORD_RECOVERY") {
+        authRecoveryFlowRef.current = true;
         setAuthMode("new-password");
         setAuthPasswordInput("");
         setAuthMessage("");
         setIsAuthDialogOpen(true);
         return;
       }
+      if (authRecoveryFlowRef.current && session?.user) return;
       if (session?.user) {
         setAuthMessage("Login successful.");
         setIsAuthDialogOpen(false);
@@ -2515,6 +2530,7 @@ export default function App() {
       setAuthError(error.message || "Failed to update password.");
       return;
     }
+    authRecoveryFlowRef.current = false;
     setAuthMessage("Password updated.");
     setIsAuthDialogOpen(false);
     setAuthMode("sign-in");

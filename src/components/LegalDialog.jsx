@@ -15,7 +15,7 @@ export default function LegalDialog({
       onMouseDown={onClose}
     >
       <div
-        className="w-full max-w-lg rounded-xl border border-neutral-700 bg-neutral-900 p-4 md:p-5"
+        className="w-full max-w-lg max-h-[calc(100vh-2rem)] overflow-y-auto rounded-xl border border-neutral-700 bg-neutral-900 p-4 md:p-5"
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between gap-3">
@@ -104,6 +104,19 @@ export default function LegalDialog({
               and operate the service (Art. 6(1)(f) GDPR).
             </p>
             <p>
+              User accounts and cloud library:
+              <br />
+              If you create an account or sign in, your email address, account identifier, saved beats,
+              saved arrangements, and related metadata may be processed via Supabase to provide login,
+              password reset, and cloud library sync (Art. 6(1)(b) GDPR).
+            </p>
+            <p>
+              Auth emails:
+              <br />
+              Account emails such as signup confirmation, magic links, and password reset emails are sent using
+              Supabase Auth and Resend (Art. 6(1)(b) and (f) GDPR).
+            </p>
+            <p>
               Cookies:
               <br />
               The app itself does not set non-essential tracking or marketing cookies.
@@ -111,10 +124,16 @@ export default function LegalDialog({
             <p>
               LocalStorage:
               <br />
-              The app stores user-created preset data in your browser under the key
-              <span className="mx-1 font-mono">drum-grid-user-presets-v1</span>
-              to keep your saved drumkit presets on your device (Art. 6(1)(b) GDPR).
-              You can remove this data anytime by clearing site storage in your browser.
+              The app stores settings and local working data in your browser, including presets, preferences, and
+              local beat / arrangement data if cloud sync is not used (Art. 6(1)(b) GDPR). You can remove this data
+              anytime by clearing site storage in your browser.
+            </p>
+            <p>
+              Public submissions and share links:
+              <br />
+              If you publish beats or arrangements publicly, or create share links / QR links, the submitted content
+              and related metadata may be stored so it can be loaded by other users or by anyone with the link
+              (Art. 6(1)(b) GDPR).
             </p>
             <p>
               Contact by email:
