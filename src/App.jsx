@@ -12,7 +12,7 @@ import QRCode from "qrcode";
 import { usePlayback } from "./audio/usePlayback";
 import * as Vex from "vexflow";
 import customSmuflFont from "./fonts/customSmuflFont.json";
-import { DndContext, PointerSensor, closestCenter, useSensor, useSensors } from "@dnd-kit/core";
+import { DndContext, PointerSensor, closestCenter, useDroppable, useSensor, useSensors } from "@dnd-kit/core";
 import {
   SortableContext,
   arrayMove,
@@ -68,6 +68,174 @@ function formatTimingShiftLabel(sixteenths) {
   const value = Math.max(-15, Math.min(15, Math.round(Number(sixteenths) || 0)));
   if (value === 0) return "Off";
   return value < 0 ? `${Math.abs(value)}/16 earlier` : `${value}/16 later`;
+}
+
+function TreeTriangle({ expanded }) {
+  return (
+    <svg
+      viewBox="0 0 10 10"
+      className={`h-3.5 w-3.5 fill-current transition-transform ${expanded ? "rotate-90" : ""}`}
+      aria-hidden="true"
+    >
+      <path d="M2 1.5 L8 5 L2 8.5 Z" />
+    </svg>
+  );
+}
+
+function PencilIcon() {
+  return (
+    <svg viewBox="0 0 16 16" className="h-3.5 w-3.5 fill-none stroke-current" aria-hidden="true">
+      <path d="M3 11.5 11.8 2.7a1.5 1.5 0 0 1 2.1 2.1L5.1 13.6 2.5 14l.5-2.5Z" strokeWidth="1.4" />
+      <path d="m10.7 3.8 1.5 1.5" strokeWidth="1.4" />
+    </svg>
+  );
+}
+
+function BeatLibraryDropTarget({ id, children, ...props }) {
+  const { setNodeRef } = useDroppable({ id });
+  return (
+    <div ref={setNodeRef} {...props}>
+      {children}
+    </div>
+  );
+}
+
+function SortableArrangementSourceBeatRow({
+  beat,
+  depth,
+  beatRowKey,
+  beatBpm,
+  beatLibraryDropTargetId,
+  isLoadedTrackedBeat,
+  isSelectedArrangementSourceBeat,
+  editingBeatLibraryBeatId,
+  editingBeatLibraryBeatName,
+  setEditingBeatLibraryBeatName,
+  commitEditingBeatLibraryBeat,
+  cancelEditingBeatLibraryBeat,
+  startEditingBeatLibraryBeat,
+  loadBeatIntoEditor,
+  arrangementAddBeat,
+  handleDeleteLocalBeatClick,
+}) {
+  const id = `beat:${String(beat.id)}`;
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+  const verticalTransform = transform ? { ...transform, x: 0 } : null;
+  const style = {
+    marginLeft: `${Math.max(0, depth) * 0.5}rem`,
+    transform: CSS.Transform.toString(verticalTransform),
+    transition,
+  };
+
+  return (
+    <div ref={setNodeRef} className="relative" style={style}>
+      <div
+        data-beat-row-id={beatRowKey}
+        role="button"
+        tabIndex={0}
+        onClick={() => loadBeatIntoEditor("local", beat)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            loadBeatIntoEditor("local", beat);
+          }
+        }}
+        {...attributes}
+        {...listeners}
+        className={`flex items-center gap-2 rounded border px-2 py-1 text-left text-sm outline-none focus:outline-none focus-visible:outline-none ${
+          isLoadedTrackedBeat || isSelectedArrangementSourceBeat
+            ? "border-sky-500/70 bg-sky-900/30 shadow-[0_0_0_1px_rgba(14,165,233,0.35)]"
+            : isDragging
+              ? "border-cyan-700/70 bg-cyan-950/20"
+              : "border-neutral-800 bg-neutral-900/40 hover:bg-neutral-800/60"
+        }`}
+      >
+        <span className="inline-flex h-5 min-w-5 items-center justify-center text-neutral-700" aria-hidden="true">
+          •
+        </span>
+        <div className="min-w-0 flex-1">
+          {String(editingBeatLibraryBeatId || "") === String(beat.id) ? (
+            <input
+              type="text"
+              value={editingBeatLibraryBeatName}
+              onChange={(e) => setEditingBeatLibraryBeatName(e.target.value)}
+              onClick={(e) => e.stopPropagation()}
+              onFocus={(e) => e.currentTarget.select()}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  commitEditingBeatLibraryBeat();
+                } else if (e.key === "Escape") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  cancelEditingBeatLibraryBeat();
+                }
+              }}
+              onBlur={() => commitEditingBeatLibraryBeat()}
+              autoFocus
+              className="w-full rounded bg-neutral-950/70 px-1 py-0.5 text-sm text-white outline-none"
+            />
+          ) : (
+            <div className="truncate text-white">{beat.name || "Untitled Beat"}</div>
+          )}
+          <div className="truncate text-[11px] text-neutral-500">
+            {(() => {
+              const beatBars = Math.max(1, Number(beat?.payload?.bars) || 1);
+              return (beat.timeSigCategory || "4/4") +
+                (Number.isFinite(beatBpm) ? ` · ${beatBpm} BPM` : "") +
+                ` · ${beatBars} ${beatBars === 1 ? "bar" : "bars"}`;
+            })()}
+          </div>
+        </div>
+        <button
+          type="button"
+          onPointerDown={(e) => {
+            if (String(editingBeatLibraryBeatId || "") === String(beat.id)) {
+              e.preventDefault();
+              e.stopPropagation();
+              commitEditingBeatLibraryBeat();
+              return;
+            }
+            e.stopPropagation();
+          }}
+          onClick={(e) => {
+            e.stopPropagation();
+            if (String(editingBeatLibraryBeatId || "") === String(beat.id)) {
+              return;
+            } else {
+              startEditingBeatLibraryBeat(beat.id);
+            }
+          }}
+          className="inline-flex h-6 min-w-6 items-center justify-center rounded text-neutral-400 hover:bg-neutral-800/60 hover:text-white"
+          title="Rename beat"
+        >
+          <PencilIcon />
+        </button>
+        <button
+          type="button"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            arrangementAddBeat("local", beat.id);
+          }}
+          className="px-2 py-1 rounded border border-neutral-700 text-xs text-white bg-neutral-800 hover:bg-neutral-700/60"
+        >
+          Add
+        </button>
+        <button
+          type="button"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => handleDeleteLocalBeatClick(e, beat.id)}
+          className="px-2 py-1 rounded border border-red-900 text-xs text-red-200 hover:bg-red-900/30"
+          aria-label="Delete beat"
+          title="Delete beat (Cmd/Ctrl+click: clear all)"
+        >
+          ×
+        </button>
+      </div>
+    </div>
+  );
 }
 
 // ====================
@@ -170,6 +338,10 @@ const ARRANGEMENT_TITLE_LINE1_STORAGE_KEY = "drum-grid-arrangement-title-line1-v
 const ARRANGEMENT_TITLE_LINE2_STORAGE_KEY = "drum-grid-arrangement-title-line2-v1";
 const ARRANGEMENT_COMPOSER_STORAGE_KEY = "drum-grid-arrangement-composer-v1";
 const PREFERENCES_CATEGORY_STORAGE_KEY = "drum-grid-preferences-category-v1";
+const DEFAULT_LOOP_REPEATS_STORAGE_KEY = "drum-grid-default-loop-repeats-v1";
+const BEAT_LIBRARY_CONTAINERS_STORAGE_KEY = "drum-grid-beat-library-containers-v1";
+const BEAT_LIBRARY_SELECTED_CONTAINER_STORAGE_KEY = "drum-grid-beat-library-selected-container-v1";
+const BEAT_LIBRARY_ROOT_COLLAPSED_STORAGE_KEY = "drum-grid-beat-library-root-collapsed-v1";
 const BEAT_CATEGORY_OPTIONS = [
   "Groove",
   "Fill",
@@ -209,6 +381,10 @@ const LIBRARY_BPM_FILTER_MODES = [
   { id: "exact", label: "Exact BPM" },
   { id: "pm5", label: "BPM ±5" },
   { id: "pm10", label: "BPM ±10" },
+];
+const LOOP_REPEATS_ORDER = ["all", "off", "1", "2", "3", "4", "5", "6", "7", "8"];
+const BEAT_LIBRARY_CONTAINER_TYPES = [
+  { id: "folder", label: "Folder" },
 ];
 const MIDI_IMPORT_COMMON_FALLBACK_ASSIGNMENTS = {
   21: "splash",
@@ -470,6 +646,46 @@ function readStoredLocalBeats() {
   }
 }
 
+function readStoredBeatLibraryContainers() {
+  try {
+    const raw = window.localStorage.getItem(BEAT_LIBRARY_CONTAINERS_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((entry, index) => ({
+        id: String(entry?.id || ""),
+        name: String(entry?.name || "").trim(),
+        type: "folder",
+        parentId: entry?.parentId ? String(entry.parentId) : null,
+        collapsed: entry?.collapsed === true,
+        order: Number.isFinite(Number(entry?.order)) ? Number(entry.order) : index,
+      }))
+      .filter((entry) => entry.id && entry.name);
+  } catch (_) {
+    return [];
+  }
+}
+
+function getBeatLibraryMeta(beat) {
+  const direct = beat?.libraryMeta && typeof beat.libraryMeta === "object" ? beat.libraryMeta : null;
+  const payloadMeta = beat?.payload?.libraryMeta && typeof beat.payload.libraryMeta === "object"
+    ? beat.payload.libraryMeta
+    : null;
+  const meta = direct || payloadMeta || null;
+  return {
+    parentId: meta?.parentId ? String(meta.parentId) : null,
+    manualOrder: Number.isFinite(Number(meta?.manualOrder)) ? Number(meta.manualOrder) : 0,
+  };
+}
+
+function compareBeatLibraryOrder(a, b) {
+  const metaA = getBeatLibraryMeta(a);
+  const metaB = getBeatLibraryMeta(b);
+  const orderDiff = (Number(metaA.manualOrder) || 0) - (Number(metaB.manualOrder) || 0);
+  if (orderDiff) return orderDiff;
+  return new Date(b?.createdAt || 0).getTime() - new Date(a?.createdAt || 0).getTime();
+}
+
 function readStoredSavedArrangements() {
   try {
     const raw = window.localStorage.getItem(SONG_ARRANGEMENT_LIBRARY_STORAGE_KEY);
@@ -496,6 +712,14 @@ function normalizeCloudBeatRow(row) {
   if (!row || typeof row !== "object") return null;
   const payload = row.payload && typeof row.payload === "object" ? row.payload : null;
   if (!payload) return null;
+  const libraryMeta = payload?.libraryMeta && typeof payload.libraryMeta === "object"
+    ? {
+        parentId: payload.libraryMeta.parentId ? String(payload.libraryMeta.parentId) : null,
+        manualOrder: Number.isFinite(Number(payload.libraryMeta.manualOrder))
+          ? Number(payload.libraryMeta.manualOrder)
+          : 0,
+      }
+    : null;
   return {
     id: String(row.id || ""),
     name: String(row.name || "").trim() || "Untitled Beat",
@@ -506,6 +730,7 @@ function normalizeCloudBeatRow(row) {
     createdAt: String(row.created_at || row.updated_at || ""),
     updatedAt: String(row.updated_at || row.created_at || ""),
     payload,
+    libraryMeta,
     source: "local",
   };
 }
@@ -2062,6 +2287,28 @@ export default function App() {
   const [localBeats, setLocalBeats] = useState(() => {
     return readStoredLocalBeats();
   });
+  const [beatLibraryContainers, setBeatLibraryContainers] = useState(() => readStoredBeatLibraryContainers());
+  const [selectedBeatLibraryContainerId, setSelectedBeatLibraryContainerId] = useState(() => {
+    try {
+      return String(window.localStorage.getItem(BEAT_LIBRARY_SELECTED_CONTAINER_STORAGE_KEY) || "all");
+    } catch (_) {
+      return "all";
+    }
+  });
+  const [beatLibraryRootCollapsed, setBeatLibraryRootCollapsed] = useState(() => {
+    try {
+      return window.localStorage.getItem(BEAT_LIBRARY_ROOT_COLLAPSED_STORAGE_KEY) === "1";
+    } catch (_) {
+      return false;
+    }
+  });
+  const [editingBeatLibraryContainerId, setEditingBeatLibraryContainerId] = useState(null);
+  const [editingBeatLibraryContainerName, setEditingBeatLibraryContainerName] = useState("");
+  const [editingBeatLibraryBeatId, setEditingBeatLibraryBeatId] = useState(null);
+  const [editingBeatLibraryBeatName, setEditingBeatLibraryBeatName] = useState("");
+  const [beatLibraryDropTargetId, setBeatLibraryDropTargetId] = useState(null);
+  const beatLibraryLastHoverTargetRef = React.useRef("");
+  const beatLibraryExpandAllSnapshotRef = React.useRef(null);
   const [localBeatPast, setLocalBeatPast] = useState([]);
   const [localBeatFuture, setLocalBeatFuture] = useState([]);
   const [publicBeats, setPublicBeats] = useState([]);
@@ -2226,6 +2473,7 @@ export default function App() {
   });
   const arrangementPanelRef = React.useRef(null);
   const arrangementDragBeatRef = React.useRef(null);
+  const beatLibraryTreeDragRef = React.useRef(null);
   const arrangementNotationPanelRef = React.useRef(null);
   const arrangementNotationExportRef = React.useRef(null);
   const arrangementNotationVisiblePagesRef = React.useRef(null);
@@ -2312,6 +2560,7 @@ export default function App() {
   const midiImportInputRef = React.useRef(null);
   const kitOrderListRef = React.useRef(null);
   const arrangementListRef = React.useRef(null);
+  const arrangementSourceListRef = React.useRef(null);
   const applyImportedBeatPayloadRef = React.useRef(null);
   const midiImportPreviewSnapshotRef = React.useRef(null);
   const arrangementStartedRef = React.useRef(false);
@@ -2772,6 +3021,30 @@ export default function App() {
       window.localStorage.setItem(PREFERENCES_CATEGORY_STORAGE_KEY, preferencesCategory);
     } catch (_) {}
   }, [preferencesCategory]);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        BEAT_LIBRARY_CONTAINERS_STORAGE_KEY,
+        JSON.stringify(beatLibraryContainers)
+      );
+    } catch (_) {}
+  }, [beatLibraryContainers]);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        BEAT_LIBRARY_SELECTED_CONTAINER_STORAGE_KEY,
+        String(selectedBeatLibraryContainerId || "all")
+      );
+    } catch (_) {}
+  }, [selectedBeatLibraryContainerId]);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        BEAT_LIBRARY_ROOT_COLLAPSED_STORAGE_KEY,
+        beatLibraryRootCollapsed ? "1" : "0"
+      );
+    } catch (_) {}
+  }, [beatLibraryRootCollapsed]);
   useEffect(() => {
     try {
       window.localStorage.setItem(
@@ -3690,8 +3963,16 @@ useEffect(() => {
   }, [isMidiDialogOpen]);
 
   
+  const [defaultLoopRepeats, setDefaultLoopRepeats] = useState(() => {
+    try {
+      const raw = window.localStorage.getItem(DEFAULT_LOOP_REPEATS_STORAGE_KEY);
+      return LOOP_REPEATS_ORDER.includes(String(raw)) ? String(raw) : "all";
+    } catch (_) {
+      return "all";
+    }
+  });
   // Whether new selections should auto-generate a loop.
-  const [loopRepeats, setLoopRepeats] = useState("all"); // "off" | "all" | "1".."8"
+  const [loopRepeats, setLoopRepeats] = useState(defaultLoopRepeats); // "off" | "all" | "1".."8"
   const [wrapSelectionMoveEnabled, setWrapSelectionMoveEnabled] = useState(true);
   const [moveOverlapMode, setMoveOverlapMode] = useState("active-to-empty");
   const [loopOverlapMode, setLoopOverlapMode] = useState("all-to-all");
@@ -3703,6 +3984,11 @@ useEffect(() => {
     // Remember the last non-"all" value so clicking the center can toggle all <-> last value.
     if (loopRepeats !== "all") lastNonAllLoopRepeats.current = loopRepeats;
   }, [loopRepeats]);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(DEFAULT_LOOP_REPEATS_STORAGE_KEY, defaultLoopRepeats);
+    } catch (_) {}
+  }, [defaultLoopRepeats]);
 
   const loopModeEnabled = loopRepeats !== "off" && !stickingEditModeEnabled;
 
@@ -4716,25 +5002,31 @@ useEffect(() => {
     setArrangementPlaybackIndex(0);
     setLoopRepeats("all");
   }, [pushLocalBeatHistory]);
+  const deleteLocalBeatById = React.useCallback(async (beatId) => {
+    const key = String(beatId || "");
+    if (!key) return;
+    if (authUser?.id && hasSupabaseEnabled && supabase) {
+      const { error } = await supabase
+        .from("beats")
+        .delete()
+        .eq("id", key)
+        .eq("user_id", authUser.id);
+      if (error) {
+        alert(error.message || "Failed to delete beat");
+        return false;
+      }
+    }
+    setLocalBeatsWithUndo((prev) => prev.filter((beat) => String(beat?.id) !== key));
+    return true;
+  }, [authUser?.id, setLocalBeatsWithUndo]);
   const handleDeleteLocalBeatClick = React.useCallback(async (event, beatId) => {
     event.stopPropagation();
     if (event.metaKey || event.ctrlKey) {
       clearAllLocalBeats();
       return;
     }
-    if (authUser?.id && hasSupabaseEnabled && supabase) {
-      const { error } = await supabase
-        .from("beats")
-        .delete()
-        .eq("id", String(beatId))
-        .eq("user_id", authUser.id);
-      if (error) {
-        alert(error.message || "Failed to delete beat");
-        return;
-      }
-    }
-    setLocalBeatsWithUndo((prev) => prev.filter((beat) => String(beat?.id) !== String(beatId)));
-  }, [authUser?.id, clearAllLocalBeats, setLocalBeatsWithUndo]);
+    await deleteLocalBeatById(beatId);
+  }, [clearAllLocalBeats, deleteLocalBeatById]);
   const handleDeletePublicBeatClick = React.useCallback(async (event, beatId) => {
     event.stopPropagation();
     if (!isAdminUser || !authUser?.id || !hasSupabaseEnabled || !supabase) {
@@ -5263,6 +5555,521 @@ useEffect(() => {
       return LIBRARY_BPM_FILTER_MODES[nextIdx].id;
     });
   }, []);
+  const createBeatLibraryContainer = React.useCallback((type, options = {}) => {
+    const normalizedType = BEAT_LIBRARY_CONTAINER_TYPES.some((entry) => entry.id === type) ? type : "folder";
+    const explicitParentId =
+      options && Object.prototype.hasOwnProperty.call(options, "parentId")
+        ? options.parentId
+        : undefined;
+    const selectedContainer =
+      selectedBeatLibraryContainerId !== "all"
+        ? beatLibraryContainers.find((entry) => String(entry.id) === String(selectedBeatLibraryContainerId)) || null
+        : null;
+    const parentId =
+      explicitParentId !== undefined
+        ? explicitParentId
+          ? String(explicitParentId)
+          : null
+        : selectedContainer
+          ? selectedContainer.collapsed
+            ? selectedContainer.parentId || null
+            : selectedContainer.id
+          : null;
+    const siblings = beatLibraryContainers.filter((entry) => (entry.parentId || null) === parentId);
+    const nextOrder =
+      siblings.reduce((max, entry) => Math.max(max, Number(entry.order) || 0), 0) + 1;
+    const nextContainer = {
+      id: `beatlib-${Math.random().toString(36).slice(2, 10)}`,
+      name: `${BEAT_LIBRARY_CONTAINER_TYPES.find((entry) => entry.id === normalizedType)?.label || "Folder"} ${siblings.length + 1}`,
+      type: normalizedType,
+      parentId,
+      collapsed: false,
+      order: nextOrder,
+    };
+    setBeatLibraryContainers((prev) => [...prev, nextContainer]);
+    setSelectedBeatLibraryContainerId(nextContainer.id);
+  }, [beatLibraryContainers, selectedBeatLibraryContainerId]);
+  const toggleBeatLibraryContainerCollapsed = React.useCallback((containerId) => {
+    beatLibraryExpandAllSnapshotRef.current = null;
+    setBeatLibraryContainers((prev) =>
+      prev.map((entry) =>
+        entry.id === containerId ? { ...entry, collapsed: !entry.collapsed } : entry
+      )
+    );
+  }, []);
+  const toggleBeatLibraryRootCollapsedManual = React.useCallback(() => {
+    beatLibraryExpandAllSnapshotRef.current = null;
+    setBeatLibraryRootCollapsed((prev) => !prev);
+  }, []);
+  const toggleBeatLibraryExpandAll = React.useCallback(() => {
+    setSelectedBeatLibraryContainerId("all");
+    const snapshot = beatLibraryExpandAllSnapshotRef.current;
+    if (snapshot) {
+      setBeatLibraryRootCollapsed(Boolean(snapshot.rootCollapsed));
+      setBeatLibraryContainers((prev) =>
+        prev.map((entry) => {
+          const saved = snapshot.collapsedById[String(entry.id)];
+          return typeof saved === "boolean" ? { ...entry, collapsed: saved } : entry;
+        })
+      );
+      beatLibraryExpandAllSnapshotRef.current = null;
+      return;
+    }
+    beatLibraryExpandAllSnapshotRef.current = {
+      rootCollapsed: beatLibraryRootCollapsed,
+      collapsedById: Object.fromEntries(
+        beatLibraryContainers.map((entry) => [String(entry.id), Boolean(entry.collapsed)])
+      ),
+    };
+    setBeatLibraryRootCollapsed(false);
+    setBeatLibraryContainers((prev) => prev.map((entry) => ({ ...entry, collapsed: false })));
+  }, [beatLibraryContainers, beatLibraryRootCollapsed]);
+  const deleteBeatLibraryContainer = React.useCallback(
+    async (containerId) => {
+      const key = String(containerId || "");
+      if (!key || key === "all") return;
+      const target = beatLibraryContainers.find((entry) => String(entry.id) === key);
+      if (!target) return;
+      const descendantIds = new Set([key]);
+      const walk = (parentId) => {
+        beatLibraryContainers.forEach((entry) => {
+          if (String(entry.parentId || "") !== String(parentId)) return;
+          descendantIds.add(String(entry.id));
+          walk(entry.id);
+        });
+      };
+      walk(key);
+      const affectedBeats = localBeats.filter((beat) =>
+        descendantIds.has(String(getBeatLibraryMeta(beat).parentId || ""))
+      );
+      const containerLabel = `${target.type} "${target.name}"`;
+      const warning =
+        affectedBeats.length > 0
+          ? `Delete ${containerLabel}?\n\nNested folders/chapters will also be removed.\n${affectedBeats.length} beat${affectedBeats.length === 1 ? "" : "s"} will be moved to the library root.`
+          : `Delete ${containerLabel}?\n\nNested folders/chapters will also be removed.`;
+      if (!window.confirm(warning)) return;
+
+      const reparentBeat = (beat) => {
+        const meta = getBeatLibraryMeta(beat);
+        if (!descendantIds.has(String(meta.parentId || ""))) return beat;
+        const nextLibraryMeta = {
+          ...meta,
+          parentId: null,
+        };
+        const nextPayload =
+          beat?.payload && typeof beat.payload === "object"
+            ? {
+                ...beat.payload,
+                libraryMeta: nextLibraryMeta,
+              }
+            : beat.payload;
+        return {
+          ...beat,
+          payload: nextPayload,
+          libraryMeta: nextLibraryMeta,
+        };
+      };
+
+      if (authUser?.id && hasSupabaseEnabled && supabase && affectedBeats.length > 0) {
+        const updates = affectedBeats.map((beat) => {
+          const nextBeat = reparentBeat(beat);
+          return supabase
+            .from("beats")
+            .update({
+              payload: nextBeat.payload,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", String(beat.id))
+            .eq("user_id", authUser.id);
+        });
+        const results = await Promise.all(updates);
+        const failed = results.find((result) => result.error);
+        if (failed?.error) {
+          alert(failed.error.message || "Failed to update beats in deleted folder");
+          return;
+        }
+      }
+
+      setLocalBeatsWithUndo((prev) => prev.map(reparentBeat));
+      setBeatLibraryContainers((prev) =>
+        prev.filter((entry) => !descendantIds.has(String(entry.id)))
+      );
+      setSelectedBeatLibraryContainerId("all");
+    },
+    [authUser?.id, beatLibraryContainers, localBeats, setLocalBeatsWithUndo]
+  );
+  const startEditingBeatLibraryContainer = React.useCallback(
+    (containerId) => {
+      const key = String(containerId || "");
+      if (!key || key === "all") return;
+      const target = beatLibraryContainers.find((entry) => String(entry.id) === key);
+      if (!target) return;
+      setSelectedBeatLibraryContainerId(key);
+      setEditingBeatLibraryContainerId(key);
+      setEditingBeatLibraryContainerName(String(target.name || ""));
+    },
+    [beatLibraryContainers]
+  );
+  const cancelEditingBeatLibraryContainer = React.useCallback(() => {
+    setEditingBeatLibraryContainerId(null);
+    setEditingBeatLibraryContainerName("");
+  }, []);
+  const commitEditingBeatLibraryContainer = React.useCallback(() => {
+    const key = String(editingBeatLibraryContainerId || "");
+    const nextName = editingBeatLibraryContainerName.trim();
+    if (!key) return;
+    if (!nextName) {
+      cancelEditingBeatLibraryContainer();
+      return;
+    }
+    setBeatLibraryContainers((prev) =>
+      prev.map((entry) => (String(entry.id) === key ? { ...entry, name: nextName } : entry))
+    );
+    cancelEditingBeatLibraryContainer();
+  }, [editingBeatLibraryContainerId, editingBeatLibraryContainerName, cancelEditingBeatLibraryContainer]);
+  const startEditingBeatLibraryBeat = React.useCallback(
+    (beatId) => {
+      const key = String(beatId || "");
+      if (!key) return;
+      const target = localBeats.find((beat) => String(beat?.id || "") === key);
+      if (!target) return;
+      setEditingBeatLibraryBeatId(key);
+      setEditingBeatLibraryBeatName(String(target.name || ""));
+    },
+    [localBeats]
+  );
+  const cancelEditingBeatLibraryBeat = React.useCallback(() => {
+    setEditingBeatLibraryBeatId(null);
+    setEditingBeatLibraryBeatName("");
+  }, []);
+  const commitEditingBeatLibraryBeat = React.useCallback(async () => {
+    const key = String(editingBeatLibraryBeatId || "");
+    const nextName = editingBeatLibraryBeatName.trim();
+    if (!key) return;
+    if (!nextName) {
+      cancelEditingBeatLibraryBeat();
+      return;
+    }
+    const targetBeat = localBeats.find((beat) => String(beat?.id || "") === key);
+    if (!targetBeat) {
+      cancelEditingBeatLibraryBeat();
+      return;
+    }
+    cancelEditingBeatLibraryBeat();
+    setLocalBeatsWithUndo((prev) =>
+      prev.map((beat) =>
+        String(beat?.id || "") === key
+          ? {
+              ...beat,
+              name: nextName,
+            }
+          : beat
+      )
+    );
+    if (String(loadedLocalBeatId || "") === key) {
+      setBeatNameDraft(nextName);
+    }
+    if (authUser?.id && hasSupabaseEnabled && supabase) {
+      const { error } = await supabase
+        .from("beats")
+        .update({
+          name: nextName,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", key)
+        .eq("user_id", authUser.id);
+      if (error) {
+        alert(error.message || "Failed to rename beat");
+        return;
+      }
+    }
+  }, [
+    authUser?.id,
+    editingBeatLibraryBeatId,
+    editingBeatLibraryBeatName,
+    cancelEditingBeatLibraryBeat,
+    localBeats,
+    loadedLocalBeatId,
+    setLocalBeatsWithUndo,
+  ]);
+  const beginBeatLibraryTreeDrag = React.useCallback((item) => {
+    if (!item || typeof item !== "object") return;
+    beatLibraryTreeDragRef.current = item;
+    beatLibraryLastHoverTargetRef.current = "";
+  }, []);
+  const clearBeatLibraryTreeDrag = React.useCallback(() => {
+    beatLibraryTreeDragRef.current = null;
+    beatLibraryLastHoverTargetRef.current = "";
+    setBeatLibraryDropTargetId(null);
+  }, []);
+  const moveBeatToLibraryContainer = React.useCallback(
+    async (beatId, targetParentId) => {
+      const key = String(beatId || "");
+      if (!key) return;
+      const normalizedTargetParentId = targetParentId ? String(targetParentId) : null;
+      const targetBeat = localBeats.find((beat) => String(beat?.id) === key);
+      if (!targetBeat) return;
+      const currentMeta = getBeatLibraryMeta(targetBeat);
+      if ((currentMeta.parentId || null) === normalizedTargetParentId) return;
+      const nextLibraryMeta = {
+        ...currentMeta,
+        parentId: normalizedTargetParentId,
+      };
+      const nextPayload =
+        targetBeat?.payload && typeof targetBeat.payload === "object"
+          ? {
+              ...targetBeat.payload,
+              libraryMeta: nextLibraryMeta,
+            }
+          : targetBeat.payload;
+
+      if (authUser?.id && hasSupabaseEnabled && supabase) {
+        const { error } = await supabase
+          .from("beats")
+          .update({
+            payload: nextPayload,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", key)
+          .eq("user_id", authUser.id);
+        if (error) {
+          alert(error.message || "Failed to move beat");
+          return;
+        }
+      }
+
+      setLocalBeatsWithUndo((prev) =>
+        prev.map((beat) =>
+          String(beat?.id) === key
+            ? {
+                ...beat,
+                payload: nextPayload,
+                libraryMeta: nextLibraryMeta,
+              }
+            : beat
+        )
+      );
+    },
+    [authUser?.id, localBeats, setLocalBeatsWithUndo]
+  );
+  const reorderBeatInLibrary = React.useCallback(
+    async (draggedBeatId, targetBeatId) => {
+      const draggedKey = String(draggedBeatId || "");
+      const targetKey = String(targetBeatId || "");
+      if (!draggedKey || !targetKey || draggedKey === targetKey) return;
+      const draggedBeat = localBeats.find((beat) => String(beat?.id || "") === draggedKey);
+      const targetBeat = localBeats.find((beat) => String(beat?.id || "") === targetKey);
+      if (!draggedBeat || !targetBeat) return;
+      const targetParentId = getBeatLibraryMeta(targetBeat).parentId || null;
+      const siblingBeats = localBeats
+        .filter((beat) => {
+          const beatId = String(beat?.id || "");
+          if (beatId === draggedKey) return false;
+          return (getBeatLibraryMeta(beat).parentId || null) === targetParentId;
+        })
+        .sort(compareBeatLibraryOrder);
+      const insertIndex = siblingBeats.findIndex((beat) => String(beat?.id || "") === targetKey);
+      const orderedBeats = [...siblingBeats];
+      const draggedNext = {
+        ...draggedBeat,
+        payload:
+          draggedBeat?.payload && typeof draggedBeat.payload === "object"
+            ? {
+                ...draggedBeat.payload,
+                libraryMeta: {
+                  ...getBeatLibraryMeta(draggedBeat),
+                  parentId: targetParentId,
+                },
+              }
+            : draggedBeat.payload,
+        libraryMeta: {
+          ...getBeatLibraryMeta(draggedBeat),
+          parentId: targetParentId,
+        },
+      };
+      orderedBeats.splice(insertIndex < 0 ? orderedBeats.length : insertIndex, 0, draggedNext);
+      const updatedById = new Map(
+        orderedBeats.map((beat, index) => {
+          const nextLibraryMeta = {
+            ...getBeatLibraryMeta(beat),
+            parentId: targetParentId,
+            manualOrder: index + 1,
+          };
+          const nextPayload =
+            beat?.payload && typeof beat.payload === "object"
+              ? {
+                  ...beat.payload,
+                  libraryMeta: nextLibraryMeta,
+                }
+              : beat.payload;
+          return [
+            String(beat?.id || ""),
+            {
+              ...beat,
+              payload: nextPayload,
+              libraryMeta: nextLibraryMeta,
+            },
+          ];
+        })
+      );
+
+      if (authUser?.id && hasSupabaseEnabled && supabase) {
+        const updates = Array.from(updatedById.values()).map((beat) =>
+          supabase
+            .from("beats")
+            .update({
+              payload: beat.payload,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", String(beat.id))
+            .eq("user_id", authUser.id)
+        );
+        const results = await Promise.all(updates);
+        const failed = results.find((result) => result.error);
+        if (failed?.error) {
+          alert(failed.error.message || "Failed to reorder beats");
+          return;
+        }
+      }
+
+      setLocalBeatsWithUndo((prev) =>
+        prev.map((beat) => updatedById.get(String(beat?.id || "")) || beat)
+      );
+    },
+    [authUser?.id, localBeats, setLocalBeatsWithUndo]
+  );
+  const beatLibraryOrderSensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: { distance: 4 },
+    })
+  );
+  const handleBeatLibrarySortDragStart = React.useCallback((event) => {
+    const activeId = String(event?.active?.id || "");
+    if (!activeId.startsWith("beat:")) return;
+    beatLibraryTreeDragRef.current = { kind: "beat", beatId: activeId.slice(5) };
+    beatLibraryLastHoverTargetRef.current = "";
+  }, []);
+  const handleBeatLibrarySortDragOver = React.useCallback((event) => {
+    const overId = String(event?.over?.id || "");
+    setBeatLibraryDropTargetId(overId || null);
+  }, []);
+  const handleBeatLibrarySortDragEnd = React.useCallback(async (event) => {
+    const activeId = String(event?.active?.id || "");
+    const overId = String(event?.over?.id || "");
+    beatLibraryTreeDragRef.current = null;
+    beatLibraryLastHoverTargetRef.current = "";
+    setBeatLibraryDropTargetId(null);
+    if (!activeId.startsWith("beat:") || !overId) return;
+    const draggedBeatId = activeId.slice(5);
+    if (overId === "__trash__") {
+      await deleteLocalBeatById(draggedBeatId);
+      return;
+    }
+    if (overId === "all") {
+      await moveBeatToLibraryContainer(draggedBeatId, null);
+      return;
+    }
+    if (overId.startsWith("beat:")) {
+      const targetBeatId = overId.slice(5);
+      if (draggedBeatId === targetBeatId) return;
+      await reorderBeatInLibrary(draggedBeatId, targetBeatId);
+      return;
+    }
+    await moveBeatToLibraryContainer(draggedBeatId, overId);
+  }, [deleteLocalBeatById, moveBeatToLibraryContainer, reorderBeatInLibrary]);
+  const handleBeatLibrarySortDragCancel = React.useCallback(() => {
+    beatLibraryTreeDragRef.current = null;
+    beatLibraryLastHoverTargetRef.current = "";
+    setBeatLibraryDropTargetId(null);
+  }, []);
+  const moveBeatLibraryContainer = React.useCallback(
+    (containerId, targetParentId) => {
+      const key = String(containerId || "");
+      if (!key) return;
+      const normalizedTargetParentId = targetParentId ? String(targetParentId) : null;
+      if (normalizedTargetParentId === key) return;
+      const descendantIds = new Set([key]);
+      const walk = (parentId) => {
+        beatLibraryContainers.forEach((entry) => {
+          if (String(entry.parentId || "") !== String(parentId)) return;
+          descendantIds.add(String(entry.id));
+          walk(entry.id);
+        });
+      };
+      walk(key);
+      if (normalizedTargetParentId && descendantIds.has(normalizedTargetParentId)) return;
+      setBeatLibraryContainers((prev) =>
+        prev.map((entry) =>
+          String(entry.id) === key
+            ? {
+                ...entry,
+                parentId: normalizedTargetParentId,
+              }
+            : entry
+        )
+      );
+      setSelectedBeatLibraryContainerId(key);
+    },
+    [beatLibraryContainers]
+  );
+  const handleBeatLibraryTreeDrop = React.useCallback(
+    async (targetParentId) => {
+      const dragged = beatLibraryTreeDragRef.current;
+      beatLibraryTreeDragRef.current = null;
+      beatLibraryLastHoverTargetRef.current = "";
+      setBeatLibraryDropTargetId(null);
+      if (!dragged || typeof dragged !== "object") return;
+      const normalizedTargetParentId = targetParentId ? String(targetParentId) : null;
+      if (dragged.kind === "container") {
+        moveBeatLibraryContainer(dragged.containerId, normalizedTargetParentId);
+        return;
+      }
+      if (dragged.kind === "beat") {
+        await moveBeatToLibraryContainer(dragged.beatId, normalizedTargetParentId);
+      }
+    },
+    [moveBeatLibraryContainer, moveBeatToLibraryContainer]
+  );
+  const handleBeatLibraryBeatHover = React.useCallback(
+    async (targetBeatId) => {
+      const dragged = beatLibraryTreeDragRef.current;
+      if (!dragged || typeof dragged !== "object" || dragged.kind !== "beat") return;
+      const draggedKey = String(dragged.beatId || "");
+      const targetKey = String(targetBeatId || "");
+      if (!draggedKey || !targetKey || draggedKey === targetKey) return;
+      const hoverKey = `${draggedKey}->${targetKey}`;
+      if (beatLibraryLastHoverTargetRef.current === hoverKey) return;
+      beatLibraryLastHoverTargetRef.current = hoverKey;
+      await reorderBeatInLibrary(dragged.beatId, targetBeatId);
+    },
+    [reorderBeatInLibrary]
+  );
+  const handleBeatLibraryBeatDrop = React.useCallback(
+    async (targetBeatId) => {
+      const dragged = beatLibraryTreeDragRef.current;
+      beatLibraryTreeDragRef.current = null;
+      beatLibraryLastHoverTargetRef.current = "";
+      setBeatLibraryDropTargetId(null);
+      if (!dragged || typeof dragged !== "object") return;
+      if (dragged.kind === "beat") {
+        await reorderBeatInLibrary(dragged.beatId, targetBeatId);
+      }
+    },
+    [reorderBeatInLibrary]
+  );
+  const handleBeatLibraryTrashDrop = React.useCallback(async () => {
+    const dragged = beatLibraryTreeDragRef.current;
+    beatLibraryTreeDragRef.current = null;
+    setBeatLibraryDropTargetId(null);
+    if (!dragged || typeof dragged !== "object") return;
+    if (dragged.kind === "container") {
+      await deleteBeatLibraryContainer(dragged.containerId);
+      return;
+    }
+    if (dragged.kind === "beat") {
+      await deleteLocalBeatById(dragged.beatId);
+    }
+  }, [deleteBeatLibraryContainer, deleteLocalBeatById]);
   const libraryBpmValues = React.useMemo(() => {
     const source = beatLibraryTab === "public" ? publicBeats : localBeats;
     const values = source
@@ -5323,6 +6130,50 @@ useEffect(() => {
     const fromPublic = publicBeats.map((b) => String(b?.timeSigCategory || "")).filter(Boolean);
     return Array.from(new Set([...fromLocal, ...fromPublic])).sort();
   }, [localBeats, publicBeats]);
+  const selectedBeatLibraryContainer = React.useMemo(
+    () =>
+      selectedBeatLibraryContainerId === "all"
+        ? null
+        : beatLibraryContainers.find((entry) => entry.id === selectedBeatLibraryContainerId) || null,
+    [beatLibraryContainers, selectedBeatLibraryContainerId]
+  );
+  const beatLibraryContainerChildren = React.useMemo(() => {
+    const byParent = new Map();
+    [...beatLibraryContainers]
+      .sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0) || a.name.localeCompare(b.name))
+      .forEach((entry) => {
+        const key = entry.parentId || "__root__";
+        const list = byParent.get(key) || [];
+        list.push(entry);
+        byParent.set(key, list);
+      });
+    return byParent;
+  }, [beatLibraryContainers]);
+  const beatLibraryVisibleContainers = React.useMemo(() => {
+    const out = [];
+    const walk = (parentId, depth) => {
+      const entries = beatLibraryContainerChildren.get(parentId || "__root__") || [];
+      entries.forEach((entry) => {
+        out.push({ ...entry, depth });
+        if (!entry.collapsed) walk(entry.id, depth + 1);
+      });
+    };
+    walk(null, 0);
+    return out;
+  }, [beatLibraryContainerChildren]);
+  const beatLibraryDescendantIds = React.useMemo(() => {
+    if (!selectedBeatLibraryContainerId || selectedBeatLibraryContainerId === "all") return null;
+    const ids = new Set([selectedBeatLibraryContainerId]);
+    const walk = (parentId) => {
+      const entries = beatLibraryContainerChildren.get(parentId) || [];
+      entries.forEach((entry) => {
+        ids.add(entry.id);
+        walk(entry.id);
+      });
+    };
+    walk(selectedBeatLibraryContainerId);
+    return ids;
+  }, [beatLibraryContainerChildren, selectedBeatLibraryContainerId]);
   const filteredLocalBeats = React.useMemo(() => {
     const list = localBeats.filter((beat) => {
       if (libraryTimeSigFilter !== "all" && beat?.timeSigCategory !== libraryTimeSigFilter) return false;
@@ -5334,7 +6185,10 @@ useEffect(() => {
     const byTime = (a, b) =>
       new Date(a?.createdAt || 0).getTime() - new Date(b?.createdAt || 0).getTime();
     const byBpm = (a, b) => (getBeatBpm(a) ?? -1) - (getBeatBpm(b) ?? -1);
+    const byManualOrder = (a, b) =>
+      (getBeatLibraryMeta(a).manualOrder || 0) - (getBeatLibraryMeta(b).manualOrder || 0);
     return [...list].sort((a, b) => {
+      if (selectedBeatLibraryContainerId !== "all") return byManualOrder(a, b) || byTime(b, a);
       if (librarySort === "oldest") return byTime(a, b);
       if (librarySort === "bpm-asc") return byBpm(a, b);
       if (librarySort === "bpm-desc") return byBpm(b, a);
@@ -5346,6 +6200,7 @@ useEffect(() => {
     beatStyleDraft,
     beatCategoryDraft,
     librarySort,
+    selectedBeatLibraryContainerId,
     getBeatBpm,
     bpmPassesLibraryFilter,
   ]);
@@ -7289,6 +8144,20 @@ useEffect(() => {
       y: Math.max(minY, Math.min(maxY, transform.y)),
     };
   }, []);
+  const restrictBeatLibraryDragToList = React.useCallback(({ transform, activeNodeRect }) => {
+    const listEl = arrangementSourceListRef.current;
+    if (!listEl || !transform || !activeNodeRect) {
+      return transform ? { ...transform, x: 0 } : transform;
+    }
+    const listRect = listEl.getBoundingClientRect();
+    const minY = listRect.top - activeNodeRect.top;
+    const maxY = listRect.bottom - activeNodeRect.bottom;
+    return {
+      ...transform,
+      x: 0,
+      y: Math.max(minY, Math.min(maxY, transform.y)),
+    };
+  }, []);
 
 
   const applyLoopWrites = React.useCallback((gridState, rule, repeats = "all", overlapMode = "all-to-all", respectPlayability = false) => {
@@ -8916,7 +9785,23 @@ useEffect(() => {
     const fallbackName = `Beat ${localBeats.length + 1}`;
     const name = beatNameDraft.trim() || fallbackName;
     const now = new Date().toISOString();
-    const payload = buildCurrentBeatPayload();
+    const selectedParentId =
+      beatLibraryTab === "local" && selectedBeatLibraryContainerId !== "all"
+        ? selectedBeatLibraryContainerId
+        : null;
+    const nextManualOrder =
+      localBeats.reduce((max, beat) => {
+        const meta = getBeatLibraryMeta(beat);
+        if ((meta.parentId || null) !== selectedParentId) return max;
+        return Math.max(max, Number(meta.manualOrder) || 0);
+      }, 0) + 1;
+    const payload = {
+      ...buildCurrentBeatPayload(),
+      libraryMeta: {
+        parentId: selectedParentId,
+        manualOrder: nextManualOrder,
+      },
+    };
     const item = {
       id: `local-${Math.random().toString(36).slice(2, 10)}`,
       name,
@@ -8927,6 +9812,7 @@ useEffect(() => {
       createdAt: now,
       updatedAt: now,
       payload,
+      libraryMeta: payload.libraryMeta,
       source: "local",
     };
     if (authUser?.id && hasSupabaseEnabled && supabase) {
@@ -8955,6 +9841,8 @@ useEffect(() => {
     setLoadedLocalBeatId(item.id);
   }, [
     authUser?.id,
+    beatLibraryTab,
+    selectedBeatLibraryContainerId,
     beatNameDraft,
     beatCategoryDraft,
     beatStyleDraft,
@@ -8967,7 +9855,14 @@ useEffect(() => {
   const updateCurrentLoadedBeatLocal = React.useCallback(async () => {
     if (!loadedLocalBeatId) return;
     const name = beatNameDraft.trim() || String(loadedLocalBeat?.name || "Untitled Beat");
-    const payload = buildCurrentBeatPayload();
+    const existingLibraryMeta = getBeatLibraryMeta(loadedLocalBeat);
+    const payload = {
+      ...buildCurrentBeatPayload(),
+      libraryMeta: {
+        parentId: existingLibraryMeta.parentId,
+        manualOrder: existingLibraryMeta.manualOrder,
+      },
+    };
     const category = beatCategoryDraft === "all" ? "Groove" : beatCategoryDraft;
     const style = beatStyleDraft === "all" ? undefined : beatStyleDraft.trim() || undefined;
     if (authUser?.id && hasSupabaseEnabled && supabase) {
@@ -9005,6 +9900,7 @@ useEffect(() => {
               timeSigCategory: `${timeSig.n}/${timeSig.d}`,
               bpm,
               payload,
+              libraryMeta: payload.libraryMeta,
             }
           : beat
       )
@@ -9841,6 +10737,224 @@ useEffect(() => {
       return next;
     });
   };
+
+  const getBeatLibraryParentId = React.useCallback((beat) => {
+    const direct = beat?.libraryMeta && typeof beat.libraryMeta === "object" ? beat.libraryMeta : null;
+    const payloadMeta =
+      beat?.payload?.libraryMeta && typeof beat.payload.libraryMeta === "object"
+        ? beat.payload.libraryMeta
+        : null;
+    const meta = direct || payloadMeta || null;
+    return meta?.parentId ? String(meta.parentId) : null;
+  }, []);
+
+  const renderArrangementSourceTreeBeatRow = React.useCallback((beat, depth) => {
+    const beatBpm = getBeatBpm(beat);
+    const sourceLabel = "local";
+    const beatRowKey = `${sourceLabel}:${String(beat.id)}`;
+    const isLoadedTrackedBeat =
+      String(loadedLocalBeatId || "") === String(beat.id) && !isLoadedLocalBeatNameChanged;
+    const isSelectedArrangementSourceBeat = selectedArrangementSourceBeatKey === beatRowKey;
+    return (
+      <SortableArrangementSourceBeatRow
+        key={`arr-tree-beat-${beat.id}`}
+        beat={beat}
+        depth={depth}
+        beatRowKey={beatRowKey}
+        beatBpm={beatBpm}
+        beatLibraryDropTargetId={beatLibraryDropTargetId}
+        isLoadedTrackedBeat={isLoadedTrackedBeat}
+        isSelectedArrangementSourceBeat={isSelectedArrangementSourceBeat}
+        editingBeatLibraryBeatId={editingBeatLibraryBeatId}
+        editingBeatLibraryBeatName={editingBeatLibraryBeatName}
+        setEditingBeatLibraryBeatName={setEditingBeatLibraryBeatName}
+        commitEditingBeatLibraryBeat={commitEditingBeatLibraryBeat}
+        cancelEditingBeatLibraryBeat={cancelEditingBeatLibraryBeat}
+        startEditingBeatLibraryBeat={startEditingBeatLibraryBeat}
+        loadBeatIntoEditor={loadBeatIntoEditor}
+        arrangementAddBeat={arrangementAddBeat}
+        handleDeleteLocalBeatClick={handleDeleteLocalBeatClick}
+      />
+    );
+  }, [
+    arrangementAddBeat,
+    commitEditingBeatLibraryBeat,
+    cancelEditingBeatLibraryBeat,
+    beatLibraryDropTargetId,
+    editingBeatLibraryBeatId,
+    editingBeatLibraryBeatName,
+    getBeatBpm,
+    handleDeleteLocalBeatClick,
+    isLoadedLocalBeatNameChanged,
+    loadedLocalBeatId,
+    loadBeatIntoEditor,
+    setEditingBeatLibraryBeatName,
+    selectedArrangementSourceBeatKey,
+    startEditingBeatLibraryBeat,
+  ]);
+
+  const renderArrangementSourceFolderBranch = React.useCallback((parentId, depth) => {
+    const childFolders = beatLibraryContainers.filter(
+      (entry) => String(entry.parentId || "") === String(parentId || "")
+    );
+    const childBeats = arrangementSourceBeats
+      .filter((beat) => String(getBeatLibraryParentId(beat) || "") === String(parentId || ""))
+      .sort(compareBeatLibraryOrder);
+    const nodes = [];
+    const suppressFolderSelectionHighlight =
+      (Boolean(loadedLocalBeatId) && !isLoadedLocalBeatNameChanged) ||
+      String(selectedArrangementSourceBeatKey || "").startsWith("local:");
+
+    childFolders.forEach((entry) => {
+      const hasChildren =
+        beatLibraryContainers.some((candidate) => String(candidate.parentId || "") === String(entry.id)) ||
+        localBeats.some((beat) => String(getBeatLibraryParentId(beat) || "") === String(entry.id));
+      const isSelected = String(selectedBeatLibraryContainerId) === String(entry.id);
+      nodes.push(
+        <BeatLibraryDropTarget
+          key={`arr-src-container-${entry.id}`}
+          id={String(entry.id)}
+          className="relative"
+          style={{ marginLeft: `${Math.max(0, depth) * 0.5}rem` }}
+          draggable
+          onDragStart={(e) => {
+            beginBeatLibraryTreeDrag({ kind: "container", containerId: entry.id });
+            try {
+              e.dataTransfer.effectAllowed = "move";
+              e.dataTransfer.setData("text/plain", `container:${String(entry.id)}`);
+            } catch (_) {}
+          }}
+          onDragEnd={clearBeatLibraryTreeDrag}
+          onDragEnter={(e) => {
+            e.preventDefault();
+            setBeatLibraryDropTargetId(String(entry.id));
+            if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+          }}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setBeatLibraryDropTargetId(String(entry.id));
+            if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+          }}
+          onDrop={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            handleBeatLibraryTreeDrop(entry.id);
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => setSelectedBeatLibraryContainerId(entry.id)}
+            className={`flex w-full items-center gap-2 rounded border px-2 py-1 text-left text-sm ${
+              beatLibraryDropTargetId === String(entry.id)
+                ? "border-cyan-400/80 bg-cyan-900/25 text-cyan-50 shadow-[0_0_0_1px_rgba(34,211,238,0.35)]"
+                : isSelected && !suppressFolderSelectionHighlight
+                  ? "border-sky-500/70 bg-sky-900/30 text-sky-100"
+                  : "border-neutral-800 bg-neutral-900/40 text-neutral-300 hover:bg-neutral-800/60"
+            }`}
+            title="Folder"
+          >
+            <span
+              className={`inline-flex h-5 min-w-5 items-center justify-center rounded text-xs ${
+                hasChildren ? "text-neutral-400 hover:bg-neutral-800/60" : "text-neutral-700"
+              }`}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (hasChildren) toggleBeatLibraryContainerCollapsed(entry.id);
+              }}
+              aria-hidden="true"
+            >
+              {hasChildren ? <TreeTriangle expanded={!entry.collapsed} /> : ""}
+            </span>
+            {String(editingBeatLibraryContainerId || "") === String(entry.id) ? (
+              <input
+                type="text"
+                value={editingBeatLibraryContainerName}
+                onChange={(e) => setEditingBeatLibraryContainerName(e.target.value)}
+                onClick={(e) => e.stopPropagation()}
+                onFocus={(e) => e.currentTarget.select()}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    commitEditingBeatLibraryContainer();
+                  } else if (e.key === "Escape") {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    cancelEditingBeatLibraryContainer();
+                  }
+                }}
+                onBlur={() => commitEditingBeatLibraryContainer()}
+                autoFocus
+                className="min-w-0 flex-1 rounded bg-neutral-950/70 px-1 py-0.5 text-sm text-white outline-none"
+              />
+            ) : (
+              <span className="min-w-0 flex-1 truncate">{entry.name}</span>
+            )}
+            <button
+              type="button"
+              onPointerDown={(e) => {
+                if (String(editingBeatLibraryContainerId || "") !== String(entry.id)) return;
+                e.preventDefault();
+                e.stopPropagation();
+                commitEditingBeatLibraryContainer();
+              }}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (String(editingBeatLibraryContainerId || "") === String(entry.id)) {
+                  return;
+                } else {
+                  startEditingBeatLibraryContainer(entry.id);
+                }
+              }}
+              className="inline-flex h-6 min-w-6 items-center justify-center rounded text-neutral-400 hover:bg-neutral-800/60 hover:text-white"
+              title="Rename folder"
+            >
+              <PencilIcon />
+            </button>
+          </button>
+        </BeatLibraryDropTarget>
+      );
+      if (!entry.collapsed) nodes.push(...renderArrangementSourceFolderBranch(entry.id, depth + 1));
+    });
+
+    if (childBeats.length > 0) {
+      nodes.push(
+        <SortableContext
+          key={`arr-src-beat-sortable-${String(parentId || "root")}`}
+          items={childBeats.map((beat) => `beat:${String(beat.id)}`)}
+          strategy={verticalListSortingStrategy}
+        >
+          {childBeats.map((beat) => renderArrangementSourceTreeBeatRow(beat, depth))}
+        </SortableContext>
+      );
+    }
+
+    return nodes;
+  }, [
+    arrangementSourceBeats,
+    localBeats,
+    beginBeatLibraryTreeDrag,
+    clearBeatLibraryTreeDrag,
+    commitEditingBeatLibraryContainer,
+    cancelEditingBeatLibraryContainer,
+    createBeatLibraryContainer,
+    deleteBeatLibraryContainer,
+    editingBeatLibraryContainerId,
+    editingBeatLibraryContainerName,
+    getBeatLibraryParentId,
+    handleBeatLibraryTreeDrop,
+    renderArrangementSourceTreeBeatRow,
+    selectedBeatLibraryContainerId,
+    selectedArrangementSourceBeatKey,
+    setBeatLibraryDropTargetId,
+    setEditingBeatLibraryContainerName,
+    startEditingBeatLibraryContainer,
+    toggleBeatLibraryContainerCollapsed,
+    loadedLocalBeatId,
+    isLoadedLocalBeatNameChanged,
+  ]);
 
 
   return (
@@ -11103,6 +12217,40 @@ useEffect(() => {
           refreshPublicLibrary={refreshPublicLibrary}
           publicLibraryError={publicLibraryError}
           setPublicLibraryError={setPublicLibraryError}
+          beatLibraryContainers={beatLibraryContainers}
+          beatLibraryVisibleContainers={beatLibraryVisibleContainers}
+          selectedBeatLibraryContainer={selectedBeatLibraryContainer}
+          selectedBeatLibraryContainerId={selectedBeatLibraryContainerId}
+          beatLibraryRootCollapsed={beatLibraryRootCollapsed}
+          toggleBeatLibraryRootCollapsedManual={toggleBeatLibraryRootCollapsedManual}
+          toggleBeatLibraryExpandAll={toggleBeatLibraryExpandAll}
+          setSelectedBeatLibraryContainerId={setSelectedBeatLibraryContainerId}
+          editingBeatLibraryContainerId={editingBeatLibraryContainerId}
+          editingBeatLibraryContainerName={editingBeatLibraryContainerName}
+          editingBeatLibraryBeatId={editingBeatLibraryBeatId}
+          editingBeatLibraryBeatName={editingBeatLibraryBeatName}
+          beatLibraryDropTargetId={beatLibraryDropTargetId}
+          setBeatLibraryDropTargetId={setBeatLibraryDropTargetId}
+          setEditingBeatLibraryContainerName={setEditingBeatLibraryContainerName}
+          setEditingBeatLibraryBeatName={setEditingBeatLibraryBeatName}
+          startEditingBeatLibraryContainer={startEditingBeatLibraryContainer}
+          commitEditingBeatLibraryContainer={commitEditingBeatLibraryContainer}
+          cancelEditingBeatLibraryContainer={cancelEditingBeatLibraryContainer}
+          startEditingBeatLibraryBeat={startEditingBeatLibraryBeat}
+          commitEditingBeatLibraryBeat={commitEditingBeatLibraryBeat}
+          cancelEditingBeatLibraryBeat={cancelEditingBeatLibraryBeat}
+          beginBeatLibraryTreeDrag={beginBeatLibraryTreeDrag}
+          clearBeatLibraryTreeDrag={clearBeatLibraryTreeDrag}
+          handleBeatLibraryTreeDrop={handleBeatLibraryTreeDrop}
+          handleBeatLibraryTrashDrop={handleBeatLibraryTrashDrop}
+          handleBeatLibrarySortDragStart={handleBeatLibrarySortDragStart}
+          handleBeatLibrarySortDragOver={handleBeatLibrarySortDragOver}
+          handleBeatLibrarySortDragEnd={handleBeatLibrarySortDragEnd}
+          handleBeatLibrarySortDragCancel={handleBeatLibrarySortDragCancel}
+          toggleBeatLibraryContainerCollapsed={toggleBeatLibraryContainerCollapsed}
+          deleteBeatLibraryContainer={deleteBeatLibraryContainer}
+          createBeatLibraryContainer={createBeatLibraryContainer}
+          allLocalBeats={localBeats}
           filteredLocalBeats={filteredLocalBeats}
           filteredPublicBeats={filteredPublicBeats}
           getBeatBpm={getBeatBpm}
@@ -11230,92 +12378,6 @@ useEffect(() => {
               >
                 <div className="flex items-center justify-between gap-2">
                   <div className="text-sm text-neutral-200">Beats</div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setArrangementSourceTab("local")}
-                      className={`px-2.5 py-1 rounded border text-xs ${
-                        arrangementSourceTab === "local"
-                          ? "border-neutral-700 text-white bg-neutral-800"
-                          : "border-neutral-800 text-neutral-400 bg-neutral-900/60"
-                      }`}
-                    >
-                      Local
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setArrangementSourceTab("public")}
-                      className={`px-2.5 py-1 rounded border text-xs ${
-                        arrangementSourceTab === "public"
-                          ? "border-neutral-700 text-white bg-neutral-800"
-                          : "border-neutral-800 text-neutral-400 bg-neutral-900/60"
-                      }`}
-                    >
-                      Public
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setLibraryFiltersOpen((v) => !v)}
-                      className={`px-2 py-1 rounded border text-xs leading-none ${
-                        libraryFiltersOpen
-                          ? "border-neutral-700 text-white bg-neutral-800"
-                          : "border-neutral-800 text-neutral-400 bg-neutral-900/60"
-                      }`}
-                      title={libraryFiltersOpen ? "Hide beat filters" : "Show beat filters"}
-                    >
-                      ...
-                    </button>
-                  </div>
-                </div>
-                <div className="mt-3 flex flex-wrap items-end gap-2">
-                  <input
-                    ref={beatNameInputRef}
-                    type="text"
-                    value={beatNameDraft}
-                    onChange={(e) => setBeatNameDraft(e.target.value)}
-                    onFocus={(e) => e.target.select()}
-                    onKeyDown={async (e) => {
-                      if (e.key !== "Enter") return;
-                      e.preventDefault();
-                      if (arrangementSourceTab === "public") {
-                        openPublicSubmitDialog();
-                        return;
-                      }
-                      if (canUpdateLoadedLocalBeat) updateCurrentLoadedBeatLocal();
-                      else saveCurrentBeatLocal();
-                      try { e.currentTarget.blur(); } catch (_) {}
-                    }}
-                    placeholder="Beat name"
-                    className="min-w-[180px] flex-1 bg-neutral-900 border border-neutral-700 rounded px-2 py-1 text-sm text-white"
-                  />
-                  <button
-                    type="button"
-                    onClick={canUpdateLoadedLocalBeat ? updateCurrentLoadedBeatLocal : saveCurrentBeatLocal}
-                    className={`px-2.5 py-1 rounded border text-sm ${
-                      arrangementSourceTab === "local"
-                        ? canUpdateLoadedLocalBeat
-                          ? "border-cyan-700 text-cyan-100 bg-cyan-900/20 hover:bg-cyan-800/30"
-                          : "border-neutral-700 text-white bg-neutral-800 hover:bg-neutral-700/60"
-                        : "border-neutral-800 text-neutral-500 bg-neutral-900/60"
-                    }`}
-                    title={canUpdateLoadedLocalBeat ? "Update loaded local beat" : "Save to local beat library"}
-                    disabled={arrangementSourceTab !== "local"}
-                  >
-                    {canUpdateLoadedLocalBeat ? "Update" : "Save"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={openPublicSubmitDialog}
-                    disabled={!isAdminUser}
-                    className={`px-2.5 py-1 rounded border text-sm ${
-                      arrangementSourceTab === "public" && isAdminUser
-                        ? "border-neutral-700 text-white bg-neutral-800 hover:bg-neutral-700/60"
-                        : "border-neutral-800 text-neutral-500 bg-neutral-900/60 cursor-not-allowed"
-                    }`}
-                    title={isAdminUser ? "Publish to public beat library" : "Admin login required"}
-                  >
-                    Publish public
-                  </button>
                 </div>
                 {libraryFiltersOpen && (
                   <div className="mt-3 rounded border border-neutral-800 bg-neutral-900/40 p-2.5">
@@ -11399,107 +12461,391 @@ useEffect(() => {
                   </div>
                 )}
                 {!arrangementSourcesCollapsed ? (
-                  <div className="mt-3 max-h-[52vh] overflow-auto space-y-2 pr-1 dg-scroll-follow-list">
-                    {arrangementSourceBeats.map((beat) => {
-                      const beatBpm = getBeatBpm(beat);
-                      const sourceLabel = arrangementSourceTab === "public" ? "public" : "local";
-                      const beatRowKey = `${sourceLabel}:${String(beat.id)}`;
-                      const isLoadedTrackedBeat =
-                        arrangementSourceTab === "local" &&
-                        String(loadedLocalBeatId || "") === String(beat.id) &&
-                        !isLoadedLocalBeatNameChanged;
-                      const isSelectedArrangementSourceBeat = selectedArrangementSourceBeatKey === beatRowKey;
-                      return (
-                        <div
-                          key={`arr-src-${sourceLabel}-${beat.id}`}
-                          data-beat-row-id={beatRowKey}
-                          role="button"
-                          tabIndex={0}
-                          draggable
-                          onDragStart={(e) => {
-                            beginArrangementBeatDrag(arrangementSourceTab, beat.id);
-                            try {
-                              e.dataTransfer.effectAllowed = "copy";
-                              e.dataTransfer.setData(
-                                "text/plain",
-                                JSON.stringify({
-                                  source: arrangementSourceTab,
-                                  beatId: beat.id,
-                                })
-                              );
-                            } catch (_) {}
-                          }}
-                          onDragEnd={clearArrangementBeatDrag}
-                          onClick={() => loadBeatIntoEditor(arrangementSourceTab, beat)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter" || e.key === " ") {
+                  arrangementSourceTab === "local" ? (
+                    <div className="mt-3">
+                      <div className="flex max-h-[52vh] flex-col rounded border border-neutral-800 bg-neutral-950/30 p-2">
+                        <div ref={arrangementSourceListRef} className="min-h-0 overflow-auto pr-1">
+                          <DndContext
+                            sensors={beatLibraryOrderSensors}
+                            onDragStart={handleBeatLibrarySortDragStart}
+                            onDragOver={handleBeatLibrarySortDragOver}
+                            onDragEnd={handleBeatLibrarySortDragEnd}
+                            onDragCancel={handleBeatLibrarySortDragCancel}
+                            modifiers={[restrictBeatLibraryDragToList]}
+                          >
+                          <div className="space-y-1">
+                          <BeatLibraryDropTarget id="all">
+                          <button
+                            type="button"
+                            onClick={() => toggleBeatLibraryExpandAll()}
+                            onDragOver={(e) => {
                               e.preventDefault();
-                              loadBeatIntoEditor(arrangementSourceTab, beat);
-                            }
-                          }}
-                          className={`rounded border px-2.5 py-2 cursor-pointer outline-none focus:outline-none focus-visible:outline-none ${
-                            isLoadedTrackedBeat || isSelectedArrangementSourceBeat
-                              ? "border-sky-500/70 bg-sky-900/30 shadow-[0_0_0_1px_rgba(14,165,233,0.35)]"
-                              : "border-neutral-800 bg-neutral-900/40 hover:bg-neutral-800/60"
-                          }`}
-                        >
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="min-w-0">
-                              <div className="text-sm text-white truncate">{beat.name || "Untitled Beat"}</div>
-                              <div className="text-xs text-neutral-400 truncate">
-                                {(() => {
-                                  const beatBars = Math.max(1, Number(beat?.payload?.bars) || 1);
-                                  return (beat.timeSigCategory || "4/4") +
-                                    (Number.isFinite(beatBpm) ? ` · ${beatBpm} BPM` : "") +
-                                    ` · ${beatBars} ${beatBars === 1 ? "bar" : "bars"}`;
-                                })()}
-                              </div>
+                              setBeatLibraryDropTargetId("all");
+                              if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+                            }}
+                            onDragLeave={() => setBeatLibraryDropTargetId((prev) => (prev === "all" ? null : prev))}
+                            onDrop={(e) => {
+                              e.preventDefault();
+                              handleBeatLibraryTreeDrop(null);
+                            }}
+                            className={`flex w-full items-center gap-2 rounded border px-2 py-1 text-left text-sm ${
+                              beatLibraryDropTargetId === "all"
+                                ? "border-cyan-400/80 bg-cyan-900/25 text-cyan-50 shadow-[0_0_0_1px_rgba(34,211,238,0.35)]"
+                                : selectedBeatLibraryContainerId === "all" &&
+                                    !(
+                                      (Boolean(loadedLocalBeatId) && !isLoadedLocalBeatNameChanged) ||
+                                      String(selectedArrangementSourceBeatKey || "").startsWith("local:")
+                                    )
+                                  ? "border-sky-500/70 bg-sky-900/30 text-sky-100"
+                                  : "border-neutral-800 bg-neutral-900/40 text-neutral-300 hover:bg-neutral-800/60"
+                            }`}
+                          >
+                            <span
+                              className="inline-flex h-5 min-w-5 items-center justify-center rounded text-xs text-neutral-600 hover:bg-neutral-800/60"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                if (beatLibraryVisibleContainers.length > 0) {
+                                  toggleBeatLibraryRootCollapsedManual();
+                                }
+                              }}
+                              aria-hidden="true"
+                            >
+                              {beatLibraryVisibleContainers.length > 0 ? (
+                                <TreeTriangle expanded={!beatLibraryRootCollapsed} />
+                              ) : ""}
+                            </span>
+                            <span
+                              className="min-w-0 flex-1 truncate"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                toggleBeatLibraryExpandAll();
+                              }}
+                            >
+                              All beats
+                            </span>
+                            <div className="ml-auto flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  setArrangementSourceTab("local");
+                                }}
+                                className={`px-2.5 py-1 rounded border text-xs ${
+                                  arrangementSourceTab === "local"
+                                    ? "border-neutral-700 text-white bg-neutral-800"
+                                    : "border-neutral-800 text-neutral-400 bg-neutral-900/60"
+                                }`}
+                              >
+                                Local
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  setArrangementSourceTab("public");
+                                }}
+                                className={`px-2.5 py-1 rounded border text-xs ${
+                                  arrangementSourceTab === "public"
+                                    ? "border-neutral-700 text-white bg-neutral-800"
+                                    : "border-neutral-800 text-neutral-400 bg-neutral-900/60"
+                                }`}
+                              >
+                                Public
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  setLibraryFiltersOpen((v) => !v);
+                                }}
+                                className={`px-2 py-1 rounded border text-xs leading-none ${
+                                  libraryFiltersOpen
+                                    ? "border-neutral-700 text-white bg-neutral-800"
+                                    : "border-neutral-800 text-neutral-400 bg-neutral-900/60"
+                                }`}
+                                title={libraryFiltersOpen ? "Hide beat filters" : "Show beat filters"}
+                              >
+                                ...
+                              </button>
                             </div>
-                          <div className="flex items-center gap-1.5">
+                            <span className="rounded border border-neutral-800 px-1.5 py-0.5 text-[11px] text-neutral-500">
+                              {arrangementSourceBeats.length}
+                            </span>
+                            </button>
+                            </BeatLibraryDropTarget>
+                            {!beatLibraryRootCollapsed && renderArrangementSourceFolderBranch(null, 1)}
+                            {!beatLibraryRootCollapsed &&
+                              beatLibraryContainers.length === 0 &&
+                              arrangementSourceBeats.length === 0 && (
+                              <div className="px-2 py-1 text-xs text-neutral-500">
+                                No local beats saved yet. Create a folder or save a beat.
+                              </div>
+                            )}
+                          </div>
+                          </DndContext>
+                        </div>
+                        <div className="mt-2 space-y-2 border-t border-neutral-800 pt-2">
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => createBeatLibraryContainer("folder")}
+                              className="flex-1 rounded border border-neutral-800 bg-neutral-900/40 px-2 py-1 text-[11px] text-neutral-300 hover:bg-neutral-800/60"
+                            >
+                              + Folder
+                            </button>
+                            <BeatLibraryDropTarget id="__trash__">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (selectedBeatLibraryContainerId !== "all") deleteBeatLibraryContainer(selectedBeatLibraryContainerId);
+                              }}
+                              onDragOver={(e) => {
+                                e.preventDefault();
+                                setBeatLibraryDropTargetId("__trash__");
+                                if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+                              }}
+                              onDragLeave={() =>
+                                setBeatLibraryDropTargetId((prev) => (prev === "__trash__" ? null : prev))
+                              }
+                              onDrop={async (e) => {
+                                e.preventDefault();
+                                await handleBeatLibraryTrashDrop();
+                              }}
+                              disabled={selectedBeatLibraryContainerId === "all"}
+                              className={`rounded border px-2 py-1 text-[11px] ${
+                                beatLibraryDropTargetId === "__trash__"
+                                  ? "border-red-500/80 bg-red-900/25 text-red-100 shadow-[0_0_0_1px_rgba(239,68,68,0.35)]"
+                                  : selectedBeatLibraryContainerId !== "all"
+                                    ? "border-red-900 text-red-200 hover:bg-red-900/30"
+                                    : "border-neutral-800 text-neutral-500 bg-neutral-900/60 cursor-not-allowed"
+                              }`}
+                              title={
+                                selectedBeatLibraryContainerId !== "all"
+                                  ? "Delete selected folder or drop beats/folders here"
+                                  : "Drop beats/folders here to delete"
+                              }
+                              >
+                                <svg
+                                xmlns="http://www.w3.org/2000/svg"
+                                viewBox="0 0 16 16"
+                                className="h-4 w-4"
+                                fill="currentColor"
+                                aria-hidden="true"
+                              >
+                                <path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0z" />
+                                <path d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4zM2.5 3h11V2h-11z" />
+                                </svg>
+                              </button>
+                              </BeatLibraryDropTarget>
+                          </div>
+                          <div className="flex flex-wrap items-end gap-2">
+                            <input
+                              ref={beatNameInputRef}
+                              type="text"
+                              value={beatNameDraft}
+                              onChange={(e) => setBeatNameDraft(e.target.value)}
+                              onFocus={(e) => e.target.select()}
+                              onKeyDown={async (e) => {
+                                if (e.key !== "Enter") return;
+                                e.preventDefault();
+                                if (canUpdateLoadedLocalBeat) updateCurrentLoadedBeatLocal();
+                                else saveCurrentBeatLocal();
+                                try { e.currentTarget.blur(); } catch (_) {}
+                              }}
+                              placeholder="Beat name"
+                              className="min-w-[180px] flex-1 bg-neutral-900 border border-neutral-700 rounded px-2 py-1 text-sm text-white"
+                            />
+                            <button
+                              type="button"
+                              onClick={canUpdateLoadedLocalBeat ? updateCurrentLoadedBeatLocal : saveCurrentBeatLocal}
+                              className={`px-2.5 py-1 rounded border text-sm ${
+                                canUpdateLoadedLocalBeat
+                                  ? "border-cyan-700 text-cyan-100 bg-cyan-900/20 hover:bg-cyan-800/30"
+                                  : "border-neutral-700 text-white bg-neutral-800 hover:bg-neutral-700/60"
+                              }`}
+                              title={canUpdateLoadedLocalBeat ? "Update loaded local beat" : "Save to local beat library"}
+                            >
+                              {canUpdateLoadedLocalBeat ? "Update" : "Save"}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={saveCurrentBeatLocal}
+                              className="px-2.5 py-1 rounded border text-sm border-neutral-700 text-white bg-neutral-800 hover:bg-neutral-700/60"
+                              title="Save as new beat"
+                            >
+                              Save as new
+                            </button>
+                            <button
+                              type="button"
+                              onClick={openPublicSubmitDialog}
+                              disabled={!isAdminUser}
+                              className={`px-2.5 py-1 rounded border text-sm ${
+                                isAdminUser
+                                  ? "border-neutral-700 text-white bg-neutral-800 hover:bg-neutral-700/60"
+                                  : "border-neutral-800 text-neutral-500 bg-neutral-900/60 cursor-not-allowed"
+                              }`}
+                              title={isAdminUser ? "Publish to public beat library" : "Admin login required"}
+                            >
+                              Publish public
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="mt-3 max-h-[52vh] overflow-auto space-y-2 pr-1 dg-scroll-follow-list">
+                      <div className="rounded border border-neutral-800 bg-neutral-950/30 p-2">
+                        <button
+                          type="button"
+                          onClick={() => setArrangementSourceTab("local")}
+                          className="flex w-full items-center gap-2 rounded border border-neutral-800 bg-neutral-900/40 px-2 py-1 text-left text-sm text-neutral-300"
+                        >
+                          <span className="inline-flex h-5 min-w-5 items-center justify-center rounded text-xs text-neutral-700" />
+                          <span className="min-w-0 flex-1 truncate">All beats</span>
+                          <div className="ml-auto flex items-center gap-2">
                             <button
                               type="button"
                               onClick={(e) => {
+                                e.preventDefault();
                                 e.stopPropagation();
-                                arrangementAddBeat(arrangementSourceTab, beat.id);
+                                setArrangementSourceTab("local");
                               }}
-                              className="px-2 py-1 rounded border border-neutral-700 text-xs text-white bg-neutral-800 hover:bg-neutral-700/60"
+                              className={`px-2.5 py-1 rounded border text-xs ${
+                                arrangementSourceTab === "local"
+                                  ? "border-neutral-700 text-white bg-neutral-800"
+                                  : "border-neutral-800 text-neutral-400 bg-neutral-900/60"
+                              }`}
                             >
-                              Add
+                              Local
                             </button>
-                            {arrangementSourceTab === "local" && (
-                              <button
-                                type="button"
-                                onClick={(e) => handleDeleteLocalBeatClick(e, beat.id)}
-                                className="px-2 py-1 rounded border border-red-900 text-xs text-red-200 hover:bg-red-900/30"
-                                aria-label="Delete beat"
-                                title="Delete beat (Cmd/Ctrl+click: clear all)"
-                              >
-                                ×
-                              </button>
-                            )}
-                            {arrangementSourceTab === "public" && isAdminUser && (
-                              <button
-                                type="button"
-                                onClick={(e) => handleDeletePublicBeatClick(e, beat.publishedShareId || beat.id)}
-                                className="px-2 py-1 rounded border border-red-900 text-xs text-red-200 hover:bg-red-900/30"
-                                aria-label="Delete public beat"
-                                title="Delete public beat"
-                              >
-                                ×
-                              </button>
-                            )}
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setArrangementSourceTab("public");
+                              }}
+                              className={`px-2.5 py-1 rounded border text-xs ${
+                                arrangementSourceTab === "public"
+                                  ? "border-neutral-700 text-white bg-neutral-800"
+                                  : "border-neutral-800 text-neutral-400 bg-neutral-900/60"
+                              }`}
+                            >
+                              Public
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setLibraryFiltersOpen((v) => !v);
+                              }}
+                              className={`px-2 py-1 rounded border text-xs leading-none ${
+                                libraryFiltersOpen
+                                  ? "border-neutral-700 text-white bg-neutral-800"
+                                  : "border-neutral-800 text-neutral-400 bg-neutral-900/60"
+                              }`}
+                              title={libraryFiltersOpen ? "Hide beat filters" : "Show beat filters"}
+                            >
+                              ...
+                            </button>
                           </div>
+                          <span className="rounded border border-neutral-800 px-1.5 py-0.5 text-[11px] text-neutral-500">
+                            {arrangementSourceBeats.length}
+                          </span>
+                        </button>
+                      </div>
+                      {arrangementSourceBeats.map((beat) => {
+                        const beatBpm = getBeatBpm(beat);
+                        const sourceLabel = "public";
+                        const beatRowKey = `${sourceLabel}:${String(beat.id)}`;
+                        const isSelectedArrangementSourceBeat = selectedArrangementSourceBeatKey === beatRowKey;
+                        return (
+                          <div
+                            key={`arr-src-${sourceLabel}-${beat.id}`}
+                            data-beat-row-id={beatRowKey}
+                            role="button"
+                            tabIndex={0}
+                            draggable
+                            onDragStart={(e) => {
+                              beginArrangementBeatDrag("public", beat.id);
+                              try {
+                                e.dataTransfer.effectAllowed = "copy";
+                                e.dataTransfer.setData(
+                                  "text/plain",
+                                  JSON.stringify({
+                                    source: "public",
+                                    beatId: beat.id,
+                                  })
+                                );
+                              } catch (_) {}
+                            }}
+                            onDragEnd={clearArrangementBeatDrag}
+                            onClick={() => loadBeatIntoEditor("public", beat)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault();
+                                loadBeatIntoEditor("public", beat);
+                              }
+                            }}
+                            className={`rounded border px-2.5 py-2 cursor-pointer outline-none focus:outline-none focus-visible:outline-none ${
+                              isSelectedArrangementSourceBeat
+                                ? "border-sky-500/70 bg-sky-900/30 shadow-[0_0_0_1px_rgba(14,165,233,0.35)]"
+                                : "border-neutral-800 bg-neutral-900/40 hover:bg-neutral-800/60"
+                            }`}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="min-w-0">
+                                <div className="text-sm text-white truncate">{beat.name || "Untitled Beat"}</div>
+                                <div className="text-xs text-neutral-400 truncate">
+                                  {(() => {
+                                    const beatBars = Math.max(1, Number(beat?.payload?.bars) || 1);
+                                    return (beat.timeSigCategory || "4/4") +
+                                      (Number.isFinite(beatBpm) ? ` · ${beatBpm} BPM` : "") +
+                                      ` · ${beatBars} ${beatBars === 1 ? "bar" : "bars"}`;
+                                  })()}
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    arrangementAddBeat("public", beat.id);
+                                  }}
+                                  className="px-2 py-1 rounded border border-neutral-700 text-xs text-white bg-neutral-800 hover:bg-neutral-700/60"
+                                >
+                                  Add
+                                </button>
+                                {isAdminUser && (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => handleDeletePublicBeatClick(e, beat.publishedShareId || beat.id)}
+                                    className="px-2 py-1 rounded border border-red-900 text-xs text-red-200 hover:bg-red-900/30"
+                                    aria-label="Delete public beat"
+                                    title="Delete public beat"
+                                  >
+                                    ×
+                                  </button>
+                                )}
+                              </div>
+                            </div>
                           </div>
-                        </div>
-                      );
-                    })}
-                    {arrangementSourceTab === "public" && publicLibraryLoading && (
-                      <div className="text-xs text-neutral-400">Loading public library…</div>
-                    )}
-                    {arrangementSourceBeats.length === 0 && (
-                      <div className="text-xs text-neutral-500">No beats in this source with current filters.</div>
-                    )}
-                  </div>
+                        );
+                      })}
+                      {publicLibraryLoading && (
+                        <div className="text-xs text-neutral-400">Loading public library…</div>
+                      )}
+                      {arrangementSourceBeats.length === 0 && (
+                        <div className="text-xs text-neutral-500">No beats in this source with current filters.</div>
+                      )}
+                    </div>
+                  )
                 ) : (
                   <div className="mt-2 text-xs text-neutral-500">Beat sources collapsed.</div>
                 )}
@@ -14123,6 +15469,7 @@ useEffect(() => {
               <aside className="bg-neutral-950/40">
                 <div className="flex flex-col">
                   {[
+                    { id: "defaults", label: "Defaults" },
                     { id: "timing", label: "Drum Grid" },
                     { id: "notation", label: "Notation" },
                     { id: "editor", label: "Editing" },
@@ -14146,7 +15493,65 @@ useEffect(() => {
                 </div>
               </aside>
               <section className="bg-neutral-900 p-3">
-                {preferencesCategory === "playback" ? (
+                {preferencesCategory === "defaults" ? (
+                  <>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-sm font-normal text-neutral-200">Default settings</div>
+                    </div>
+                    <div className="mt-3 flex flex-wrap items-center gap-3">
+                      <span className="text-sm text-neutral-300">Loop repeat</span>
+                      <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDefaultLoopRepeats((prev) => {
+                              const index = Math.max(0, LOOP_REPEATS_ORDER.indexOf(String(prev)));
+                              const next = LOOP_REPEATS_ORDER[(index - 1 + LOOP_REPEATS_ORDER.length) % LOOP_REPEATS_ORDER.length];
+                              setLoopRepeats(next);
+                              return next;
+                            });
+                          }}
+                          className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                          aria-label="Decrease default loop repeat"
+                        >
+                          −
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setDefaultLoopRepeats((prev) => {
+                              const next = prev === "all" ? (lastNonAllLoopRepeats.current || "1") : "all";
+                              setLoopRepeats(next);
+                              return next;
+                            })
+                          }
+                          className="min-w-[56px] border-l border-r border-neutral-700 px-3 py-1 text-center text-sm text-white hover:bg-neutral-700/30"
+                          title="Toggle default loop repeat between all and the last numeric value"
+                        >
+                          {defaultLoopRepeats}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDefaultLoopRepeats((prev) => {
+                              const index = Math.max(0, LOOP_REPEATS_ORDER.indexOf(String(prev)));
+                              const next = LOOP_REPEATS_ORDER[(index + 1) % LOOP_REPEATS_ORDER.length];
+                              setLoopRepeats(next);
+                              return next;
+                            });
+                          }}
+                          className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                          aria-label="Increase default loop repeat"
+                        >
+                          +
+                        </button>
+                      </div>
+                    </div>
+                    <div className="mt-2 text-xs text-neutral-500">
+                      Sets the default loop repeat mode for new selections.
+                    </div>
+                  </>
+                ) : preferencesCategory === "playback" ? (
                   <>
                     <div className="flex items-center gap-2">
                       <div className="text-sm font-normal text-neutral-200">Playback speed</div>
