@@ -406,7 +406,7 @@ export default function BeatLibraryWindow({
     <div className="fixed inset-0 z-50 pointer-events-none">
       <div
         ref={beatLibraryPanelRef}
-        className="w-full max-w-[44rem] max-h-[90vh] overflow-auto rounded-xl border border-neutral-700 bg-neutral-900 p-4 md:p-5 pointer-events-auto shadow-2xl"
+        className="relative w-full max-w-[44rem] max-h-[90vh] overflow-auto rounded-xl border border-neutral-700 bg-neutral-900 p-4 md:p-5 pointer-events-auto shadow-2xl"
         style={{
           position: "absolute",
           left: beatLibraryPos.x,
@@ -414,35 +414,17 @@ export default function BeatLibraryWindow({
         }}
         onMouseDown={(e) => beginFloatingPanelDrag(e, beatLibraryPanelRef, beatLibraryDragRef)}
       >
-        <div className="flex items-center justify-between gap-3">
-          <div
-            className="flex items-center gap-3 cursor-move select-none"
-            onMouseDown={(e) => beginFloatingPanelDrag(e, beatLibraryPanelRef, beatLibraryDragRef)}
-            onPointerDown={(e) => beginFloatingPanelTouchHold(e, beatLibraryPanelRef, beatLibraryDragRef)}
-            title="Drag window"
-          >
-            <div className="grid grid-cols-2 gap-0.5 text-neutral-500" aria-hidden="true">
-              <span className="h-0.5 w-0.5 rounded-full bg-current" />
-              <span className="h-0.5 w-0.5 rounded-full bg-current" />
-              <span className="h-0.5 w-0.5 rounded-full bg-current" />
-              <span className="h-0.5 w-0.5 rounded-full bg-current" />
-              <span className="h-0.5 w-0.5 rounded-full bg-current" />
-              <span className="h-0.5 w-0.5 rounded-full bg-current" />
-            </div>
-            <h2 className="text-base font-semibold">Beat Library</h2>
-          <div className="flex items-center gap-2">
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={() => setIsBeatLibraryOpen(false)}
-            className="px-3 py-1.5 rounded border border-neutral-700 text-sm text-neutral-300 hover:bg-neutral-800/60"
-          >
-            Close
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={() => setIsBeatLibraryOpen(false)}
+          className="absolute right-4 top-4 z-10 rounded border border-neutral-700 bg-neutral-900/80 px-2.5 py-1 text-sm text-neutral-300 hover:bg-neutral-800/60"
+          title="Close beat library"
+          aria-label="Close beat library"
+        >
+          ×
+        </button>
         {libraryFiltersOpen && (
-          <div className="mt-3 rounded border border-neutral-800 bg-neutral-900/40 p-2.5">
+          <div className="rounded border border-neutral-800 bg-neutral-900/40 p-2.5 pr-12">
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-xs text-neutral-400">Sort</span>
               <button
@@ -526,7 +508,7 @@ export default function BeatLibraryWindow({
           </div>
         )}
 
-        <div className="mt-4">
+        <div className={libraryFiltersOpen || publicLibraryError ? "mt-4" : ""}>
           {beatLibraryTab === "local" ? (
             <div className="flex max-h-[58vh] flex-col rounded border border-neutral-800 bg-neutral-950/30 p-2">
               <div ref={beatLibraryListRef} className="min-h-0 overflow-auto pr-1">

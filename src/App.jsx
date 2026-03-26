@@ -2363,6 +2363,7 @@ export default function App() {
     }
   });
   const [arrangementSaveAsOpen, setArrangementSaveAsOpen] = useState(false);
+  const [arrangementLibraryTab, setArrangementLibraryTab] = useState("local");
   const [arrangementTitleMenuOpen, setArrangementTitleMenuOpen] = useState(false);
   const [arrangementTitleMenuPosition, setArrangementTitleMenuPosition] = useState({ top: 0, left: 0 });
   const [arrangementGlobalSettingsMenuOpen, setArrangementGlobalSettingsMenuOpen] = useState(false);
@@ -2551,6 +2552,7 @@ export default function App() {
   const [showBraveAudioNotice, setShowBraveAudioNotice] = useState(true);
   const [shareCopied, setShareCopied] = useState(false);
   const [shareLinkType, setShareLinkType] = useState("");
+  const [isLibraryMenuOpen, setIsLibraryMenuOpen] = useState(false);
   const [bpmDraft, setBpmDraft] = useState("120");
   const [menuViewportTick, setMenuViewportTick] = useState(0);
   const activeTabRef = React.useRef(activeTab);
@@ -2660,6 +2662,8 @@ export default function App() {
   const arrangementGlobalSettingsMenuButtonRef = React.useRef(null);
   const arrangementNotationMoreMenuRef = React.useRef(null);
   const arrangementNotationMoreMenuButtonRef = React.useRef(null);
+  const libraryMenuRef = React.useRef(null);
+  const libraryMenuButtonRef = React.useRef(null);
   const fileMenuRef = React.useRef(null);
   const fileMenuButtonRef = React.useRef(null);
   const authEmailInputRef = React.useRef(null);
@@ -3360,6 +3364,27 @@ export default function App() {
       setArrangementNotationRowMenuState(null);
     }
   }, [arrangementNotationRowMenuState, arrangementSelection]);
+  React.useEffect(() => {
+    if (!isLibraryMenuOpen) return undefined;
+    const handlePointerDown = (event) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      const menu = libraryMenuRef.current;
+      const button = libraryMenuButtonRef.current;
+      if (menu instanceof HTMLElement && menu.contains(target)) return;
+      if (button instanceof HTMLElement && button.contains(target)) return;
+      setIsLibraryMenuOpen(false);
+    };
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") setIsLibraryMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", handlePointerDown, true);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown, true);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isLibraryMenuOpen]);
   React.useEffect(() => {
     if (!isShareActionsDialogOpen) return undefined;
     const updateMenuPosition = () => {
@@ -8073,6 +8098,13 @@ useEffect(() => {
       String(arrangementComposerDraft || "") !== String(selectedSavedArrangementEntry.composer || "")
     );
   }, [arrangementItems, selectedSavedArrangementEntry, arrangementTitleLine1Draft, arrangementTitleLine2Draft, arrangementComposerDraft]);
+  useEffect(() => {
+    if (!selectedSavedArrangementEntry || !arrangementHasPendingUpdate) return undefined;
+    const timer = window.setTimeout(() => {
+      saveArrangementSnapshot({ mode: "update" });
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [selectedSavedArrangementEntry, arrangementHasPendingUpdate, saveArrangementSnapshot]);
   const arrangementSourceBeats =
     arrangementSourceTab === "public" ? filteredPublicBeats : filteredLocalBeats;
   const openBeatLibraryWindow = React.useCallback(() => {
@@ -11422,14 +11454,123 @@ useEffect(() => {
                 <path d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4zM2.5 3h11V2h-11z" />
               </svg>
             </button>
-            <button
-              type="button"
-              onClick={openBeatLibraryWindow}
-              className="touch-none select-none px-3 py-1.5 rounded border text-sm bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
-              title="Open beat library"
-            >
-              Library
-            </button>
+            <div className="relative">
+              <button
+                ref={libraryMenuButtonRef}
+                type="button"
+                onClick={() => setIsLibraryMenuOpen((v) => !v)}
+                className={`touch-none select-none px-3 py-1.5 rounded border text-sm ${
+                  isLibraryMenuOpen
+                    ? "bg-neutral-800 border-neutral-600 text-white"
+                    : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
+                }`}
+                title="Open library menu"
+              >
+                Library
+              </button>
+              {isLibraryMenuOpen && (
+                <div
+                  ref={libraryMenuRef}
+                  className="absolute left-0 top-full z-20 mt-2 min-w-[168px] rounded-lg border border-neutral-700 bg-neutral-900 p-2 shadow-xl"
+                >
+                  <div className="flex flex-col gap-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsLibraryMenuOpen(false);
+                        if (!isArrangementOpen) {
+                          setArrangementSourcesCollapsed(false);
+                          setArrangementDetailsCollapsed(true);
+                          setArrangementSourceTab("local");
+                          setIsArrangementOpen(true);
+                          return;
+                        }
+                        if (!arrangementSourcesCollapsed && arrangementDetailsCollapsed) {
+                          setIsArrangementOpen(false);
+                          return;
+                        }
+                        if (arrangementSourcesCollapsed && !arrangementDetailsCollapsed) {
+                          setArrangementSourcesCollapsed(false);
+                          setArrangementDetailsCollapsed(false);
+                          setArrangementSourceTab("local");
+                          return;
+                        }
+                        setArrangementSourcesCollapsed(false);
+                        setArrangementDetailsCollapsed(true);
+                        setArrangementSourceTab("local");
+                      }}
+                      className="rounded px-3 py-2 text-left text-sm text-neutral-200 hover:bg-neutral-800/60"
+                    >
+                      Beats
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsLibraryMenuOpen(false);
+                        if (!isArrangementOpen) {
+                          blurActiveTextInput();
+                          setArrangementSourcesCollapsed(true);
+                          setArrangementDetailsCollapsed(false);
+                          setArrangementSourceTab("local");
+                          setIsArrangementOpen(true);
+                          window.requestAnimationFrame(() => {
+                            try {
+                              arrangementPlayButtonRef.current?.focus();
+                            } catch (_) {}
+                          });
+                          return;
+                        }
+                        if (arrangementSourcesCollapsed && !arrangementDetailsCollapsed) {
+                          setIsArrangementOpen(false);
+                          return;
+                        }
+                        if (!arrangementSourcesCollapsed && arrangementDetailsCollapsed) {
+                          blurActiveTextInput();
+                          setArrangementSourcesCollapsed(false);
+                          setArrangementDetailsCollapsed(false);
+                          setArrangementSourceTab("local");
+                          window.requestAnimationFrame(() => {
+                            try {
+                              arrangementPlayButtonRef.current?.focus();
+                            } catch (_) {}
+                          });
+                          return;
+                        }
+                        blurActiveTextInput();
+                        setArrangementSourcesCollapsed(true);
+                        setArrangementDetailsCollapsed(false);
+                        setArrangementSourceTab("local");
+                        window.requestAnimationFrame(() => {
+                          try {
+                            arrangementPlayButtonRef.current?.focus();
+                          } catch (_) {}
+                        });
+                      }}
+                      className="rounded px-3 py-2 text-left text-sm text-neutral-200 hover:bg-neutral-800/60"
+                    >
+                      Arrangement
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsLibraryMenuOpen(false);
+                        if (isArrangementNotationOpen) {
+                          setIsArrangementNotationOpen(false);
+                          return;
+                        }
+                        setArrangementSourcesCollapsed(true);
+                        setArrangementDetailsCollapsed(false);
+                        setIsArrangementOpen(true);
+                        setIsArrangementNotationOpen(true);
+                      }}
+                      className="rounded px-3 py-2 text-left text-sm text-neutral-200 hover:bg-neutral-800/60"
+                    >
+                      Notation
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
             <button
               ref={fileMenuButtonRef}
               type="button"
@@ -11525,6 +11666,39 @@ useEffect(() => {
             >
               <div className="flex flex-col gap-3">
                 <div className="flex items-center gap-2">
+                    <span className="text-sm text-neutral-300 whitespace-nowrap">Resolution</span>
+                    <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const order = [4, 8, 16, 32];
+                          const idx = order.indexOf(resolution);
+                          const next = order[(idx - 1 + order.length) % order.length];
+                          handleResolutionChange(next);
+                        }}
+                        className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                      >
+                        +
+                      </button>
+                      <div className="min-w-[60px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700">
+                        {resolution === 4 ? "4th" : resolution === 8 ? "8th" : resolution === 16 ? "16th" : "32th"}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const order = [4, 8, 16, 32];
+                          const idx = order.indexOf(resolution);
+                          const next = order[(idx + 1) % order.length];
+                          handleResolutionChange(next);
+                        }}
+                        className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                      >
+                        −
+                      </button>
+                    </div>
+                </div>
+
+                <div className="flex items-center gap-2">
                     <span className="text-sm text-neutral-300">Bars</span>
                     <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
                       <button
@@ -11543,39 +11717,6 @@ useEffect(() => {
                         onClick={() => setBars((b) => Math.min(8, b + 1))}
                         className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
                         aria-label="Increase bars"
-                      >
-                        +
-                      </button>
-                    </div>
-                </div>
-
-                <div className="flex items-center gap-2">
-                    <span className="text-sm text-neutral-300 whitespace-nowrap">Resolution</span>
-                    <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const order = [4, 8, 16, 32];
-                          const idx = order.indexOf(resolution);
-                          const next = order[(idx - 1 + order.length) % order.length];
-                          handleResolutionChange(next);
-                        }}
-                        className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                      >
-                        −
-                      </button>
-                      <div className="min-w-[60px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700">
-                        {resolution === 4 ? "4th" : resolution === 8 ? "8th" : resolution === 16 ? "16th" : "32th"}
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const order = [4, 8, 16, 32];
-                          const idx = order.indexOf(resolution);
-                          const next = order[(idx + 1) % order.length];
-                          handleResolutionChange(next);
-                        }}
-                        className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
                       >
                         +
                       </button>
@@ -12497,7 +12638,7 @@ useEffect(() => {
         <div className="fixed inset-0 z-[88] pointer-events-none">
           <div
             ref={arrangementPanelRef}
-            className={`w-full ${arrangementSourcesCollapsed || arrangementDetailsCollapsed ? "max-w-[36rem]" : "max-w-[68rem]"} max-h-[88vh] overflow-auto rounded-xl border border-neutral-700 bg-neutral-900 p-4 md:p-5 pointer-events-auto shadow-2xl`}
+            className={`w-full ${arrangementSourcesCollapsed || arrangementDetailsCollapsed ? "max-w-[36rem]" : "max-w-[68rem]"} max-h-[94vh] overflow-auto rounded-xl border border-neutral-700 bg-neutral-900 p-4 md:p-5 pointer-events-auto shadow-2xl`}
             style={{
               position: "absolute",
               left: arrangementPos.x,
@@ -12505,108 +12646,7 @@ useEffect(() => {
             }}
             onMouseDown={(e) => beginFloatingPanelDrag(e, arrangementPanelRef, arrangementDragRef)}
           >
-            <div className="sticky top-0 z-10 -mx-4 -mt-4 mb-3 border-b border-neutral-800 bg-neutral-900/95 px-4 pt-2 pb-1.5 backdrop-blur md:-mx-5 md:-mt-5 md:px-5 md:pt-3">
-              <div className="flex items-center justify-between gap-3">
-              <div
-                className="flex items-center gap-3 cursor-move select-none"
-                onMouseDown={(e) => beginFloatingPanelDrag(e, arrangementPanelRef, arrangementDragRef)}
-                onPointerDown={(e) => beginFloatingPanelTouchHold(e, arrangementPanelRef, arrangementDragRef)}
-                title="Drag window"
-              >
-                <div className="grid grid-cols-2 gap-0.5 text-neutral-500" aria-hidden="true">
-                  <span className="h-0.5 w-0.5 rounded-full bg-current" />
-                  <span className="h-0.5 w-0.5 rounded-full bg-current" />
-                  <span className="h-0.5 w-0.5 rounded-full bg-current" />
-                  <span className="h-0.5 w-0.5 rounded-full bg-current" />
-                  <span className="h-0.5 w-0.5 rounded-full bg-current" />
-                  <span className="h-0.5 w-0.5 rounded-full bg-current" />
-                </div>
-                <h3 className="text-[15px] font-semibold leading-tight">Library</h3>
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (!arrangementSourcesCollapsed && arrangementDetailsCollapsed) {
-                      setIsArrangementOpen(false);
-                      return;
-                    }
-                    setArrangementSourcesCollapsed((v) => !v);
-                  }}
-                  className={`px-3 py-1 rounded border text-sm ${
-                    arrangementSourcesCollapsed
-                      ? "border-neutral-800 text-neutral-500 bg-neutral-900/60"
-                      : "border-neutral-700 text-white bg-neutral-800 hover:bg-neutral-700/60"
-                  }`}
-                  title={arrangementSourcesCollapsed ? "Show beats panel" : "Hide beats panel"}
-                >
-                  Beats
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (!arrangementDetailsCollapsed && !arrangementSourcesCollapsed) {
-                      blurActiveTextInput();
-                      setArrangementDetailsCollapsed(true);
-                      setArrangementSourcesCollapsed(false);
-                      return;
-                    }
-                    if (!arrangementDetailsCollapsed && arrangementSourcesCollapsed) {
-                      setIsArrangementOpen(false);
-                      return;
-                    }
-                    blurActiveTextInput();
-                    setArrangementDetailsCollapsed(false);
-                    setArrangementSourcesCollapsed(true);
-                    window.requestAnimationFrame(() => {
-                      try {
-                        arrangementPlayButtonRef.current?.focus();
-                      } catch (_) {}
-                    });
-                  }}
-                  className={`px-3 py-1 rounded border text-sm ${
-                    arrangementDetailsCollapsed
-                      ? "border-neutral-800 text-neutral-500 bg-neutral-900/60"
-                      : "border-neutral-700 text-white bg-neutral-800 hover:bg-neutral-700/60"
-                  }`}
-                  title={arrangementDetailsCollapsed ? "Show arrangement panel" : "Hide arrangement panel"}
-                >
-                  Arrangement
-                </button>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setIsArrangementNotationOpen((v) => {
-                      const next = !v;
-                      if (next) {
-                        setArrangementSourcesCollapsed(true);
-                        setArrangementDetailsCollapsed(false);
-                      }
-                      return next;
-                    })
-                  }
-                  className={`px-3 py-1 rounded border text-sm ${
-                    isArrangementNotationOpen
-                      ? "border-neutral-700 text-white bg-neutral-800 hover:bg-neutral-700/60"
-                      : "border-neutral-800 text-neutral-500 bg-neutral-900/60"
-                  }`}
-                  title={isArrangementNotationOpen ? "Hide arrangement notation" : "Show arrangement notation"}
-                >
-                  Notation
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setIsArrangementOpen(false)}
-                  className="px-2.5 py-1 rounded border border-neutral-700 text-sm text-neutral-300 bg-neutral-900/60 hover:bg-neutral-800/60"
-                  title="Close library"
-                  aria-label="Close library"
-                >
-                  ×
-                </button>
-              </div>
-              </div>
-            </div>
-            <div className={`mt-4 grid grid-cols-1 ${!arrangementSourcesCollapsed && !arrangementDetailsCollapsed ? "lg:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)]" : ""} gap-4`}>
+            <div className={`grid grid-cols-1 ${!arrangementSourcesCollapsed && !arrangementDetailsCollapsed ? "lg:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)]" : ""} gap-4`}>
               {!arrangementSourcesCollapsed && (
               <div
                 ref={libraryFiltersRef}
@@ -12616,6 +12656,15 @@ useEffect(() => {
               >
                 <div className="flex items-center justify-between gap-2">
                   <div className="text-sm text-neutral-200">Beats</div>
+                  <button
+                    type="button"
+                    onClick={() => setIsArrangementOpen(false)}
+                    className="px-2.5 py-1 rounded border border-neutral-700 text-sm text-neutral-300 bg-neutral-900/60 hover:bg-neutral-800/60"
+                    title="Close library"
+                    aria-label="Close library"
+                  >
+                    ×
+                  </button>
                 </div>
                 {libraryFiltersOpen && (
                   <div className="mt-3 rounded border border-neutral-800 bg-neutral-900/40 p-2.5">
@@ -13120,11 +13169,33 @@ useEffect(() => {
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
                     <div className="text-sm text-neutral-200">Arrangement</div>
-                <button
-                  ref={arrangementPlayButtonRef}
-                  type="button"
-                  onClick={() => {
-                    if (arrangementPlaybackEnabled && playback.isPlaying) stopArrangementPlayback();
+                    <button
+                      type="button"
+                      onClick={() => setArrangementLibraryTab("local")}
+                      className={`px-2.5 py-1 rounded border text-xs ${
+                        arrangementLibraryTab === "local"
+                          ? "border-neutral-700 text-white bg-neutral-800"
+                          : "border-neutral-800 text-neutral-400 bg-neutral-900/60"
+                      }`}
+                    >
+                      Local
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setArrangementLibraryTab("public")}
+                      className={`px-2.5 py-1 rounded border text-xs ${
+                        arrangementLibraryTab === "public"
+                          ? "border-neutral-700 text-white bg-neutral-800"
+                          : "border-neutral-800 text-neutral-400 bg-neutral-900/60"
+                      }`}
+                    >
+                      Public
+                    </button>
+                    <button
+                      ref={arrangementPlayButtonRef}
+                      type="button"
+                      onClick={() => {
+                        if (arrangementPlaybackEnabled && playback.isPlaying) stopArrangementPlayback();
                         else startArrangementPlayback();
                       }}
                       disabled={arrangementPlayableEntries.length < 1}
@@ -13144,18 +13215,22 @@ useEffect(() => {
                     </button>
                   </div>
                   <div className="flex items-center gap-2">
+                    {arrangementSourcesCollapsed && (
+                      <button
+                        type="button"
+                        onClick={() => setIsArrangementOpen(false)}
+                        className="px-2.5 py-1 rounded border border-neutral-700 text-sm text-neutral-300 bg-neutral-900/60 hover:bg-neutral-800/60"
+                        title="Close library"
+                        aria-label="Close library"
+                      >
+                        ×
+                      </button>
+                    )}
                   </div>
                 </div>
                 <div className="mt-2 space-y-1.5">
+                  {arrangementLibraryTab === "local" && (
                   <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={createNewArrangement}
-                      className="px-2 py-1 rounded border border-neutral-700 text-[11px] text-neutral-200 hover:bg-neutral-800/60"
-                      title="Create a new empty arrangement"
-                    >
-                      New
-                    </button>
                     {savedArrangements.length > 0 && (
                       <select
                         value={loadedArrangementId || ""}
@@ -13178,6 +13253,14 @@ useEffect(() => {
                         ))}
                       </select>
                     )}
+                      <button
+                        type="button"
+                        onClick={createNewArrangement}
+                        className="px-2 py-1 rounded border border-neutral-700 text-[11px] text-neutral-200 hover:bg-neutral-800/60"
+                        title="Create a new empty arrangement"
+                      >
+                        New
+                      </button>
                       <button
                         ref={arrangementTitleMenuButtonRef}
                         type="button"
@@ -13285,8 +13368,9 @@ useEffect(() => {
                         ×
                       </button>
                   </div>
+                  )}
                 </div>
-                {arrangementSaveAsOpen && (
+                {arrangementLibraryTab === "local" && arrangementSaveAsOpen && (
                   <div className="mt-3 flex flex-wrap items-center gap-2">
                       <div className="min-w-[180px] flex-1 rounded border border-neutral-800 bg-neutral-950/40 px-2 py-1 text-sm text-neutral-300">
                         {arrangementDisplayName || `Arrangement ${savedArrangements.length + 1}`}
@@ -13304,6 +13388,7 @@ useEffect(() => {
                     </div>
                   </div>
                 )}
+                {arrangementLibraryTab === "public" && (
                 <div className="mt-3 rounded border border-neutral-800 bg-neutral-950/30 p-2.5">
                   <div className="flex items-center justify-between gap-2">
                     <div className="text-xs text-neutral-400">Public arrangements</div>
@@ -13367,6 +13452,8 @@ useEffect(() => {
                     <div className="mt-2 text-[11px] text-neutral-500">Loading public arrangements…</div>
                   ) : null}
                 </div>
+                )}
+                {arrangementLibraryTab === "local" && (
                 <div ref={arrangementListRef} className="mt-3 max-h-[52vh] overflow-auto pr-1">
                   <DndContext
                     sensors={arrangementOrderSensors}
@@ -13458,23 +13545,26 @@ useEffect(() => {
                     </div>
                   )}
                 </div>
-                <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-neutral-300">
-                  <span className="rounded border border-neutral-700 px-2 py-1">{`Total bars: ${arrangementTotals.totalBars}`}</span>
-                  <span className="rounded border border-neutral-700 px-2 py-1">
+                )}
+                {arrangementLibraryTab === "local" && (
+                <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-neutral-500">
+                  {normalizedArrangementBarLoopSelection ? (
+                    <span className="text-neutral-500">
+                      {`Loop selection: bars ${normalizedArrangementBarLoopSelection.start + 1}-${normalizedArrangementBarLoopSelection.end + 1}`}
+                    </span>
+                  ) : normalizedArrangementLoopSelection ? (
+                    <span className="text-neutral-500">
+                      {`Loop selection: ${normalizedArrangementLoopSelection.start + 1}-${normalizedArrangementLoopSelection.end + 1}`}
+                    </span>
+                  ) : null}
+                  <span>{`Total bars: ${arrangementTotals.totalBars}`}</span>
+                  <span>
                     {`Est. length: ${Math.floor(Math.max(0, Math.round(arrangementTotals.totalSeconds)) / 60)}:${String(
                       Math.max(0, Math.round(arrangementTotals.totalSeconds)) % 60
                     ).padStart(2, "0")}`}
                   </span>
-                  {normalizedArrangementBarLoopSelection ? (
-                    <span className="rounded border border-sky-700/70 px-2 py-1 text-sky-200">
-                      {`Loop selection: bars ${normalizedArrangementBarLoopSelection.start + 1}-${normalizedArrangementBarLoopSelection.end + 1}`}
-                    </span>
-                  ) : normalizedArrangementLoopSelection ? (
-                    <span className="rounded border border-sky-700/70 px-2 py-1 text-sky-200">
-                      {`Loop selection: ${normalizedArrangementLoopSelection.start + 1}-${normalizedArrangementLoopSelection.end + 1}`}
-                    </span>
-                  ) : null}
                 </div>
+                )}
               </div>
               )}
             </div>
