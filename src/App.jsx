@@ -33,6 +33,57 @@ const CUSTOM_CIRCLED_X_LARGE_GLYPH = "noteheadCircleX115FreshCustom";
 const TEMPO_QUARTER_UP_PATH =
   "M302 115v760h30v-828c0 -95 -123 -188 -223 -188c-61 0 -109 35 -109 94c0 97 99 188 222 188c33 0 61 -9 80 -26z";
 const MIDI_NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+const SHORTCUT_BINDINGS_STORAGE_KEY = "drum-grid-shortcut-bindings-v1";
+const SHORTCUTS = [
+  {
+    id: "play_toggle",
+    command: "Play / Stop",
+    description: "Start or stop playback. Uses arrangement playback if arrangement selection is active.",
+    defaultBinding: "Space",
+  },
+  {
+    id: "copy_selection",
+    command: "Copy selection",
+    description: "Copy the current grid selection to the internal clipboard.",
+    defaultBinding: "Mod+C",
+  },
+  {
+    id: "paste_selection",
+    command: "Paste clipboard",
+    description: "Paste at the current hovered grid cell, or fall back to the selection anchor.",
+    defaultBinding: "Mod+V",
+  },
+  {
+    id: "duplicate_selection",
+    command: "Duplicate selection",
+    description: "Duplicate the current selection one selection-width to the right.",
+    defaultBinding: "Mod+D",
+  },
+  {
+    id: "undo",
+    command: "Undo",
+    description: "Undo the last change in the active editor or library context.",
+    defaultBinding: "Mod+Z",
+  },
+  {
+    id: "redo",
+    command: "Redo",
+    description: "Redo the previously undone change.",
+    defaultBinding: "Mod+Shift+Z",
+  },
+  {
+    id: "loop_all_toggle",
+    command: "Toggle looping all",
+    description: "Toggle looping between Off and All.",
+    defaultBinding: "Shift+L",
+  },
+  ...Array.from({ length: 8 }, (_, index) => ({
+    id: `loop_${index + 1}_toggle`,
+    command: `Toggle looping ${index + 1}`,
+    description: `Toggle looping between Off and ${index + 1}.`,
+    defaultBinding: `Shift+${index + 1}`,
+  })),
+];
 
 let customSmuflInstalled = false;
 
@@ -68,6 +119,61 @@ function formatTimingShiftLabel(sixteenths) {
   const value = Math.max(-15, Math.min(15, Math.round(Number(sixteenths) || 0)));
   if (value === 0) return "Off";
   return value < 0 ? `${Math.abs(value)}/16 earlier` : `${value}/16 later`;
+}
+
+function bindingFromKeyboardEvent(event) {
+  const parts = [];
+  if (event.metaKey || event.ctrlKey) parts.push("Mod");
+  if (event.shiftKey) parts.push("Shift");
+  if (event.altKey) parts.push("Alt");
+  const code = String(event.code || "");
+  let key = "";
+  if (code === "Space") key = "Space";
+  else if (code === "Enter") key = "Enter";
+  else if (code === "Escape") key = "Escape";
+  else if (code.startsWith("Key")) key = code.slice(3).toUpperCase();
+  else if (code.startsWith("Digit")) key = code.slice(5);
+  else {
+    const raw = String(event.key || "").trim();
+    if (raw === " ") key = "Space";
+    else if (raw.length === 1) key = raw.toUpperCase();
+    else key = raw;
+  }
+  if (!key) return "";
+  parts.push(key);
+  return parts.join("+");
+}
+
+function shortcutsMapFromStorage() {
+  try {
+    const raw = window.localStorage.getItem(SHORTCUT_BINDINGS_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function displayShortcutBinding(binding) {
+  return String(binding || "")
+    .replace(/\bMod\b/g, "Cmd/Ctrl")
+    .replace(/\+/g, " + ");
+}
+
+function readGridSelectionHoldDelayMs() {
+  try {
+    const raw = String(
+      window.localStorage.getItem("drum-grid-selection-hold-speed-v1") || ""
+    ).toLowerCase();
+    if (raw === "fast") return 130;
+    if (raw === "slow") return 500;
+    const value = Number(raw);
+    if (!Number.isFinite(value)) return 130;
+    return Math.max(130, Math.min(800, Math.round(value)));
+  } catch (_) {
+    return 130;
+  }
 }
 
 function TreeTriangle({ expanded }) {
@@ -313,6 +419,7 @@ const MIDI_IMPORT_TOM_GHOST_MAX_STORAGE_KEY = "drum-grid-midi-import-tom-ghost-m
 const MIDI_IMPORT_HIHAT_GHOST_MAX_STORAGE_KEY = "drum-grid-midi-import-hihat-ghost-max-v1";
 const ARRANGEMENT_NOTATION_PAGE_MODE_STORAGE_KEY = "drum-grid-arrangement-notation-page-mode-v1";
 const LEGACY_SELECTION_ENABLED_STORAGE_KEY = "drum-grid-legacy-selection-enabled-v1";
+const GRID_SELECTION_HOLD_SPEED_STORAGE_KEY = "drum-grid-selection-hold-speed-v1";
 const MOVE_MODE_DEBUG_ENABLED_STORAGE_KEY = "drum-grid-move-mode-debug-enabled-v1";
 const STICKING_GUIDE_ENABLED_STORAGE_KEY = "drum-grid-sticking-guide-enabled-v1";
 const STICKING_HANDEDNESS_STORAGE_KEY = "drum-grid-sticking-handedness-v1";
@@ -1974,6 +2081,8 @@ export default function App() {
   const [lastMidiImportSession, setLastMidiImportSession] = useState(null);
   const [isLegalDialogOpen, setIsLegalDialogOpen] = useState(false);
   const [isPreferencesDialogOpen, setIsPreferencesDialogOpen] = useState(false);
+  const [isShortcutsDialogOpen, setIsShortcutsDialogOpen] = useState(false);
+  const [editingShortcutActionId, setEditingShortcutActionId] = useState(null);
   const [isAuthDialogOpen, setIsAuthDialogOpen] = useState(false);
   const [authMode, setAuthMode] = useState("sign-in");
   const [authEmailInput, setAuthEmailInput] = useState("");
@@ -1992,6 +2101,8 @@ export default function App() {
     }
   });
   const [showPrefsPlaybackInfo, setShowPrefsPlaybackInfo] = useState(false);
+  const [shortcutBindings, setShortcutBindings] = useState(() => shortcutsMapFromStorage());
+  const [isEditingAdvancedMenuOpen, setIsEditingAdvancedMenuOpen] = useState(false);
   const [legalTab, setLegalTab] = useState("impressum"); // impressum | privacy
   const [showLegalEmail, setShowLegalEmail] = useState(false);
   const [arrangementBoundaryCompScale, setArrangementBoundaryCompScale] = useState(() => {
@@ -2556,6 +2667,8 @@ export default function App() {
   const authRecoveryUrlFlowRef = React.useRef(false);
   const transportMenuRef = React.useRef(null);
   const transportMenuButtonRef = React.useRef(null);
+  const editingAdvancedMenuRef = React.useRef(null);
+  const editingAdvancedMenuButtonRef = React.useRef(null);
   const beatLibraryPanelRef = React.useRef(null);
   const midiImportInputRef = React.useRef(null);
   const kitOrderListRef = React.useRef(null);
@@ -2575,8 +2688,8 @@ export default function App() {
   const appliedExampleIdRef = React.useRef(null);
   const pendingSharedLoadRef = React.useRef(null);
   const appliedSharedKeyRef = React.useRef(null);
-  const gridMenuRowPrimaryRef = React.useRef(null);
-  const gridMenuRowSecondaryRef = React.useRef(null);
+  const gridMenuButtonRef = React.useRef(null);
+  const gridMenuPopupRef = React.useRef(null);
   const authUser = authSession?.user || null;
   const authUserEmail = String(authUser?.email || "").trim();
   const authUserLabel = authUserEmail || "Account";
@@ -3304,6 +3417,27 @@ export default function App() {
       document.removeEventListener("keydown", handleKeyDown);
     };
   }, [isTransportMenuOpen]);
+  React.useEffect(() => {
+    if (!isEditingAdvancedMenuOpen) return undefined;
+    const handlePointerDown = (event) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      const menu = editingAdvancedMenuRef.current;
+      const button = editingAdvancedMenuButtonRef.current;
+      if (menu instanceof HTMLElement && menu.contains(target)) return;
+      if (button instanceof HTMLElement && button.contains(target)) return;
+      setIsEditingAdvancedMenuOpen(false);
+    };
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") setIsEditingAdvancedMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", handlePointerDown, true);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown, true);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isEditingAdvancedMenuOpen]);
   useEffect(() => {
     try {
       window.localStorage.setItem(PLAYBACK_RATE_STORAGE_KEY, String(playbackRate));
@@ -3442,17 +3576,40 @@ export default function App() {
     const currentTab = activeTabRef.current;
     if (currentTab === "none") return;
     const rows =
-      currentTab === "timing"
-        ? [gridMenuRowPrimaryRef.current, gridMenuRowSecondaryRef.current]
-        : currentTab === "notation"
-          ? [notationMenuRowRef.current]
-          : currentTab === "selection"
+      currentTab === "selection"
             ? [selectionMenuRowRef.current]
             : [];
     if (rows.some((row) => rowHasWrapped(row))) {
       setActiveTab("none");
     }
   }, [menuViewportTick, rowHasWrapped]);
+
+  useEffect(() => {
+    if (activeTab !== "timing") return undefined;
+    const handlePointerDown = (event) => {
+      const popup = gridMenuPopupRef.current;
+      const button = gridMenuButtonRef.current;
+      const target = event.target;
+      if (
+        (popup instanceof HTMLElement && popup.contains(target)) ||
+        (button instanceof HTMLElement && button.contains(target))
+      ) {
+        return;
+      }
+      setActiveTab((current) => (current === "timing" ? "none" : current));
+    };
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") {
+        setActiveTab((current) => (current === "timing" ? "none" : current));
+      }
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [activeTab]);
 
   const clampBpm = (n) => Math.min(400, Math.max(20, n));
   const stepBpm = (delta) => setBpm((v) => clampBpm(v + delta));
@@ -3746,15 +3903,10 @@ useEffect(() => {
         ? margin
         : Math.max(margin, viewportWidth - panelWidth - margin);
     setBeatLibraryPos((prev) => ({ ...prev, x: nextX }));
-    const currentGrid = baseGridRef.current || {};
-    const hasAnyNotes = ALL_INSTRUMENTS.some((inst) =>
-      (currentGrid[inst.id] || []).some((v) => v !== CELL.OFF)
-    );
-    const shouldAutoFocusBeatName = !loadedLocalBeatId && hasAnyNotes;
-    const raf = shouldAutoFocusBeatName
+    const shouldFocusBeatSaveButton = !loadedLocalBeatId;
+    const raf = shouldFocusBeatSaveButton
       ? window.requestAnimationFrame(() => {
-          beatNameInputRef.current?.focus();
-          beatNameInputRef.current?.select?.();
+          beatSaveButtonRef.current?.focus?.();
         })
       : 0;
     const onKeyDown = (e) => {
@@ -3950,6 +4102,34 @@ useEffect(() => {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [isPreferencesDialogOpen]);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        SHORTCUT_BINDINGS_STORAGE_KEY,
+        JSON.stringify(shortcutBindings || {})
+      );
+    } catch (_) {}
+  }, [shortcutBindings]);
+  useEffect(() => {
+    if (!editingShortcutActionId) return;
+    const onKeyDown = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === "Escape") {
+        setEditingShortcutActionId(null);
+        return;
+      }
+      const binding = bindingFromKeyboardEvent(e);
+      if (!binding) return;
+      setShortcutBindings((prev) => ({
+        ...(prev || {}),
+        [editingShortcutActionId]: binding,
+      }));
+      setEditingShortcutActionId(null);
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [editingShortcutActionId]);
 
   useEffect(() => {
     if (!isMidiDialogOpen) return;
@@ -3966,11 +4146,36 @@ useEffect(() => {
   const [defaultLoopRepeats, setDefaultLoopRepeats] = useState(() => {
     try {
       const raw = window.localStorage.getItem(DEFAULT_LOOP_REPEATS_STORAGE_KEY);
-      return LOOP_REPEATS_ORDER.includes(String(raw)) ? String(raw) : "all";
+      return LOOP_REPEATS_ORDER.includes(String(raw)) ? String(raw) : "off";
     } catch (_) {
-      return "all";
+      return "off";
     }
   });
+  const [gridSelectionHoldDelayMs, setGridSelectionHoldDelayMs] = useState(() => {
+    try {
+      const raw = String(window.localStorage.getItem(GRID_SELECTION_HOLD_SPEED_STORAGE_KEY) || "").toLowerCase();
+      if (raw === "fast") return 130;
+      if (raw === "slow") return 500;
+      const value = Number(raw);
+      if (!Number.isFinite(value)) return 130;
+      return Math.max(130, Math.min(800, Math.round(value)));
+    } catch (_) {
+      return 130;
+    }
+  });
+  const getShortcutBinding = React.useCallback(
+    (actionId) =>
+      String(
+        shortcutBindings?.[actionId] ||
+          SHORTCUTS.find((entry) => entry.id === actionId)?.defaultBinding ||
+          ""
+      ),
+    [shortcutBindings]
+  );
+  const matchesShortcut = React.useCallback(
+    (event, actionId) => bindingFromKeyboardEvent(event) === getShortcutBinding(actionId),
+    [getShortcutBinding]
+  );
   // Whether new selections should auto-generate a loop.
   const [loopRepeats, setLoopRepeats] = useState(defaultLoopRepeats); // "off" | "all" | "1".."8"
   const [wrapSelectionMoveEnabled, setWrapSelectionMoveEnabled] = useState(true);
@@ -3989,7 +4194,11 @@ useEffect(() => {
       window.localStorage.setItem(DEFAULT_LOOP_REPEATS_STORAGE_KEY, defaultLoopRepeats);
     } catch (_) {}
   }, [defaultLoopRepeats]);
-
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(GRID_SELECTION_HOLD_SPEED_STORAGE_KEY, String(gridSelectionHoldDelayMs));
+    } catch (_) {}
+  }, [gridSelectionHoldDelayMs]);
   const loopModeEnabled = loopRepeats !== "off" && !stickingEditModeEnabled;
 
 // If selection collapses to a single cell while looping is active, drop the loop.
@@ -4049,6 +4258,7 @@ useEffect(() => {
   const [printWatermarkEnabled, setPrintWatermarkEnabled] = useState(true);
   const [printQrEnabled, setPrintQrEnabled] = useState(false);
   const beatNameInputRef = useRef(null);
+  const beatSaveButtonRef = useRef(null);
   const publicSubmitTitleInputRef = useRef(null);
   const publicSubmitComposerInputRef = useRef(null);
   const printTitleInputRef = useRef(null);
@@ -4396,6 +4606,7 @@ useEffect(() => {
     gridClipboardRef.current = clipboard;
     return true;
   }, [buildSelectionClipboard]);
+  const hoveredGridCellRef = React.useRef(null);
   const getSelectionDuplicateAnchor = React.useCallback((clipboard) => {
     if (!clipboard || !selection) return null;
     return {
@@ -4403,13 +4614,27 @@ useEffect(() => {
       col: selection.start + clipboard.width,
     };
   }, [selection]);
+  const getClipboardPasteAnchor = React.useCallback((clipboard) => {
+    const hovered = hoveredGridCellRef.current;
+    if (
+      hovered &&
+      Number.isFinite(hovered.row) &&
+      Number.isFinite(hovered.col)
+    ) {
+      return {
+        row: hovered.row,
+        col: hovered.col,
+      };
+    }
+    return getSelectionDuplicateAnchor(clipboard);
+  }, [getSelectionDuplicateAnchor]);
   const pasteSelectionFromClipboard = React.useCallback(() => {
     const clipboard = gridClipboardRef.current;
     if (!clipboard) return false;
-    const anchor = getSelectionDuplicateAnchor(clipboard);
+    const anchor = getClipboardPasteAnchor(clipboard);
     if (!anchor) return false;
     return applyClipboardAt(clipboard, anchor.row, anchor.col);
-  }, [applyClipboardAt, getSelectionDuplicateAnchor]);
+  }, [applyClipboardAt, getClipboardPasteAnchor]);
   const duplicateSelection = React.useCallback(() => {
     const clipboard = buildSelectionClipboard();
     if (!clipboard || !selection) return false;
@@ -4420,26 +4645,23 @@ useEffect(() => {
   }, [applyClipboardAt, buildSelectionClipboard, getSelectionDuplicateAnchor, selection]);
   useEffect(() => {
     const onKey = (e) => {
-      const hasModifier = e.metaKey || e.ctrlKey;
-      if (!hasModifier || e.altKey) return;
       const el = e.target;
       const tag = (el?.tagName || "").toLowerCase();
       const isTyping = tag === "input" || tag === "textarea" || el?.isContentEditable;
       if (isTyping) return;
-      const key = String(e.key || "").toLowerCase();
-      if (key === "c") {
+      if (matchesShortcut(e, "copy_selection")) {
         if (!selection) return;
         e.preventDefault();
         copySelectionToClipboard();
         return;
       }
-      if (key === "v") {
+      if (matchesShortcut(e, "paste_selection")) {
         if (!gridClipboardRef.current) return;
         e.preventDefault();
         pasteSelectionFromClipboard();
         return;
       }
-      if (key === "d") {
+      if (matchesShortcut(e, "duplicate_selection")) {
         if (!selection) return;
         e.preventDefault();
         duplicateSelection();
@@ -4447,7 +4669,7 @@ useEffect(() => {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [selection, copySelectionToClipboard, pasteSelectionFromClipboard, duplicateSelection]);
+  }, [selection, copySelectionToClipboard, pasteSelectionFromClipboard, duplicateSelection, matchesShortcut]);
 
   const remapGridBySubdivisions = React.useCallback(
     (prevGrid, oldSubsByBar, newSubsByBar) => {
@@ -4988,6 +5210,14 @@ useEffect(() => {
     arrangementItemsRef.current = [];
     arrangementNameDraftRef.current = "";
     setLocalBeats([]);
+    setBeatLibraryContainers([]);
+    setSelectedBeatLibraryContainerId("all");
+    setBeatLibraryRootCollapsed(false);
+    setEditingBeatLibraryContainerId(null);
+    setEditingBeatLibraryContainerName("");
+    setEditingBeatLibraryBeatId(null);
+    setEditingBeatLibraryBeatName("");
+    setBeatLibraryDropTargetId(null);
     setSavedArrangements([]);
     setArrangementItems([]);
     setLoadedLocalBeatId(null);
@@ -5000,7 +5230,7 @@ useEffect(() => {
     setArrangementBarSelectionAnchor(null);
     setArrangementPlaybackEnabled(false);
     setArrangementPlaybackIndex(0);
-    setLoopRepeats("all");
+    setLoopRepeats("off");
   }, [pushLocalBeatHistory]);
   const deleteLocalBeatById = React.useCallback(async (beatId) => {
     const key = String(beatId || "");
@@ -7849,8 +8079,18 @@ useEffect(() => {
     setArrangementSourceTab("local");
     setArrangementSourcesCollapsed(false);
     setArrangementDetailsCollapsed(true);
-    setIsArrangementOpen((v) => !v);
-  }, []);
+    setIsArrangementOpen((v) => {
+      const next = !v;
+      if (next && !loadedLocalBeatId) {
+        window.requestAnimationFrame(() => {
+          window.requestAnimationFrame(() => {
+            beatSaveButtonRef.current?.focus?.();
+          });
+        });
+      }
+      return next;
+    });
+  }, [loadedLocalBeatId]);
   const openArrangementWindow = React.useCallback(() => {
     setIsArrangementOpen((v) => !v);
   }, []);
@@ -7933,23 +8173,23 @@ useEffect(() => {
   }, [isLibraryHistoryActive, redoLocalBeatHistory, redoGrid]);
   useEffect(() => {
     const onKeyDown = (e) => {
-      const key = String(e.key || "").toLowerCase();
-      const hasHistoryModifier = e.metaKey || e.ctrlKey;
-      if (key !== "z" || !hasHistoryModifier) return;
       const el = e.target;
       const tag = (el?.tagName || "").toLowerCase();
       const isTyping = tag === "input" || tag === "textarea" || el?.isContentEditable;
       if (isTyping) return;
-      e.preventDefault();
-      if (e.shiftKey) {
+      if (matchesShortcut(e, "redo")) {
+        e.preventDefault();
         handleTopRedo();
         return;
       }
-      handleTopUndo();
+      if (matchesShortcut(e, "undo")) {
+        e.preventDefault();
+        handleTopUndo();
+      }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [handleTopUndo, handleTopRedo]);
+  }, [handleTopUndo, handleTopRedo, matchesShortcut]);
 
   useEffect(() => {
     setPresetNameInlineDraft(selectedSavedPreset ? selectedSavedPreset.label : selectedPresetLabel);
@@ -10505,12 +10745,11 @@ useEffect(() => {
 // Spacebar toggles Play/Stop (avoid stealing space when typing)
   useEffect(() => {
     const onKey = (e) => {
-      if (e.code !== "Space" && e.key !== " ") return;
-
       const el = e.target;
       const tag = (el?.tagName || "").toLowerCase();
       const isTyping = tag === "input" || tag === "textarea" || el?.isContentEditable;
       if (isTyping) return;
+      if (!matchesShortcut(e, "play_toggle")) return;
 
       if (e.pointerType !== "mouse") e.preventDefault();
       if (
@@ -10535,7 +10774,34 @@ useEffect(() => {
     startArrangementPlayback,
     stopArrangementPlayback,
     togglePlaybackFromBeginning,
+    matchesShortcut,
   ]);
+
+  useEffect(() => {
+    const onKey = (e) => {
+      const el = e.target;
+      const tag = (el?.tagName || "").toLowerCase();
+      const isTyping = tag === "input" || tag === "textarea" || el?.isContentEditable;
+      if (isTyping) return;
+
+      if (matchesShortcut(e, "loop_all_toggle")) {
+        e.preventDefault();
+        setLoopRepeats((prev) => (prev === "all" ? "off" : "all"));
+        return;
+      }
+
+      for (let number = 1; number <= 8; number++) {
+        if (!matchesShortcut(e, `loop_${number}_toggle`)) continue;
+        e.preventDefault();
+        const target = String(number);
+        setLoopRepeats((prev) => (prev === target ? "off" : target));
+        return;
+      }
+    };
+
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [matchesShortcut]);
 
   useEffect(() => {
     playback.setPlayhead((prev) => Math.max(0, Math.min(columns - 1, prev)));
@@ -11225,8 +11491,9 @@ useEffect(() => {
 
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="relative flex flex-wrap items-center gap-2">
           <button
+            ref={gridMenuButtonRef}
             onClick={() => setActiveTab((t) => (t === "timing" ? "none" : "timing"))}
             className={`touch-none select-none px-3 py-1.5 rounded border text-sm capitalize ${
               activeTab === "timing"
@@ -11235,16 +11502,6 @@ useEffect(() => {
             }`}
           >
             Drum Grid
-          </button>
-          <button
-            onClick={() => setActiveTab((t) => (t === "notation" ? "none" : "notation"))}
-            className={`touch-none select-none px-3 py-1.5 rounded border text-sm capitalize ${
-              activeTab === "notation"
-                ? "bg-neutral-800 border-neutral-600 text-white"
-                : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
-            }`}
-          >
-            notation
           </button>
           <button
             onClick={() => setActiveTab((t) => (t === "selection" ? "none" : "selection"))}
@@ -11261,184 +11518,185 @@ useEffect(() => {
               {playabilityWarningSteps.length} playability warning{playabilityWarningSteps.length === 1 ? "" : "s"}
             </span>
           )}
-        </div>
-
-        {activeTab === "timing" && (
-          <div className="flex flex-col gap-3">
-            <div ref={gridMenuRowPrimaryRef} className="flex flex-wrap items-center gap-4">
-              <div className="flex items-center gap-2">
-                <span className="text-sm text-neutral-300">Drumkit</span>
-                <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
-                  <button
-                    type="button"
-                    onClick={() => stepPreset(-1)}
-                    className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                    aria-label="Previous preset"
-                  >
-                    −
-                  </button>
-                  <div
-                    onClick={() => setIsKitEditorOpen(true)}
-                    className="min-w-[88px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700 cursor-pointer hover:bg-neutral-700/60"
-                    title="Open drumkit editor"
-                  >
-                    {selectedPresetLabel}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => stepPreset(1)}
-                    className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                    aria-label="Next preset"
-                  >
-                    +
-                  </button>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <span className="text-sm text-neutral-300">Bars</span>
-                <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
-                  <button
-                    type="button"
-                    onClick={() => setBars((b) => Math.max(1, b - 1))}
-                    className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                    aria-label="Decrease bars"
-                  >
-                    −
-                  </button>
-                  <div className="min-w-[44px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700">
-                    {bars}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setBars((b) => Math.min(8, b + 1))}
-                    className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                    aria-label="Increase bars"
-                  >
-                    +
-                  </button>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <span className="text-sm text-neutral-300 whitespace-nowrap">Resolution</span>
-                <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const order = [4, 8, 16, 32];
-                      const idx = order.indexOf(resolution);
-                      const next = order[(idx - 1 + order.length) % order.length];
-                      handleResolutionChange(next);
-                    }}
-                    className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                  >
-                    −
-                  </button>
-                  <div className="min-w-[60px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700">
-                    {resolution === 4 ? "4th" : resolution === 8 ? "8th" : resolution === 16 ? "16th" : "32th"}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const order = [4, 8, 16, 32];
-                      const idx = order.indexOf(resolution);
-                      const next = order[(idx + 1) % order.length];
-                      handleResolutionChange(next);
-                    }}
-                    className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                  >
-                    +
-                  </button>
-                </div>
+          {activeTab === "timing" && (
+            <div
+              ref={gridMenuPopupRef}
+              className="absolute left-0 top-full z-20 mt-2 w-fit max-w-[min(100vw-2rem,980px)] rounded-lg border border-neutral-700 bg-neutral-900 p-3 shadow-xl"
+            >
+              <div className="flex flex-col gap-3">
                 <div className="flex items-center gap-2">
-                  <span className="text-sm text-neutral-300 whitespace-nowrap">Tuplets</span>
-                  <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
-                    <button
-                      type="button"
-                      onClick={() => stepGlobalTupletValue(-1)}
-                      className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                      aria-label="Previous global tuplet value"
-                    >
-                      −
-                    </button>
-                    <button
-                      type="button"
-                      onClick={toggleGlobalTupletOffLast}
-                      className="min-w-[64px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700 hover:bg-neutral-700/50"
-                      title="Toggle off / last tuplet"
-                    >
-                      {globalTupletValue === "mixed"
-                        ? "Mixed"
-                        : globalTupletValue == null
-                          ? "Off"
-                          : String(globalTupletValue)}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => stepGlobalTupletValue(1)}
-                      className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                      aria-label="Next global tuplet value"
-                    >
-                      +
-                    </button>
-                  </div>
+                    <span className="text-sm text-neutral-300">Bars</span>
+                    <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
+                      <button
+                        type="button"
+                        onClick={() => setBars((b) => Math.max(1, b - 1))}
+                        className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                        aria-label="Decrease bars"
+                      >
+                        −
+                      </button>
+                      <div className="min-w-[44px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700">
+                        {bars}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setBars((b) => Math.min(8, b + 1))}
+                        className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                        aria-label="Increase bars"
+                      >
+                        +
+                      </button>
+                    </div>
                 </div>
-              </div>
 
-              <div className="flex items-center gap-2">
-                <span className="text-sm text-neutral-300 whitespace-nowrap">Time</span>
-                <div className="flex items-center gap-1.5">
-                  <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
-                    <button
-                      type="button"
-                      onClick={() => stepTimeSigNumerator(-1)}
-                      className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                      aria-label="Decrease time signature numerator"
-                    >
-                      −
-                    </button>
-                    <div className="min-w-[36px] px-2.5 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700 tabular-nums">
-                      {Math.max(2, Math.min(15, Number(timeSig.n) || 4))}
+                <div className="flex items-center gap-2">
+                    <span className="text-sm text-neutral-300 whitespace-nowrap">Resolution</span>
+                    <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const order = [4, 8, 16, 32];
+                          const idx = order.indexOf(resolution);
+                          const next = order[(idx - 1 + order.length) % order.length];
+                          handleResolutionChange(next);
+                        }}
+                        className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                      >
+                        −
+                      </button>
+                      <div className="min-w-[60px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700">
+                        {resolution === 4 ? "4th" : resolution === 8 ? "8th" : resolution === 16 ? "16th" : "32th"}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const order = [4, 8, 16, 32];
+                          const idx = order.indexOf(resolution);
+                          const next = order[(idx + 1) % order.length];
+                          handleResolutionChange(next);
+                        }}
+                        className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                      >
+                        +
+                      </button>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => stepTimeSigNumerator(1)}
-                      className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                      aria-label="Increase time signature numerator"
-                    >
-                      +
-                    </button>
-                  </div>
-                  <div className="text-sm text-neutral-400 select-none">/</div>
-                  <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
-                    <button
-                      type="button"
-                      onClick={() => stepTimeSigDenominator(-1)}
-                      className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                      aria-label="Previous time signature denominator"
-                    >
-                      −
-                    </button>
-                    <div className="min-w-[36px] px-2.5 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700 tabular-nums">
-                      {timeSig.d === 8 ? 8 : 4}
+                </div>
+
+                <div className="flex items-center gap-2">
+                    <span className="text-sm text-neutral-300 whitespace-nowrap">Time</span>
+                    <div className="flex items-center gap-1.5">
+                      <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
+                        <button
+                          type="button"
+                          onClick={() => stepTimeSigNumerator(-1)}
+                          className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                          aria-label="Decrease time signature numerator"
+                        >
+                          −
+                        </button>
+                        <div className="min-w-[36px] px-2.5 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700 tabular-nums">
+                          {Math.max(2, Math.min(15, Number(timeSig.n) || 4))}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => stepTimeSigNumerator(1)}
+                          className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                          aria-label="Increase time signature numerator"
+                        >
+                          +
+                        </button>
+                      </div>
+                      <div className="text-sm text-neutral-400 select-none">/</div>
+                      <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
+                        <button
+                          type="button"
+                          onClick={() => stepTimeSigDenominator(-1)}
+                          className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                          aria-label="Previous time signature denominator"
+                        >
+                          −
+                        </button>
+                        <div className="min-w-[36px] px-2.5 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700 tabular-nums">
+                          {timeSig.d === 8 ? 8 : 4}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => stepTimeSigDenominator(1)}
+                          className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                          aria-label="Next time signature denominator"
+                        >
+                          +
+                        </button>
+                      </div>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => stepTimeSigDenominator(1)}
-                      className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                      aria-label="Next time signature denominator"
-                    >
-                      +
-                    </button>
-                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                    <span className="text-sm text-neutral-300 whitespace-nowrap">Tuplets</span>
+                    <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
+                      <button
+                        type="button"
+                        onClick={() => stepGlobalTupletValue(-1)}
+                        className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                        aria-label="Previous global tuplet value"
+                      >
+                        −
+                      </button>
+                      <button
+                        type="button"
+                        onClick={toggleGlobalTupletOffLast}
+                        className="min-w-[64px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700 hover:bg-neutral-700/50"
+                        title="Toggle off / last tuplet"
+                      >
+                        {globalTupletValue === "mixed"
+                          ? "Mixed"
+                          : globalTupletValue == null
+                            ? "Off"
+                            : String(globalTupletValue)}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => stepGlobalTupletValue(1)}
+                        className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                        aria-label="Next global tuplet value"
+                      >
+                        +
+                      </button>
+                    </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                    <span className="text-sm text-neutral-300">Drumkit</span>
+                    <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
+                      <button
+                        type="button"
+                        onClick={() => stepPreset(-1)}
+                        className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                        aria-label="Previous preset"
+                      >
+                        −
+                      </button>
+                      <div
+                        onClick={() => setIsKitEditorOpen(true)}
+                        className="min-w-[88px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700 cursor-pointer hover:bg-neutral-700/60"
+                        title="Open drumkit editor"
+                      >
+                        {selectedPresetLabel}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => stepPreset(1)}
+                        className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                        aria-label="Next preset"
+                      >
+                        +
+                      </button>
+                    </div>
                 </div>
               </div>
             </div>
-
-            <div ref={gridMenuRowSecondaryRef} className="flex flex-wrap items-center gap-4" />
-          </div>
-        )}
+          )}
+        </div>
 
         {activeTab === "selection" && (
           <div ref={selectionMenuRowRef} className="flex flex-wrap items-center gap-4">
@@ -11578,162 +11836,130 @@ useEffect(() => {
                 </button>
               </div>
             </div>
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-neutral-300">Loop overlap</span>
-              <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
-                <button
-                  type="button"
-                  onClick={() =>
-                    setLoopOverlapMode((prev) => {
-                      const idx = Math.max(0, MOVE_OVERLAP_MODES.findIndex((m) => m.id === prev));
-                      return MOVE_OVERLAP_MODES[(idx - 1 + MOVE_OVERLAP_MODES.length) % MOVE_OVERLAP_MODES.length].id;
-                    })
-                  }
-                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                  aria-label="Previous loop overlap mode"
-                >
-                  −
-                </button>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setLoopOverlapMode((prev) => (prev === "all-to-all" ? "active-to-empty" : "all-to-all"))
-                  }
-                  className="min-w-[126px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700 hover:bg-neutral-700/50"
-                  title="Toggle all overwrites"
-                  aria-label="Toggle loop overlap all overwrites"
-                >
-                  {MOVE_OVERLAP_MODES.find((m) => m.id === loopOverlapMode)?.label || "Fill in gaps"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setLoopOverlapMode((prev) => {
-                      const idx = Math.max(0, MOVE_OVERLAP_MODES.findIndex((m) => m.id === prev));
-                      return MOVE_OVERLAP_MODES[(idx + 1) % MOVE_OVERLAP_MODES.length].id;
-                    })
-                  }
-                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                  aria-label="Next loop overlap mode"
-                >
-                  +
-                </button>
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => setLoopRespectPlayability((v) => !v)}
-              className={`touch-none select-none px-3 py-[5px] rounded border text-sm ${
-                loopRespectPlayability
-                  ? "bg-neutral-800 border-neutral-700 text-white"
-                  : "bg-neutral-900 border-neutral-800 text-neutral-600"
-              }`}
-              title="Skip looped hand hits where they would create an unplayable overlap"
-            >
-              Respect playability
-            </button>
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-neutral-300">Move overlap</span>
-              <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
-                <button
-                  type="button"
-                  onClick={() =>
-                    setMoveOverlapMode((prev) => {
-                      const idx = Math.max(0, MOVE_OVERLAP_MODES.findIndex((m) => m.id === prev));
-                      return MOVE_OVERLAP_MODES[(idx - 1 + MOVE_OVERLAP_MODES.length) % MOVE_OVERLAP_MODES.length].id;
-                    })
-                  }
-                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                  aria-label="Previous move overlap mode"
-                >
-                  −
-                </button>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setMoveOverlapMode((prev) => (prev === "all-to-all" ? "active-to-empty" : "all-to-all"))
-                  }
-                  className="min-w-[126px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700 hover:bg-neutral-700/50"
-                  title="Toggle all overwrites"
-                  aria-label="Toggle move overlap all overwrites"
-                >
-                  {MOVE_OVERLAP_MODES.find((m) => m.id === moveOverlapMode)?.label || "All overrides all"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setMoveOverlapMode((prev) => {
-                      const idx = Math.max(0, MOVE_OVERLAP_MODES.findIndex((m) => m.id === prev));
-                      return MOVE_OVERLAP_MODES[(idx + 1) % MOVE_OVERLAP_MODES.length].id;
-                    })
-                  }
-                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                  aria-label="Next move overlap mode"
-                >
-                  +
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {activeTab === "notation" && (
-          <div ref={notationMenuRowRef} className="flex flex-wrap items-center gap-4">
-            <button
-              type="button"
-              onClick={() => setMergeRests((v) => !v)}
-              className={`touch-none select-none px-3 py-[5px] rounded border text-sm ${
-                mergeRests
-                  ? "bg-neutral-800 border-neutral-700 text-white"
-                  : "bg-neutral-900 border-neutral-800 text-neutral-600"
-              }`}
-              title="Merge consecutive rests (e.g., two 8th rests → one quarter rest)"
-            >
-              Merge rests
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setMergeNotes((v) => !v)}
-              className={`touch-none select-none px-3 py-[5px] rounded border text-sm ${
-                mergeNotes
-                  ? "bg-neutral-800 border-neutral-700 text-white"
-                  : "bg-neutral-900 border-neutral-800 text-neutral-600"
-              }`}
-              title="Merge notes across adjacent rests (e.g., 8ths on beats → quarters)"
-            >
-              Merge notes
-            </button>
-
-            {mergeNotes && (
+            <div className="relative">
               <button
+                ref={editingAdvancedMenuButtonRef}
                 type="button"
-                onClick={() => setDottedNotes((v) => !v)}
+                onClick={() => setIsEditingAdvancedMenuOpen((v) => !v)}
                 className={`touch-none select-none px-3 py-[5px] rounded border text-sm ${
-                  dottedNotes
+                  isEditingAdvancedMenuOpen
                     ? "bg-neutral-800 border-neutral-700 text-white"
-                    : "bg-neutral-900 border-neutral-800 text-neutral-600"
+                    : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
                 }`}
-                title="Convert note + following rest into a dotted note (when possible)"
+                title="Advanced editing options"
+                aria-label="Advanced editing options"
               >
-                Dotted notes
+                ...
               </button>
-            )}
-
-            <button
-              type="button"
-              onClick={() => setFlatBeams((v) => !v)}
-              className={`touch-none select-none px-3 py-[5px] rounded border text-sm ${
-                flatBeams
-                  ? "bg-neutral-800 border-neutral-700 text-white"
-                  : "bg-neutral-900 border-neutral-800 text-neutral-600"
-              }`}
-              title="Render beams horizontally (no tilt)"
-            >
-              Flat beams
-            </button>
+              {isEditingAdvancedMenuOpen && (
+                <div
+                  ref={editingAdvancedMenuRef}
+                  className="absolute right-0 top-full z-20 mt-2 w-fit max-w-[340px] rounded-lg border border-neutral-700 bg-neutral-900 p-3 shadow-xl"
+                >
+                  <div className="space-y-3">
+                    <div className="space-y-1">
+                      <span className="text-sm text-neutral-300">Loop overlap</span>
+                      <div className="flex w-fit max-w-full items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setLoopOverlapMode((prev) => {
+                              const idx = Math.max(0, MOVE_OVERLAP_MODES.findIndex((m) => m.id === prev));
+                              return MOVE_OVERLAP_MODES[(idx - 1 + MOVE_OVERLAP_MODES.length) % MOVE_OVERLAP_MODES.length].id;
+                            })
+                          }
+                          className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                          aria-label="Previous loop overlap mode"
+                        >
+                          −
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setLoopOverlapMode((prev) => (prev === "all-to-all" ? "active-to-empty" : "all-to-all"))
+                          }
+                          className="min-w-[126px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700 hover:bg-neutral-700/50"
+                          title="Toggle all overwrites"
+                          aria-label="Toggle loop overlap all overwrites"
+                        >
+                          {MOVE_OVERLAP_MODES.find((m) => m.id === loopOverlapMode)?.label || "Fill in gaps"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setLoopOverlapMode((prev) => {
+                              const idx = Math.max(0, MOVE_OVERLAP_MODES.findIndex((m) => m.id === prev));
+                              return MOVE_OVERLAP_MODES[(idx + 1) % MOVE_OVERLAP_MODES.length].id;
+                            })
+                          }
+                          className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                          aria-label="Next loop overlap mode"
+                        >
+                          +
+                        </button>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setLoopRespectPlayability((v) => !v)}
+                      className={`w-fit max-w-full touch-none select-none px-3 py-[5px] rounded border text-sm ${
+                        loopRespectPlayability
+                          ? "bg-neutral-800 border-neutral-700 text-white"
+                          : "bg-neutral-900 border-neutral-800 text-neutral-600"
+                      }`}
+                      title="Skip looped hand hits where they would create an unplayable overlap"
+                    >
+                      Respect playability
+                    </button>
+                    <div className="space-y-1">
+                      <span className="text-sm text-neutral-300">Move overlap</span>
+                      <div className="flex w-fit max-w-full items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setMoveOverlapMode((prev) => {
+                              const idx = Math.max(0, MOVE_OVERLAP_MODES.findIndex((m) => m.id === prev));
+                              return MOVE_OVERLAP_MODES[(idx - 1 + MOVE_OVERLAP_MODES.length) % MOVE_OVERLAP_MODES.length].id;
+                            })
+                          }
+                          className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                          aria-label="Previous move overlap mode"
+                        >
+                          −
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setMoveOverlapMode((prev) => (prev === "all-to-all" ? "active-to-empty" : "all-to-all"))
+                          }
+                          className="min-w-[126px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700 hover:bg-neutral-700/50"
+                          title="Toggle all overwrites"
+                          aria-label="Toggle move overlap all overwrites"
+                        >
+                          {MOVE_OVERLAP_MODES.find((m) => m.id === moveOverlapMode)?.label || "All overrides all"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setMoveOverlapMode((prev) => {
+                              const idx = Math.max(0, MOVE_OVERLAP_MODES.findIndex((m) => m.id === prev));
+                              return MOVE_OVERLAP_MODES[(idx + 1) % MOVE_OVERLAP_MODES.length].id;
+                            })
+                          }
+                          className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                          aria-label="Next move overlap mode"
+                        >
+                          +
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         )}
+
       </header>
 
 
@@ -11833,6 +12059,7 @@ useEffect(() => {
                 onCycleStickingOverride={cycleStickingOverride}
                 onDisableStickingEditMode={() => setStickingEditModeEnabled(false)}
                 bakeLoopPreview={bakeLoopPreview}
+                hoveredGridCellRef={hoveredGridCellRef}
       />
             </div>
             </div>
@@ -11876,6 +12103,7 @@ useEffect(() => {
                 onCycleStickingOverride={cycleStickingOverride}
                 onDisableStickingEditMode={() => setStickingEditModeEnabled(false)}
                 bakeLoopPreview={bakeLoopPreview}
+                hoveredGridCellRef={hoveredGridCellRef}
               />
             </div>
             </div>
@@ -12191,6 +12419,7 @@ useEffect(() => {
           setLibraryFiltersOpen={setLibraryFiltersOpen}
           setIsBeatLibraryOpen={setIsBeatLibraryOpen}
           beatNameInputRef={beatNameInputRef}
+          beatSaveButtonRef={beatSaveButtonRef}
           beatNameDraft={beatNameDraft}
           setBeatNameDraft={setBeatNameDraft}
           beatCategoryDraft={beatCategoryDraft}
@@ -12365,6 +12594,15 @@ useEffect(() => {
                 >
                   Notation
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setIsArrangementOpen(false)}
+                  className="px-2.5 py-1 rounded border border-neutral-700 text-sm text-neutral-300 bg-neutral-900/60 hover:bg-neutral-800/60"
+                  title="Close library"
+                  aria-label="Close library"
+                >
+                  ×
+                </button>
               </div>
               </div>
             </div>
@@ -12491,13 +12729,7 @@ useEffect(() => {
                             className={`flex w-full items-center gap-2 rounded border px-2 py-1 text-left text-sm ${
                               beatLibraryDropTargetId === "all"
                                 ? "border-cyan-400/80 bg-cyan-900/25 text-cyan-50 shadow-[0_0_0_1px_rgba(34,211,238,0.35)]"
-                                : selectedBeatLibraryContainerId === "all" &&
-                                    !(
-                                      (Boolean(loadedLocalBeatId) && !isLoadedLocalBeatNameChanged) ||
-                                      String(selectedArrangementSourceBeatKey || "").startsWith("local:")
-                                    )
-                                  ? "border-sky-500/70 bg-sky-900/30 text-sky-100"
-                                  : "border-neutral-800 bg-neutral-900/40 text-neutral-300 hover:bg-neutral-800/60"
+                                : "border-neutral-800 bg-neutral-900/40 text-neutral-300 hover:bg-neutral-800/60"
                             }`}
                           >
                             <span
@@ -12661,9 +12893,10 @@ useEffect(() => {
                               className="min-w-[180px] flex-1 bg-neutral-900 border border-neutral-700 rounded px-2 py-1 text-sm text-white"
                             />
                             <button
+                              ref={beatSaveButtonRef}
                               type="button"
                               onClick={canUpdateLoadedLocalBeat ? updateCurrentLoadedBeatLocal : saveCurrentBeatLocal}
-                              className={`px-2.5 py-1 rounded border text-sm ${
+                              className={`px-2.5 py-1 rounded border text-sm focus:outline-none focus:border-sky-500/70 focus:bg-sky-900/30 focus:shadow-[0_0_0_1px_rgba(14,165,233,0.35)] ${
                                 canUpdateLoadedLocalBeat
                                   ? "border-cyan-700 text-cyan-100 bg-cyan-900/20 hover:bg-cyan-800/30"
                                   : "border-neutral-700 text-white bg-neutral-800 hover:bg-neutral-700/60"
@@ -13558,9 +13791,11 @@ useEffect(() => {
                   <button
                     type="button"
                     onClick={() => setIsArrangementNotationOpen(false)}
-                    className="px-3 py-1.5 rounded border border-neutral-700 text-sm text-neutral-300 hover:bg-neutral-800/60"
+                    className="px-2.5 py-1 rounded border border-neutral-700 text-sm text-neutral-300 bg-neutral-900/60 hover:bg-neutral-800/60"
+                    aria-label="Close arrangement notation"
+                    title="Close arrangement notation"
                   >
-                    Close
+                    ×
                   </button>
                 </div>
               </div>
@@ -15550,6 +15785,19 @@ useEffect(() => {
                     <div className="mt-2 text-xs text-neutral-500">
                       Sets the default loop repeat mode for new selections.
                     </div>
+                    <div className="mt-4 flex items-center gap-3">
+                      <span className="text-sm text-neutral-300">Keyboard shortcuts</span>
+                      <button
+                        type="button"
+                        onClick={() => setIsShortcutsDialogOpen(true)}
+                        className="px-3 py-1 rounded border border-neutral-700 text-sm text-white bg-neutral-800 hover:bg-neutral-700/60"
+                      >
+                        Open
+                      </button>
+                    </div>
+                    <div className="mt-2 text-xs text-neutral-500">
+                      View current shortcuts and assign custom key combinations.
+                    </div>
                   </>
                 ) : preferencesCategory === "playback" ? (
                   <>
@@ -15681,6 +15929,34 @@ useEffect(() => {
                 ) : preferencesCategory === "timing" ? (
                   <>
                     <div className="flex items-center justify-between gap-2">
+                      <div className="text-sm font-normal text-neutral-200">Selection</div>
+                    </div>
+                    <div className="mt-2 flex flex-wrap items-center gap-3">
+                      <span className="text-sm text-neutral-300">Selection hold</span>
+                      <div className="flex min-w-[220px] items-center gap-3 rounded-md border border-neutral-700 bg-neutral-800 px-3 py-2">
+                        <input
+                          type="range"
+                          min={130}
+                          max={800}
+                          step={10}
+                          value={gridSelectionHoldDelayMs}
+                          onChange={(e) =>
+                            setGridSelectionHoldDelayMs(
+                              Math.max(130, Math.min(800, Math.round(Number(e.target.value) || 130)))
+                            )
+                          }
+                          className="w-40 accent-neutral-300"
+                        />
+                        <span className="min-w-[56px] text-right text-sm text-white tabular-nums">
+                          {`${gridSelectionHoldDelayMs}ms`}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="mt-2 text-xs text-neutral-500">
+                      Controls how long you need to hold before grid selection mode arms. Range: 130ms to 800ms.
+                    </div>
+                    <div className="my-3 border-t border-neutral-800" />
+                    <div className="flex items-center justify-between gap-2">
                       <div className="text-sm font-normal text-neutral-200">Resolution</div>
                     </div>
                     <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -15779,8 +16055,89 @@ useEffect(() => {
                     <div className="flex items-center justify-between gap-2">
                       <div className="text-sm font-normal text-neutral-200">Sticking</div>
                     </div>
-                    <div className="mt-2 text-xs text-neutral-500">
-                      Sticking view is available in the main Notation toolbar.
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setShowNotationSticking((v) => !v)}
+                        className={`touch-none select-none px-3 py-[5px] rounded border text-sm ${
+                          showNotationSticking
+                            ? "bg-neutral-800 border-neutral-700 text-white"
+                            : "bg-neutral-900 border-neutral-800 text-neutral-600"
+                        }`}
+                        title="Show inferred sticking (R/L) beneath notes in notation"
+                      >
+                        Show sticking
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setNotationStickingView((v) => (v === "stacked" ? "split-rows" : "stacked"))
+                        }
+                        className={`touch-none select-none px-3 py-[5px] rounded border text-sm ${
+                          showNotationSticking
+                            ? "bg-neutral-800 border-neutral-700 text-white"
+                            : "bg-neutral-900 border-neutral-800 text-neutral-600"
+                        }`}
+                        title="Change sticking display"
+                      >
+                        {notationStickingView === "stacked" ? "Stacked" : "Split rows"}
+                      </button>
+                    </div>
+                    <div className="my-3 border-t border-neutral-800" />
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-sm font-normal text-neutral-200">Rhythm Spelling</div>
+                    </div>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setMergeRests((v) => !v)}
+                        className={`touch-none select-none px-3 py-[5px] rounded border text-sm ${
+                          mergeRests
+                            ? "bg-neutral-800 border-neutral-700 text-white"
+                            : "bg-neutral-900 border-neutral-800 text-neutral-600"
+                        }`}
+                        title="Merge consecutive rests (e.g., two 8th rests → one quarter rest)"
+                      >
+                        Merge rests
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setMergeNotes((v) => !v)}
+                        className={`touch-none select-none px-3 py-[5px] rounded border text-sm ${
+                          mergeNotes
+                            ? "bg-neutral-800 border-neutral-700 text-white"
+                            : "bg-neutral-900 border-neutral-800 text-neutral-600"
+                        }`}
+                        title="Merge notes across adjacent rests (e.g., 8ths on beats → quarters)"
+                      >
+                        Merge notes
+                      </button>
+                      {mergeNotes && (
+                        <button
+                          type="button"
+                          onClick={() => setDottedNotes((v) => !v)}
+                          className={`touch-none select-none px-3 py-[5px] rounded border text-sm ${
+                            dottedNotes
+                              ? "bg-neutral-800 border-neutral-700 text-white"
+                              : "bg-neutral-900 border-neutral-800 text-neutral-600"
+                          }`}
+                          title="Convert note + following rest into a dotted note (when possible)"
+                        >
+                          Dotted notes
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => setFlatBeams((v) => !v)}
+                        className={`touch-none select-none px-3 py-[5px] rounded border text-sm ${
+                          flatBeams
+                            ? "bg-neutral-800 border-neutral-700 text-white"
+                            : "bg-neutral-900 border-neutral-800 text-neutral-600"
+                        }`}
+                        title="Render beams horizontally (no tilt)"
+                      >
+                        Flat beams
+                      </button>
                     </div>
                   </>
                 ) : preferencesCategory === "editor" ? (
@@ -15979,6 +16336,107 @@ useEffect(() => {
                 )}
               </section>
             </div>
+            {isShortcutsDialogOpen && (
+              <div
+                className="fixed inset-0 z-[93] bg-black/40 p-4 flex items-center justify-center"
+                onMouseDown={() => {
+                  setIsShortcutsDialogOpen(false);
+                  setEditingShortcutActionId(null);
+                }}
+              >
+                <div
+                  className="w-full max-w-4xl rounded-xl border border-neutral-700 bg-neutral-900 p-4 md:p-5"
+                  onMouseDown={(e) => e.stopPropagation()}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <h4 className="text-base font-semibold">Keyboard shortcuts</h4>
+                      <div className="mt-1 text-xs text-neutral-500">
+                        Click a keystroke to record a custom binding. Press Escape while recording to cancel.
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShortcutBindings({});
+                          setEditingShortcutActionId(null);
+                        }}
+                        className="px-2 py-1 rounded border border-neutral-700 text-xs text-neutral-300 hover:bg-neutral-800/60"
+                      >
+                        Reset all
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsShortcutsDialogOpen(false);
+                          setEditingShortcutActionId(null);
+                        }}
+                        className="px-2 py-1 rounded border border-neutral-700 text-xs text-neutral-300 hover:bg-neutral-800/60"
+                      >
+                        Close
+                      </button>
+                    </div>
+                  </div>
+                  <div className="mt-4 overflow-hidden rounded border border-neutral-800">
+                    <div className="grid grid-cols-[minmax(0,1.15fr)_180px_minmax(0,1.35fr)_72px] gap-0 border-b border-neutral-800 bg-neutral-950/40 px-3 py-2 text-[11px] uppercase tracking-wide text-neutral-500">
+                      <div>Command</div>
+                      <div>Keystroke</div>
+                      <div>Description</div>
+                      <div />
+                    </div>
+                    <div className="max-h-[60vh] overflow-y-auto">
+                      {SHORTCUTS.map((entry) => {
+                        const currentBinding = getShortcutBinding(entry.id);
+                        const isEditing = editingShortcutActionId === entry.id;
+                        return (
+                          <div
+                            key={`shortcut-row-${entry.id}`}
+                            className="grid grid-cols-[minmax(0,1.15fr)_180px_minmax(0,1.35fr)_72px] gap-0 border-b border-neutral-800 px-3 py-2 text-sm last:border-b-0"
+                          >
+                            <div className="pr-3 text-neutral-100">{entry.command}</div>
+                            <div className="pr-3">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setEditingShortcutActionId((prev) =>
+                                    prev === entry.id ? null : entry.id
+                                  )
+                                }
+                                className={`w-full rounded border px-2 py-1 text-left text-xs ${
+                                  isEditing
+                                    ? "border-sky-500/70 bg-sky-900/20 text-sky-100"
+                                    : "border-neutral-700 bg-neutral-800 text-white hover:bg-neutral-700/60"
+                                }`}
+                              >
+                                {isEditing ? "Press keys..." : displayShortcutBinding(currentBinding)}
+                              </button>
+                            </div>
+                            <div className="pr-3 text-neutral-400">{entry.description}</div>
+                            <div className="flex items-start justify-end">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setShortcutBindings((prev) => {
+                                    const next = { ...(prev || {}) };
+                                    delete next[entry.id];
+                                    return next;
+                                  })
+                                }
+                                className="rounded border border-neutral-700 px-2 py-1 text-[11px] text-neutral-300 hover:bg-neutral-800/60"
+                                title="Reset to default"
+                              >
+                                Reset
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -16486,7 +16944,7 @@ function Grid({
   grid, columns, bars, stepsPerBar, resolution, timeSig, quarterSubdivisionsByBar, normalizedTupletOverridesByBar, barStepOffsets, cycleTupletAt, gridBarsPerLine,
   cycleVelocity, toggleGhost, selection, setSelection, loopRule,
     loopRepeats,
-  setLoopRule, wrappedSelectionCells, playhead, moveSelectionByDelta, legacySelectionEnabled, moveModeDebugEnabled, playabilityWarningsEnabled, playabilityWarningStepSet, stickingGuideEnabled, showEditedSticking, stickingAssignmentsByStep, stickingEditModeEnabled, stickingOverrides, onCycleStickingOverride, onDisableStickingEditMode, bakeLoopPreview
+  setLoopRule, wrappedSelectionCells, playhead, moveSelectionByDelta, legacySelectionEnabled, moveModeDebugEnabled, playabilityWarningsEnabled, playabilityWarningStepSet, stickingGuideEnabled, showEditedSticking, stickingAssignmentsByStep, stickingEditModeEnabled, stickingOverrides, onCycleStickingOverride, onDisableStickingEditMode, bakeLoopPreview, hoveredGridCellRef
 }) {
   const notifySelectionFinalized = React.useCallback(() => {
     try {
@@ -16711,11 +17169,12 @@ function Grid({
         // Modern mode: distinguish quick drag (move) vs long-press drag (selection for looping)
         // for single-cell starts. Existing multi-cell selection dragging still uses move mode.
         const heldMs = Date.now() - (press.current.startTime || 0);
+        const holdDelayMs = readGridSelectionHoldDelayMs();
         const shouldLongPressSelect =
           !legacySelectionEnabled &&
           press.current.mode === "moveArmed" &&
           !press.current.startWasSelected &&
-          heldMs >= 130;
+          heldMs >= holdDelayMs;
         if (shouldLongPressSelect) {
           press.current.mode = "select";
           mouseDragRef.current.phase = "selecting";
@@ -16749,7 +17208,8 @@ function Grid({
         }
       } else if (press.current.mode === "selectArmed") {
         const heldMs = Date.now() - (press.current.startTime || 0);
-        if (legacySelectionEnabled || heldMs >= 130) {
+        const holdDelayMs = readGridSelectionHoldDelayMs();
+        if (legacySelectionEnabled || heldMs >= holdDelayMs) {
           press.current.mode = "select";
           mouseDragRef.current.phase = "selecting";
           mouseDragRef.current.anchorRow = r0;
@@ -17066,6 +17526,18 @@ function Grid({
                       data-gridcell="1"
                       data-row={instruments.findIndex((x) => x.id === inst.id)}
                       data-col={t.stepIndex}
+                      onMouseEnter={() => {
+                        hoveredGridCellRef.current = {
+                          row: instruments.findIndex((x) => x.id === inst.id),
+                          col: t.stepIndex,
+                        };
+                      }}
+                      onMouseMove={() => {
+                        hoveredGridCellRef.current = {
+                          row: instruments.findIndex((x) => x.id === inst.id),
+                          col: t.stepIndex,
+                        };
+                      }}
                       onPointerDown={(e) => {
                         // Mobile/touch-only gesture handling.
                         if (e.pointerType === "mouse") return;
@@ -17193,9 +17665,13 @@ function Grid({
 
                           // A stationary hold should behave like a normal tap.
                           // Selection only starts once the user drags to another cell.
-                        }, 130);
+                        }, readGridSelectionHoldDelayMs());
                       }}
                       onPointerMove={(e) => {
+                        hoveredGridCellRef.current = {
+                          row: instruments.findIndex((x) => x.id === inst.id),
+                          col: t.stepIndex,
+                        };
                         if (e.pointerType === "mouse") return;
                         if (!press.current.active) return;
                         if (press.current.pointerId !== e.pointerId) return;
@@ -17490,7 +17966,7 @@ function Grid({
                             // Selection starts only after dragging into another cell.
                             return;
                           }
-                        }, 130);
+                        }, readGridSelectionHoldDelayMs());
                       }}
                       className={`w-7 h-7 border cursor-pointer ${CELL_COLOR[val]} ${val === CELL.ACCENT ? "shadow-[inset_0_0_0_1px_rgba(255,255,255,0.98)]" : ""} ${(() => {
                         const role = getCellRole(inst.id, t.stepIndex);
@@ -17832,7 +18308,7 @@ function Notation({
       } catch (e) {
         // ignore
       }
-    }
+    };
     const createRepeatVoice = (repeatInfo) => {
       const tickables = [];
       if (repeatInfo?.type && repeatInfo.type !== "follower") {
@@ -18251,11 +18727,75 @@ function Notation({
             while (sub < subdiv) {
               const entry = stepData[sub];
               if (entry.keys.length > 0) {
+                if (
+                  mergeBaseStepsPerQuarter === 4 &&
+                  sub === 0 &&
+                  stepData[0]?.keys.length &&
+                  stepData[1]?.keys.length &&
+                  !(stepData[2]?.keys.length) &&
+                  stepData[3]?.keys.length
+                ) {
+                  const note16a = new StaveNote({
+                    keys: stepData[0].keys,
+                    duration: "16",
+                    clef: "percussion",
+                  });
+                  note16a.setStemDirection(1);
+                  applyGhostStyling(note16a, stepData[0].ghostKeyIndices);
+                  applyGhostStemOverride(note16a, stepData[0].ghostKeyIndices);
+                  applySpecialStemOverride(note16a);
+                  applyCircledXLargeStyling(note16a, stepData[0].circledXLargeKeyIndices);
+                  applyAccentArticulation(note16a, stepData[0].accentKeyIndices);
+                  applyStickingAnnotation(note16a, stepData[0].stickingSpec, stepData[0].globalIdx);
+                  note16a.__dgIsBeamed = false;
+                  notes.push(note16a);
+                  quarterNotes.push(note16a);
+                  quarterBeamBucket.push(note16a);
+
+                  const note8 = new StaveNote({
+                    keys: stepData[1].keys,
+                    duration: "8",
+                    clef: "percussion",
+                  });
+                  note8.setStemDirection(1);
+                  applyGhostStyling(note8, stepData[1].ghostKeyIndices);
+                  applyGhostStemOverride(note8, stepData[1].ghostKeyIndices);
+                  applySpecialStemOverride(note8);
+                  applyCircledXLargeStyling(note8, stepData[1].circledXLargeKeyIndices);
+                  applyAccentArticulation(note8, stepData[1].accentKeyIndices);
+                  applyStickingAnnotation(note8, stepData[1].stickingSpec, stepData[1].globalIdx);
+                  note8.__dgIsBeamed = false;
+                  notes.push(note8);
+                  quarterNotes.push(note8);
+                  quarterBeamBucket.push(note8);
+
+                  const note16b = new StaveNote({
+                    keys: stepData[3].keys,
+                    duration: "16",
+                    clef: "percussion",
+                  });
+                  note16b.setStemDirection(1);
+                  applyGhostStyling(note16b, stepData[3].ghostKeyIndices);
+                  applyGhostStemOverride(note16b, stepData[3].ghostKeyIndices);
+                  applySpecialStemOverride(note16b);
+                  applyCircledXLargeStyling(note16b, stepData[3].circledXLargeKeyIndices);
+                  applyAccentArticulation(note16b, stepData[3].accentKeyIndices);
+                  applyStickingAnnotation(note16b, stepData[3].stickingSpec, stepData[3].globalIdx);
+                  note16b.__dgIsBeamed = false;
+                  notes.push(note16b);
+                  quarterNotes.push(note16b);
+                  quarterBeamBucket.push(note16b);
+
+                  sub += 4;
+                  continue;
+                }
                 let len = 1;
                 if (mergeNotes) {
                   const canLen = (candidateLen) => {
                     if (candidateLen < 1) return false;
-                    if (sub % candidateLen !== 0) return false;
+                    const requiresBeatAlignedStart =
+                      candidateLen >= 2 || mergeBaseStepsPerQuarter <= 2;
+                    if (requiresBeatAlignedStart && sub % candidateLen !== 0) return false;
                     if (sub + candidateLen > subdiv) return false;
                     for (let k = 1; k < candidateLen; k++) {
                       if (stepData[sub + k]?.keys.length) return false;
@@ -18336,6 +18876,14 @@ function Notation({
               const rest = new StaveNote({ keys: ["b/4"], duration: restDur, clef: "percussion" });
               notes.push(rest);
               quarterNotes.push(rest);
+              if (chunk === 1) {
+                const hasHitBefore = stepData.slice(0, sub).some((item) => (item?.keys?.length || 0) > 0);
+                const hasHitAfter = stepData.slice(sub + chunk).some((item) => (item?.keys?.length || 0) > 0);
+                if (hasHitBefore && hasHitAfter) {
+                  rest.__dgBeamRest = true;
+                  quarterBeamBucket.push(rest);
+                }
+              }
               sub += chunk;
             }
           } else {
@@ -18392,7 +18940,7 @@ function Notation({
             const beams = Beam.generateBeams(bucket, {
               groups: [new Fraction(1, timeSig.d)],
               stem_direction: 1,
-              beam_rests: false,
+              beam_rests: bucket.some((note) => note?.__dgBeamRest === true),
               flat_beams: !!flatBeams,
             });
             beams.forEach((beam) => {
@@ -18652,6 +19200,35 @@ const isRest = keys.length === 0;
     };
 
         const isStepEmpty = (absIdx) => !hasAnyHitAt(absIdx);
+        const getStepEntry = (absIdx) => {
+          const entryKeys = [];
+          const entryGhostKeyIndices = [];
+          const entryCircledXLargeKeyIndices = [];
+          const entryAccentKeyIndices = [];
+          instruments.forEach((inst) => {
+            const val = notationGrid[inst.id]?.[absIdx] ?? CELL.OFF;
+            if (val === CELL.OFF) return;
+            entryKeys.push(NOTATION_MAP[inst.id].key);
+            const keyIndex = entryKeys.length - 1;
+            if (val === CELL.GHOST && GHOST_NOTATION_ENABLED.has(inst.id)) {
+              entryGhostKeyIndices.push(keyIndex);
+            }
+            if (val === CELL.ACCENT) {
+              entryAccentKeyIndices.push(keyIndex);
+            }
+            if (inst.id === "china" || inst.id === "hihatOpen") {
+              entryCircledXLargeKeyIndices.push(keyIndex);
+            }
+          });
+          return {
+            keys: entryKeys,
+            ghostKeyIndices: entryGhostKeyIndices,
+            circledXLargeKeyIndices: entryCircledXLargeKeyIndices,
+            accentKeyIndices: entryAccentKeyIndices,
+            stickingSpec: getStickingSpecForStep(absIdx),
+            globalIdx: absIdx,
+          };
+        };
 
         const allowDotted = dottedNotes && ("all" === "all" || notationResolution > 8);
         // Dotted notes should not cross the "beam group" divisions of the bar.
@@ -18671,6 +19248,46 @@ const isRest = keys.length === 0;
 
         // --- Merge NOTES ---
         if (mergeNotes && !isRest) {
+          if (notationResolution === 16 && stepsPerBeatN === 4 && subInBeat === 0 && s + 3 < stepsPerBar) {
+            const entry0 = getStepEntry(b * stepsPerBar + s);
+            const entry1 = getStepEntry(b * stepsPerBar + (s + 1));
+            const entry2 = getStepEntry(b * stepsPerBar + (s + 2));
+            const entry3 = getStepEntry(b * stepsPerBar + (s + 3));
+            if (entry0.keys.length && entry1.keys.length && !entry2.keys.length && entry3.keys.length) {
+              const note16a = new StaveNote({ keys: entry0.keys, duration: "16", clef: "percussion" });
+              note16a.setStemDirection(1);
+              pushNote(
+                note16a,
+                entry0.ghostKeyIndices,
+                entry0.circledXLargeKeyIndices,
+                entry0.accentKeyIndices,
+                entry0.stickingSpec,
+                entry0.globalIdx
+              );
+              const note8 = new StaveNote({ keys: entry1.keys, duration: "8", clef: "percussion" });
+              note8.setStemDirection(1);
+              pushNote(
+                note8,
+                entry1.ghostKeyIndices,
+                entry1.circledXLargeKeyIndices,
+                entry1.accentKeyIndices,
+                entry1.stickingSpec,
+                entry1.globalIdx
+              );
+              const note16b = new StaveNote({ keys: entry3.keys, duration: "16", clef: "percussion" });
+              note16b.setStemDirection(1);
+              pushNote(
+                note16b,
+                entry3.ghostKeyIndices,
+                entry3.circledXLargeKeyIndices,
+                entry3.accentKeyIndices,
+                entry3.stickingSpec,
+                entry3.globalIdx
+              );
+              s += 4;
+              continue;
+            }
+          }
           // 8ths in x/4: beat is a quarter, pattern: [hit][empty] -> quarter note
           if (notationResolution === 8 && stepsPerBeatN === 2 && subInBeat === 0 && s + 1 < stepsPerBar) {
             if (isStepEmpty(b * stepsPerBar + (s + 1))) {
@@ -18966,7 +19583,12 @@ for (let i = 0; i < notes.length; i++) {
       }
       groupBuckets.forEach((bucket) => {
         if (!bucket.length) return;
-        const beams = Beam.generateBeams(bucket, { groups, stem_direction: 1, beam_rests: false, flat_beams: !!flatBeams });
+        const beams = Beam.generateBeams(bucket, {
+          groups,
+          stem_direction: 1,
+          beam_rests: bucket.some((note) => note?.__dgBeamRest === true),
+          flat_beams: !!flatBeams,
+        });
         beams.forEach((beam) => {
           const beamNotes = (typeof beam.getNotes === "function" ? beam.getNotes() : beam.notes) || [];
           beamNotes.forEach((n) => {
@@ -19018,7 +19640,12 @@ for (let i = 0; i < notes.length; i++) {
               try { n.setBeam?.(null); } catch (_) {}
             });
 
-            const beams = Beam.generateBeams(bucket, { groups, stem_direction: 1, beam_rests: false, flat_beams: true });
+            const beams = Beam.generateBeams(bucket, {
+              groups,
+              stem_direction: 1,
+              beam_rests: bucket.some((note) => note?.__dgBeamRest === true),
+              flat_beams: true,
+            });
             beams.forEach((beam) => {
               try {
                 beam.setContext(ctx);

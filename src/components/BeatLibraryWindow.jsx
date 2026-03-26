@@ -15,6 +15,7 @@ export default function BeatLibraryWindow({
   setLibraryFiltersOpen,
   setIsBeatLibraryOpen,
   beatNameInputRef,
+  beatSaveButtonRef,
   beatNameDraft,
   setBeatNameDraft,
   beatCategoryDraft,
@@ -555,9 +556,7 @@ export default function BeatLibraryWindow({
                     className={`flex w-full items-center gap-2 rounded border px-2 py-1 text-left text-sm ${
                     beatLibraryDropTargetId === "all"
                       ? "border-cyan-400/80 bg-cyan-900/25 text-cyan-50 shadow-[0_0_0_1px_rgba(34,211,238,0.35)]"
-                      : selectedBeatLibraryContainerId === "all" && !suppressRootSelectionHighlight
-                        ? "border-sky-500/70 bg-sky-900/30 text-sky-100"
-                        : "border-neutral-800 bg-neutral-900/40 text-neutral-300 hover:bg-neutral-800/60"
+                      : "border-neutral-800 bg-neutral-900/40 text-neutral-300 hover:bg-neutral-800/60"
                   }`}
                 >
                   <span
@@ -719,9 +718,10 @@ export default function BeatLibraryWindow({
                     className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-sm min-w-[180px] flex-1"
                   />
                   <button
+                    ref={beatSaveButtonRef}
                     type="button"
                     onClick={saveCurrentBeatLocal}
-                    className="px-2.5 py-1 rounded border text-sm border-neutral-700 text-white bg-neutral-800 hover:bg-neutral-700/60"
+                    className="px-2.5 py-1 rounded border text-sm border-neutral-700 text-white bg-neutral-800 hover:bg-neutral-700/60 focus:outline-none focus:border-sky-500/70 focus:bg-sky-900/30 focus:shadow-[0_0_0_1px_rgba(14,165,233,0.35)]"
                     title="Save to local beat library"
                   >
                     Save
