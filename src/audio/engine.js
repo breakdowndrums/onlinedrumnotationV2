@@ -10,7 +10,7 @@ export function makeAudioEngine() {
   let stepQuarterDurations = [];
   let timeSig = { n: 4, d: 4 };
   let metronomeEnabled = false;
-  let metronomeVolume = 0.75;
+  let metronomeVolume = 0.5;
 
   // Scheduler state
   let currentStep = 0;

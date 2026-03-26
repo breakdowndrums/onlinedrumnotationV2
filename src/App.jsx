@@ -2103,6 +2103,7 @@ export default function App() {
   const [showPrefsPlaybackInfo, setShowPrefsPlaybackInfo] = useState(false);
   const [shortcutBindings, setShortcutBindings] = useState(() => shortcutsMapFromStorage());
   const [isEditingAdvancedMenuOpen, setIsEditingAdvancedMenuOpen] = useState(false);
+  const [isLoopAdvancedMenuOpen, setIsLoopAdvancedMenuOpen] = useState(false);
   const [legalTab, setLegalTab] = useState("impressum"); // impressum | privacy
   const [showLegalEmail, setShowLegalEmail] = useState(false);
   const [arrangementBoundaryCompScale, setArrangementBoundaryCompScale] = useState(() => {
@@ -2536,9 +2537,9 @@ export default function App() {
   const [metronomeVolume, setMetronomeVolume] = useState(() => {
     try {
       const raw = Number(window.localStorage.getItem(METRONOME_VOLUME_STORAGE_KEY));
-      return Number.isFinite(raw) ? Math.max(0, Math.min(1, raw)) : 0.3;
+      return Number.isFinite(raw) ? Math.max(0, Math.min(1, raw)) : 0.5;
     } catch (_) {
-      return 0.3;
+      return 0.5;
     }
   });
   const [metronomeCountInEnabled, setMetronomeCountInEnabled] = useState(() => {
@@ -2673,6 +2674,8 @@ export default function App() {
   const transportMenuButtonRef = React.useRef(null);
   const editingAdvancedMenuRef = React.useRef(null);
   const editingAdvancedMenuButtonRef = React.useRef(null);
+  const loopAdvancedMenuRef = React.useRef(null);
+  const loopAdvancedMenuButtonRef = React.useRef(null);
   const beatLibraryPanelRef = React.useRef(null);
   const midiImportInputRef = React.useRef(null);
   const kitOrderListRef = React.useRef(null);
@@ -3463,6 +3466,27 @@ export default function App() {
       document.removeEventListener("keydown", handleKeyDown);
     };
   }, [isEditingAdvancedMenuOpen]);
+  React.useEffect(() => {
+    if (!isLoopAdvancedMenuOpen) return undefined;
+    const handlePointerDown = (event) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      const menu = loopAdvancedMenuRef.current;
+      const button = loopAdvancedMenuButtonRef.current;
+      if (menu instanceof HTMLElement && menu.contains(target)) return;
+      if (button instanceof HTMLElement && button.contains(target)) return;
+      setIsLoopAdvancedMenuOpen(false);
+    };
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") setIsLoopAdvancedMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", handlePointerDown, true);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown, true);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isLoopAdvancedMenuOpen]);
   useEffect(() => {
     try {
       window.localStorage.setItem(PLAYBACK_RATE_STORAGE_KEY, String(playbackRate));
@@ -11257,7 +11281,7 @@ useEffect(() => {
 
   return (
     <div
-      className={`${isEmbedMode ? "min-h-full bg-neutral-900 text-white p-3" : "min-h-screen bg-neutral-900 text-white p-6"}`}
+      className={`${isEmbedMode ? "min-h-full bg-neutral-900 text-white p-3" : "min-h-screen bg-neutral-900 text-white p-6 pb-40 sm:pb-28 md:pb-32"}`}
       onMouseDown={(e) => {
         if (!legacySelectionEnabled && selection) {
           const el = e.target;
@@ -11642,18 +11666,299 @@ useEffect(() => {
                 : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
             }`}
           >
-            Drum Grid
+            Settings
           </button>
-          <button
-            onClick={() => setActiveTab((t) => (t === "selection" ? "none" : "selection"))}
-            className={`touch-none select-none px-3 py-1.5 rounded border text-sm capitalize ${
-              activeTab === "selection"
-                ? "bg-neutral-800 border-neutral-600 text-white"
-                : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
-            }`}
-          >
-            editing
-          </button>
+          <div className="relative">
+            <button
+              onClick={() => setActiveTab((t) => (t === "selection" ? "none" : "selection"))}
+              className={`touch-none select-none px-3 py-1.5 rounded border text-sm capitalize ${
+                activeTab === "selection"
+                  ? "bg-neutral-800 border-neutral-600 text-white"
+                  : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
+              }`}
+            >
+              Tools
+            </button>
+            {activeTab === "selection" && (
+              <div
+                ref={selectionMenuRowRef}
+                className="absolute left-0 top-full z-20 mt-2 min-w-[14.75rem] max-w-[min(100vw-2rem,980px)] rounded-lg border border-neutral-700 bg-neutral-900 p-3 shadow-xl"
+              >
+                <div className="flex flex-col gap-3">
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setStickingEditModeEnabled((v) => {
+                          const next = !v;
+                          if (next) setStickingGuideEnabled(true);
+                          return next;
+                        })
+                      }
+                      className={`w-fit touch-none select-none px-3 py-[5px] rounded border text-sm ${
+                        stickingEditModeEnabled
+                          ? "bg-neutral-800 border-neutral-700 text-white"
+                          : "bg-neutral-900 border-neutral-800 text-neutral-600"
+                      }`}
+                      title="When enabled, clicking active hand-hit cells edits R/L sticking instead of toggling notes"
+                    >
+                      Sticking edit mode
+                    </button>
+                    <div className="relative">
+                      <button
+                        ref={editingAdvancedMenuButtonRef}
+                        type="button"
+                        onClick={() => setIsEditingAdvancedMenuOpen((v) => !v)}
+                        className={`touch-none select-none px-3 py-[5px] rounded border text-sm ${
+                          isEditingAdvancedMenuOpen
+                            ? "bg-neutral-800 border-neutral-700 text-white"
+                            : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
+                        }`}
+                        title="Sticking display options"
+                        aria-label="Sticking display options"
+                      >
+                        ...
+                      </button>
+                      {isEditingAdvancedMenuOpen && (
+                        <div
+                          ref={editingAdvancedMenuRef}
+                          className="absolute left-full top-0 z-30 ml-2 min-w-[10.5rem] rounded-lg border border-neutral-700 bg-neutral-900 p-3 shadow-xl"
+                        >
+                          <div className="flex flex-col gap-3">
+                            <button
+                              type="button"
+                              onClick={() => setShowNotationSticking((v) => !v)}
+                              className={`w-fit whitespace-nowrap touch-none select-none px-3 py-[5px] rounded border text-sm ${
+                                showNotationSticking
+                                  ? "bg-neutral-800 border-neutral-700 text-white"
+                                  : "bg-neutral-900 border-neutral-800 text-neutral-600"
+                              }`}
+                              title="Show inferred sticking (R/L) beneath notes in notation"
+                            >
+                              Show sticking
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setNotationStickingView((v) => (v === "stacked" ? "split-rows" : "stacked"))
+                              }
+                              className={`w-fit whitespace-nowrap touch-none select-none px-3 py-[5px] rounded border text-sm ${
+                                showNotationSticking
+                                  ? "bg-neutral-800 border-neutral-700 text-white"
+                                  : "bg-neutral-900 border-neutral-800 text-neutral-600"
+                              }`}
+                              title="Change sticking display"
+                            >
+                              {notationStickingView === "stacked" ? "Stacked" : "Split rows"}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-neutral-300">Looping</span>
+                    <div className={`flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800 ${!canLoopSelection ? "opacity-40" : ""}`}>
+                      <button
+                        type="button"
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          const order = ["all", "off", "1", "2", "3", "4", "5", "6", "7", "8"];
+                          const stepOnce = () => {
+                            setLoopRepeats((prev) => {
+                              const i = Math.max(0, order.indexOf(String(prev)));
+                              return order[(i - 1 + order.length) % order.length];
+                            });
+                          };
+                          stepOnce();
+                          let interval = null;
+                          let timeout = window.setTimeout(() => {
+                            interval = window.setInterval(stepOnce, 160);
+                          }, 130);
+                          const stop = () => {
+                            if (timeout) window.clearTimeout(timeout);
+                            timeout = null;
+                            if (interval) window.clearInterval(interval);
+                            interval = null;
+                            window.removeEventListener("mouseup", stop);
+                            window.removeEventListener("touchend", stop);
+                            window.removeEventListener("touchcancel", stop);
+                          };
+                          window.addEventListener("mouseup", stop);
+                          window.addEventListener("touchend", stop, { passive: true });
+                          window.addEventListener("touchcancel", stop, { passive: true });
+                        }}
+                        className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                        title="Decrease loop repeats"
+                      >
+                        –
+                      </button>
+
+                      <div
+                        onClick={() => {
+                          setLoopRepeats((prev) => {
+                            if (prev === "all") {
+                              return lastNonAllLoopRepeats.current || "1";
+                            }
+                            return "all";
+                          });
+                        }}
+                        className="min-w-[44px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 cursor-pointer hover:bg-neutral-700/60 border-l border-r border-neutral-700 capitalize"
+                        title="How many times the selection repeats"
+                      >
+                        {loopRepeats}
+                      </div>
+
+                      <button
+                        type="button"
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          const order = ["all", "off", "1", "2", "3", "4", "5", "6", "7", "8"];
+                          const stepOnce = () => {
+                            setLoopRepeats((prev) => {
+                              const i = Math.max(0, order.indexOf(String(prev)));
+                              return order[(i + 1) % order.length];
+                            });
+                          };
+                          stepOnce();
+                          let interval = null;
+                          let timeout = window.setTimeout(() => {
+                            interval = window.setInterval(stepOnce, 160);
+                          }, 130);
+                          const stop = () => {
+                            if (timeout) window.clearTimeout(timeout);
+                            timeout = null;
+                            if (interval) window.clearInterval(interval);
+                            interval = null;
+                            window.removeEventListener("mouseup", stop);
+                            window.removeEventListener("touchend", stop);
+                            window.removeEventListener("touchcancel", stop);
+                          };
+                          window.addEventListener("mouseup", stop);
+                          window.addEventListener("touchend", stop, { passive: true });
+                          window.addEventListener("touchcancel", stop, { passive: true });
+                        }}
+                        className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                        title="Increase loop repeats"
+                      >
+                        +
+                      </button>
+                    </div>
+                    <div className="relative">
+                      <button
+                        ref={loopAdvancedMenuButtonRef}
+                        type="button"
+                        onClick={() => setIsLoopAdvancedMenuOpen((v) => !v)}
+                        className={`touch-none select-none px-3 py-[5px] rounded border text-sm ${
+                          isLoopAdvancedMenuOpen
+                            ? "bg-neutral-800 border-neutral-700 text-white"
+                            : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
+                        }`}
+                        title="Loop overlap options"
+                        aria-label="Loop overlap options"
+                      >
+                        ...
+                      </button>
+                      {isLoopAdvancedMenuOpen && (
+                        <div
+                          ref={loopAdvancedMenuRef}
+                          className="absolute left-full top-0 z-30 ml-2 w-fit rounded-lg border border-neutral-700 bg-neutral-900 p-3 shadow-xl"
+                        >
+                          <div className="flex flex-col gap-3">
+                            <div className="space-y-1">
+                              <span className="text-sm text-neutral-300">Loop overlap</span>
+                              <div className="flex w-fit max-w-full items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setLoopOverlapMode((prev) => {
+                                      const idx = Math.max(0, MOVE_OVERLAP_MODES.findIndex((m) => m.id === prev));
+                                      return MOVE_OVERLAP_MODES[(idx - 1 + MOVE_OVERLAP_MODES.length) % MOVE_OVERLAP_MODES.length].id;
+                                    })
+                                  }
+                                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                                  aria-label="Previous loop overlap mode"
+                                >
+                                  −
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setLoopOverlapMode((prev) => (prev === "all-to-all" ? "active-to-empty" : "all-to-all"))
+                                  }
+                                  className="min-w-[126px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700 hover:bg-neutral-700/50"
+                                  title="Toggle all overwrites"
+                                  aria-label="Toggle loop overlap all overwrites"
+                                >
+                                  {MOVE_OVERLAP_MODES.find((m) => m.id === loopOverlapMode)?.label || "Fill in gaps"}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setLoopOverlapMode((prev) => {
+                                      const idx = Math.max(0, MOVE_OVERLAP_MODES.findIndex((m) => m.id === prev));
+                                      return MOVE_OVERLAP_MODES[(idx + 1) % MOVE_OVERLAP_MODES.length].id;
+                                    })
+                                  }
+                                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                                  aria-label="Next loop overlap mode"
+                                >
+                                  +
+                                </button>
+                              </div>
+                            </div>
+                            <div className="space-y-1">
+                              <span className="text-sm text-neutral-300">Move overlap</span>
+                              <div className="flex w-fit max-w-full items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setMoveOverlapMode((prev) => {
+                                      const idx = Math.max(0, MOVE_OVERLAP_MODES.findIndex((m) => m.id === prev));
+                                      return MOVE_OVERLAP_MODES[(idx - 1 + MOVE_OVERLAP_MODES.length) % MOVE_OVERLAP_MODES.length].id;
+                                    })
+                                  }
+                                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                                  aria-label="Previous move overlap mode"
+                                >
+                                  −
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setMoveOverlapMode((prev) => (prev === "all-to-all" ? "active-to-empty" : "all-to-all"))
+                                  }
+                                  className="min-w-[126px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700 hover:bg-neutral-700/50"
+                                  title="Toggle all overwrites"
+                                  aria-label="Toggle move overlap all overwrites"
+                                >
+                                  {MOVE_OVERLAP_MODES.find((m) => m.id === moveOverlapMode)?.label || "All overrides all"}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setMoveOverlapMode((prev) => {
+                                      const idx = Math.max(0, MOVE_OVERLAP_MODES.findIndex((m) => m.id === prev));
+                                      return MOVE_OVERLAP_MODES[(idx + 1) % MOVE_OVERLAP_MODES.length].id;
+                                    })
+                                  }
+                                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                                  aria-label="Next move overlap mode"
+                                >
+                                  +
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
           {playabilityWarningsEnabled && playabilityWarningSteps.length > 0 && (
             <span className="text-[11px] text-red-500 whitespace-nowrap">
               {playabilityWarningSteps.length} playability warning{playabilityWarningSteps.length === 1 ? "" : "s"}
@@ -11839,268 +12144,6 @@ useEffect(() => {
           )}
         </div>
 
-        {activeTab === "selection" && (
-          <div ref={selectionMenuRowRef} className="flex flex-wrap items-center gap-4">
-            <button
-              type="button"
-              onClick={() =>
-                setStickingEditModeEnabled((v) => {
-                  const next = !v;
-                  if (next) setStickingGuideEnabled(true);
-                  return next;
-                })
-              }
-              className={`touch-none select-none px-3 py-[5px] rounded border text-sm ${
-                stickingEditModeEnabled
-                  ? "bg-neutral-800 border-neutral-700 text-white"
-                  : "bg-neutral-900 border-neutral-800 text-neutral-600"
-              }`}
-              title="When enabled, clicking active hand-hit cells edits R/L sticking instead of toggling notes"
-            >
-              Sticking edit mode
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowNotationSticking((v) => !v)}
-              className={`touch-none select-none px-3 py-[5px] rounded border text-sm ${
-                showNotationSticking
-                  ? "bg-neutral-800 border-neutral-700 text-white"
-                  : "bg-neutral-900 border-neutral-800 text-neutral-600"
-              }`}
-              title="Show inferred sticking (R/L) beneath notes in notation"
-            >
-              Show sticking
-            </button>
-            <button
-              type="button"
-              onClick={() =>
-                setNotationStickingView((v) => (v === "stacked" ? "split-rows" : "stacked"))
-              }
-              className={`touch-none select-none px-3 py-[5px] rounded border text-sm ${
-                showNotationSticking
-                  ? "bg-neutral-800 border-neutral-700 text-white"
-                  : "bg-neutral-900 border-neutral-800 text-neutral-600"
-              }`}
-              title="Change sticking display"
-            >
-              {notationStickingView === "stacked" ? "Stacked" : "Split rows"}
-            </button>
-
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-neutral-300">Looping</span>
-
-              <div className={`flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800 ${!canLoopSelection ? "opacity-40" : ""}`}>
-                <button
-                  type="button"
-                  onMouseDown={(e) => {
-                    // match other steppers: single step on click, rapid after 130ms hold
-                    e.preventDefault();
-                    const order = ["all", "off", "1", "2", "3", "4", "5", "6", "7", "8"];
-                    const stepOnce = () => {
-                      setLoopRepeats((prev) => {
-                        const i = Math.max(0, order.indexOf(String(prev)));
-                        return order[(i - 1 + order.length) % order.length];
-                      });
-                    };
-                    stepOnce();
-                    let interval = null;
-                    let timeout = window.setTimeout(() => {
-                      interval = window.setInterval(stepOnce, 160);
-                    }, 130);
-                    const stop = () => {
-                      if (timeout) window.clearTimeout(timeout);
-                      timeout = null;
-                      if (interval) window.clearInterval(interval);
-                      interval = null;
-                      window.removeEventListener("mouseup", stop);
-                      window.removeEventListener("touchend", stop);
-                      window.removeEventListener("touchcancel", stop);
-                    };
-                    window.addEventListener("mouseup", stop);
-                    window.addEventListener("touchend", stop, { passive: true });
-                    window.addEventListener("touchcancel", stop, { passive: true });
-                  }}
-                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                  title="Decrease loop repeats"
-                >
-                  –
-                </button>
-
-                <div
-                  onClick={() => {
-                    setLoopRepeats((prev) => {
-                      if (prev === "all") {
-                        return lastNonAllLoopRepeats.current || "1";
-                      }
-                      return "all";
-                    });
-                  }}
-                  className="min-w-[44px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 cursor-pointer hover:bg-neutral-700/60 border-l border-r border-neutral-700 capitalize"
-                  title="How many times the selection repeats"
-                >
-                  {loopRepeats}
-                </div>
-
-                <button
-                  type="button"
-                  onMouseDown={(e) => {
-                    e.preventDefault();
-                    const order = ["all", "off", "1", "2", "3", "4", "5", "6", "7", "8"];
-                    const stepOnce = () => {
-                      setLoopRepeats((prev) => {
-                        const i = Math.max(0, order.indexOf(String(prev)));
-                        return order[(i + 1) % order.length];
-                      });
-                    };
-                    stepOnce();
-                    let interval = null;
-                    let timeout = window.setTimeout(() => {
-                      interval = window.setInterval(stepOnce, 160);
-                    }, 130);
-                    const stop = () => {
-                      if (timeout) window.clearTimeout(timeout);
-                      timeout = null;
-                      if (interval) window.clearInterval(interval);
-                      interval = null;
-                      window.removeEventListener("mouseup", stop);
-                      window.removeEventListener("touchend", stop);
-                      window.removeEventListener("touchcancel", stop);
-                    };
-                    window.addEventListener("mouseup", stop);
-                    window.addEventListener("touchend", stop, { passive: true });
-                    window.addEventListener("touchcancel", stop, { passive: true });
-                  }}
-                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                  title="Increase loop repeats"
-                >
-                  +
-                </button>
-              </div>
-            </div>
-            <div className="relative">
-              <button
-                ref={editingAdvancedMenuButtonRef}
-                type="button"
-                onClick={() => setIsEditingAdvancedMenuOpen((v) => !v)}
-                className={`touch-none select-none px-3 py-[5px] rounded border text-sm ${
-                  isEditingAdvancedMenuOpen
-                    ? "bg-neutral-800 border-neutral-700 text-white"
-                    : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
-                }`}
-                title="Advanced editing options"
-                aria-label="Advanced editing options"
-              >
-                ...
-              </button>
-              {isEditingAdvancedMenuOpen && (
-                <div
-                  ref={editingAdvancedMenuRef}
-                  className="absolute right-0 top-full z-20 mt-2 w-fit max-w-[340px] rounded-lg border border-neutral-700 bg-neutral-900 p-3 shadow-xl"
-                >
-                  <div className="space-y-3">
-                    <div className="space-y-1">
-                      <span className="text-sm text-neutral-300">Loop overlap</span>
-                      <div className="flex w-fit max-w-full items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setLoopOverlapMode((prev) => {
-                              const idx = Math.max(0, MOVE_OVERLAP_MODES.findIndex((m) => m.id === prev));
-                              return MOVE_OVERLAP_MODES[(idx - 1 + MOVE_OVERLAP_MODES.length) % MOVE_OVERLAP_MODES.length].id;
-                            })
-                          }
-                          className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                          aria-label="Previous loop overlap mode"
-                        >
-                          −
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setLoopOverlapMode((prev) => (prev === "all-to-all" ? "active-to-empty" : "all-to-all"))
-                          }
-                          className="min-w-[126px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700 hover:bg-neutral-700/50"
-                          title="Toggle all overwrites"
-                          aria-label="Toggle loop overlap all overwrites"
-                        >
-                          {MOVE_OVERLAP_MODES.find((m) => m.id === loopOverlapMode)?.label || "Fill in gaps"}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setLoopOverlapMode((prev) => {
-                              const idx = Math.max(0, MOVE_OVERLAP_MODES.findIndex((m) => m.id === prev));
-                              return MOVE_OVERLAP_MODES[(idx + 1) % MOVE_OVERLAP_MODES.length].id;
-                            })
-                          }
-                          className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                          aria-label="Next loop overlap mode"
-                        >
-                          +
-                        </button>
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setLoopRespectPlayability((v) => !v)}
-                      className={`w-fit max-w-full touch-none select-none px-3 py-[5px] rounded border text-sm ${
-                        loopRespectPlayability
-                          ? "bg-neutral-800 border-neutral-700 text-white"
-                          : "bg-neutral-900 border-neutral-800 text-neutral-600"
-                      }`}
-                      title="Skip looped hand hits where they would create an unplayable overlap"
-                    >
-                      Respect playability
-                    </button>
-                    <div className="space-y-1">
-                      <span className="text-sm text-neutral-300">Move overlap</span>
-                      <div className="flex w-fit max-w-full items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setMoveOverlapMode((prev) => {
-                              const idx = Math.max(0, MOVE_OVERLAP_MODES.findIndex((m) => m.id === prev));
-                              return MOVE_OVERLAP_MODES[(idx - 1 + MOVE_OVERLAP_MODES.length) % MOVE_OVERLAP_MODES.length].id;
-                            })
-                          }
-                          className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                          aria-label="Previous move overlap mode"
-                        >
-                          −
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setMoveOverlapMode((prev) => (prev === "all-to-all" ? "active-to-empty" : "all-to-all"))
-                          }
-                          className="min-w-[126px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700 hover:bg-neutral-700/50"
-                          title="Toggle all overwrites"
-                          aria-label="Toggle move overlap all overwrites"
-                        >
-                          {MOVE_OVERLAP_MODES.find((m) => m.id === moveOverlapMode)?.label || "All overrides all"}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setMoveOverlapMode((prev) => {
-                              const idx = Math.max(0, MOVE_OVERLAP_MODES.findIndex((m) => m.id === prev));
-                              return MOVE_OVERLAP_MODES[(idx + 1) % MOVE_OVERLAP_MODES.length].id;
-                            })
-                          }
-                          className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                          aria-label="Next move overlap mode"
-                        >
-                          +
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
       </header>
 
 
@@ -12112,10 +12155,10 @@ useEffect(() => {
             ? "mt-0"
             : `mt-6 ${
                 layout === "grid-right"
-                  ? "grid grid-cols-1 xl:grid-cols-[auto_1fr] gap-6"
+                  ? "grid grid-cols-1 xl:grid-cols-[auto_1fr] gap-6 pb-20 sm:pb-12 md:pb-16"
                   : layout === "notation-right"
-                    ? "grid grid-cols-1 xl:grid-cols-[1fr_auto] gap-6"
-                    : "flex flex-col gap-6 items-start"
+                    ? "grid grid-cols-1 xl:grid-cols-[1fr_auto] gap-6 pb-20 sm:pb-12 md:pb-16"
+                    : "flex flex-col gap-6 items-start pb-20 sm:pb-12 md:pb-16"
               }`
         }`}
       >
@@ -12275,10 +12318,68 @@ useEffect(() => {
 
       <footer className={`${isEmbedMode ? "hidden" : "mt-6 pt-1"}`} data-loopui='1'>
         <div className="flex justify-end" />
+        {!isEmbedMode && (
+          <div className="mt-6 flex flex-wrap items-center justify-center gap-2 text-xs text-neutral-500 md:hidden">
+            <a
+              href="/how-to-write-drum-notation.html"
+              className="hover:text-neutral-300 underline underline-offset-2"
+              title="How to write drum notation"
+            >
+              Guide
+            </a>
+            <span className="text-neutral-700">·</span>
+            <a
+              href="/drum-notation-cheat-sheet.html"
+              className="hover:text-neutral-300 underline underline-offset-2"
+              title="Drum notation cheat sheet"
+            >
+              Cheat Sheet
+            </a>
+            <span className="text-neutral-700">·</span>
+            <a
+              href="/drum-groove-notation-examples.html"
+              className="hover:text-neutral-300 underline underline-offset-2"
+              title="Drum groove notation examples"
+            >
+              Examples
+            </a>
+            <span className="text-neutral-700">·</span>
+            <button
+              type="button"
+              onClick={() => {
+                setLegalTab("impressum");
+                setIsLegalDialogOpen(true);
+              }}
+              className="text-xs text-neutral-500 hover:text-neutral-300 underline underline-offset-2"
+              title="Legal information"
+            >
+              Legal
+            </button>
+            <span className="text-neutral-700">·</span>
+            <button
+              type="button"
+              onClick={() => setIsPreferencesDialogOpen(true)}
+              className="text-xs text-neutral-500 hover:text-neutral-300 underline underline-offset-2"
+              title="Preferences"
+            >
+              Preferences
+            </button>
+            <span className="text-neutral-700">·</span>
+            <a
+              href="https://buymeacoffee.com/onlinedrumnotation"
+              target="_blank"
+              rel="noreferrer"
+              className="hover:text-neutral-300 underline underline-offset-2"
+              title="Buy me a coffee"
+            >
+              Buy me a coffee
+            </a>
+          </div>
+        )}
       </footer>
       {!isEmbedMode &&
         createPortal(
-          <div className="fixed bottom-4 left-1/2 z-[83] -translate-x-1/2">
+          <div className="fixed bottom-4 left-1/2 z-[83] hidden -translate-x-1/2 md:block">
             <div className="flex flex-wrap items-center justify-center gap-2 text-xs text-neutral-500">
               <a
                 href="/how-to-write-drum-notation.html"
@@ -15785,9 +15886,11 @@ useEffect(() => {
               <button
                 type="button"
                 onClick={() => setIsPreferencesDialogOpen(false)}
-                className="px-2 py-1 rounded border border-neutral-700 text-xs text-neutral-300 hover:bg-neutral-800/60"
+                className="px-2.5 py-1 rounded border border-neutral-700 text-sm text-neutral-300 hover:bg-neutral-800/60"
+                title="Close preferences"
+                aria-label="Close preferences"
               >
-                Close
+                ×
               </button>
             </div>
             <div className="mt-4 grid grid-cols-[8.5rem_minmax(0,1fr)] gap-0 rounded border border-neutral-700 overflow-hidden">
@@ -16079,6 +16182,18 @@ useEffect(() => {
                         title="Warn when more than two hand hits occur at the same time"
                       >
                         Playability warnings
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setLoopRespectPlayability((v) => !v)}
+                        className={`touch-none select-none px-3 py-[5px] rounded border text-sm ${
+                          loopRespectPlayability
+                            ? "bg-neutral-800 border-neutral-700 text-white"
+                            : "bg-neutral-900 border-neutral-800 text-neutral-600"
+                        }`}
+                        title="Skip looped hand hits where they would create an unplayable overlap"
+                      >
+                        Loop respect playability
                       </button>
                     </div>
                     <div className="my-3 border-t border-neutral-800" />
