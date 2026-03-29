@@ -4292,6 +4292,11 @@ export default function App() {
   const clampBpm = (n) => Math.min(400, Math.max(20, n));
   const stepBpm = (delta) => setBpm((v) => clampBpm(v + delta));
   const tapTempoTimesRef = React.useRef([]);
+  const roundTempoForImport = React.useCallback((n) => {
+    const numeric = Number(n);
+    if (!Number.isFinite(numeric)) return 120;
+    return Math.round(clampBpm(numeric) * 10) / 10;
+  }, [clampBpm]);
   const handleTapTempo = React.useCallback(() => {
     const now = performance.now();
     const prev = tapTempoTimesRef.current;
@@ -4310,6 +4315,7 @@ export default function App() {
   }, []);
 
   const bpmRepeatRef = React.useRef({ timer: null, interval: null });
+  const midiTempoMultiplierRepeatRef = React.useRef({ timer: null, interval: null });
   const bpmScrubRef = React.useRef({
     active: false,
     dragging: false,
@@ -8437,16 +8443,45 @@ useEffect(() => {
     arrangementComposerDraft,
     bpm,
   ]);
-  const buildPreparedImportedMidiResult = React.useCallback((imported, bpmOverride = null) => {
+  const applyImportedMidiTempoMultiplier = React.useCallback((sourceImported, rawMultiplier = 1) => {
+    const safeMultiplier = Math.max(0.25, Math.min(4, Number(rawMultiplier) || 1));
+    if (!sourceImported || Math.abs(safeMultiplier - 1) < 0.0001 || !sourceImported?.hasTempo) {
+      return sourceImported;
+    }
+    const scaleBpm = (value) => {
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric)) return value;
+      return roundTempoForImport(numeric * safeMultiplier);
+    };
+    return sourceImported.kind === "arrangement"
+      ? {
+          ...sourceImported,
+          sections: (sourceImported.sections || []).map((section) => ({
+            ...section,
+            bpm: scaleBpm(section?.bpm),
+            payload: section?.payload
+              ? { ...section.payload, bpm: scaleBpm(section?.payload?.bpm ?? section?.bpm) }
+              : section.payload,
+          })),
+        }
+      : {
+          ...sourceImported,
+          payload: sourceImported?.payload
+            ? { ...sourceImported.payload, bpm: scaleBpm(sourceImported?.payload?.bpm) }
+            : sourceImported.payload,
+        };
+  }, [roundTempoForImport]);
+  const buildPreparedImportedMidiResult = React.useCallback((imported, bpmOverride = null, tempoMultiplier = 1) => {
+    const scaledImported = applyImportedMidiTempoMultiplier(imported, tempoMultiplier);
     const overrideBpm = bpmOverride != null && Number.isFinite(Number(bpmOverride))
       ? clampBpm(Math.round(Number(bpmOverride)))
       : null;
     return overrideBpm == null
-      ? imported
-      : imported.kind === "arrangement"
+      ? scaledImported
+      : scaledImported.kind === "arrangement"
         ? {
-            ...imported,
-            sections: (imported.sections || []).map((section) => ({
+            ...scaledImported,
+            sections: (scaledImported.sections || []).map((section) => ({
               ...section,
               bpm: overrideBpm,
               payload: section?.payload
@@ -8455,28 +8490,76 @@ useEffect(() => {
             })),
           }
         : {
-            ...imported,
-            payload: imported?.payload
-              ? { ...imported.payload, bpm: overrideBpm }
-              : imported.payload,
+            ...scaledImported,
+            payload: scaledImported?.payload
+              ? { ...scaledImported.payload, bpm: overrideBpm }
+              : scaledImported.payload,
           };
-  }, [clampBpm]);
-  const getSuggestedImportedMidiBpm = React.useCallback((imported, fallbackBpm) => {
+  }, [applyImportedMidiTempoMultiplier, clampBpm]);
+  const getSuggestedImportedMidiBpm = React.useCallback((imported, fallbackBpm, tempoMultiplier = 1) => {
+    const scaledImported = applyImportedMidiTempoMultiplier(imported, tempoMultiplier);
     const candidate =
-      imported?.kind === "arrangement"
-        ? Number(imported?.sections?.[0]?.bpm ?? imported?.sections?.[0]?.payload?.bpm)
-        : Number(imported?.payload?.bpm);
+      scaledImported?.kind === "arrangement"
+        ? Number(scaledImported?.sections?.[0]?.bpm ?? scaledImported?.sections?.[0]?.payload?.bpm)
+        : Number(scaledImported?.payload?.bpm);
     if (Number.isFinite(candidate) && candidate >= 20 && candidate <= 400) {
-      return clampBpm(Math.round(candidate));
+      return roundTempoForImport(candidate);
     }
-    return clampBpm(Math.round(Number(fallbackBpm) || 120));
-  }, [clampBpm]);
-  const getImportedMidiBpmOverride = React.useCallback((imported, requestedBpm, fallbackBpm) => {
-    const nextBpm = clampBpm(Math.round(Number(requestedBpm) || fallbackBpm || 120));
+    return roundTempoForImport(Number(fallbackBpm) || 120);
+  }, [applyImportedMidiTempoMultiplier, roundTempoForImport]);
+  const getImportedMidiBpmOverride = React.useCallback((imported, requestedBpm, fallbackBpm, tempoMultiplier = 1) => {
+    const nextBpm = roundTempoForImport(Number(requestedBpm) || fallbackBpm || 120);
     if (!imported?.hasTempo) return nextBpm;
-    const suggestedBpm = getSuggestedImportedMidiBpm(imported, fallbackBpm);
+    const suggestedBpm = getSuggestedImportedMidiBpm(imported, fallbackBpm, tempoMultiplier);
     return nextBpm === suggestedBpm ? null : nextBpm;
-  }, [clampBpm, getSuggestedImportedMidiBpm]);
+  }, [getSuggestedImportedMidiBpm, roundTempoForImport]);
+  const updatePendingMidiTempoMultiplier = React.useCallback((delta) => {
+    setPendingMidiTempoPrompt((prev) => {
+      if (!prev) return prev;
+      const prevMultiplier = Math.max(0.25, Math.min(4, Number(prev.tempoMultiplier) || 1));
+      const nextMultiplier = Math.max(0.25, Math.min(4, Math.round((prevMultiplier + delta) * 100) / 100));
+      const prevSuggested = getSuggestedImportedMidiBpm(prev.imported, bpm, prevMultiplier);
+      const nextSuggested = getSuggestedImportedMidiBpm(prev.imported, bpm, nextMultiplier);
+      const prevBpmValue = roundTempoForImport(Number(prev.bpm) || prevSuggested || bpm);
+      return {
+        ...prev,
+        tempoMultiplier: nextMultiplier,
+        bpm: Math.abs(prevBpmValue - prevSuggested) < 0.001 ? nextSuggested : prev.bpm,
+      };
+    });
+  }, [bpm, getSuggestedImportedMidiBpm, roundTempoForImport]);
+  const resetPendingMidiTempoMultiplier = React.useCallback(() => {
+    setPendingMidiTempoPrompt((prev) => {
+      if (!prev) return prev;
+      const prevMultiplier = Math.max(0.25, Math.min(4, Number(prev.tempoMultiplier) || 1));
+      const prevSuggested = getSuggestedImportedMidiBpm(prev.imported, bpm, prevMultiplier);
+      const nextSuggested = getSuggestedImportedMidiBpm(prev.imported, bpm, 1);
+      const prevBpmValue = roundTempoForImport(Number(prev.bpm) || prevSuggested || bpm);
+      return {
+        ...prev,
+        tempoMultiplier: 1,
+        bpm: Math.abs(prevBpmValue - prevSuggested) < 0.001 ? nextSuggested : prev.bpm,
+      };
+    });
+  }, [bpm, getSuggestedImportedMidiBpm, roundTempoForImport]);
+  const stopMidiTempoMultiplierRepeat = React.useCallback(() => {
+    const r = midiTempoMultiplierRepeatRef.current;
+    if (r.timer) window.clearTimeout(r.timer);
+    if (r.interval) window.clearInterval(r.interval);
+    r.timer = null;
+    r.interval = null;
+  }, []);
+  const startMidiTempoMultiplierRepeat = React.useCallback((delta) => {
+    stopMidiTempoMultiplierRepeat();
+    updatePendingMidiTempoMultiplier(delta);
+    midiTempoMultiplierRepeatRef.current.timer = window.setTimeout(() => {
+      midiTempoMultiplierRepeatRef.current.interval = window.setInterval(
+        () => updatePendingMidiTempoMultiplier(delta),
+        50
+      );
+    }, 130);
+  }, [stopMidiTempoMultiplierRepeat, updatePendingMidiTempoMultiplier]);
+  useEffect(() => () => stopMidiTempoMultiplierRepeat(), [stopMidiTempoMultiplierRepeat]);
   const clearMidiImportPreviewSession = React.useCallback(() => {
     midiImportPreviewSnapshotRef.current = null;
     midiImportPreviewKeyRef.current = "";
@@ -8661,7 +8744,7 @@ useEffect(() => {
       }));
     } else {
       if (Number.isFinite(Number(preparedImported?.payload?.bpm))) {
-        const importedBpm = Math.max(20, Math.min(400, Math.round(Number(preparedImported.payload.bpm))));
+        const importedBpm = roundTempoForImport(preparedImported.payload.bpm);
         setBpm(importedBpm);
         setBpmDraft(String(importedBpm));
       }
@@ -8701,7 +8784,7 @@ useEffect(() => {
     setPendingMidiImportMapping(null);
     setPendingMidiTempoPrompt(null);
     setIsShareActionsDialogOpen(false);
-  }, [buildPreparedImportedMidiResult, clearMidiImportPreviewSession, lastMidiImportSession, midiImportSplitBars, pushLocalBeatHistory, savedArrangements, setArrangementItemsWithUndo]);
+  }, [buildPreparedImportedMidiResult, clearMidiImportPreviewSession, lastMidiImportSession, midiImportSplitBars, pushLocalBeatHistory, roundTempoForImport, savedArrangements, setArrangementItemsWithUndo]);
   const buildPendingMidiImportMappingState = React.useCallback((session, imported) => {
     const assignments = {};
     const velocityModes = {};
@@ -8858,12 +8941,10 @@ useEffect(() => {
       return;
     }
     if (pendingMidiImportMapping.applyMode === "update-last") {
-      const nextBpm = clampBpm(
-        Math.round(
-          Number(pendingMidiImportMapping.bpm) ||
-            Number(lastMidiImportSession?.bpm) ||
-            getSuggestedImportedMidiBpm(imported, bpm)
-        )
+      const nextBpm = roundTempoForImport(
+        Number(pendingMidiImportMapping.bpm) ||
+          Number(lastMidiImportSession?.bpm) ||
+          getSuggestedImportedMidiBpm(imported, bpm)
       );
       setLastMidiImportSession((prev) => ({
         ...(prev || {}),
@@ -8927,7 +9008,8 @@ useEffect(() => {
           fileName: pendingMidiImportMapping.fileName,
           lastModified: pendingMidiImportMapping.lastModified || "",
         },
-      bpm: getSuggestedImportedMidiBpm(imported, bpm),
+      tempoMultiplier: 1,
+      bpm: getSuggestedImportedMidiBpm(imported, bpm, 1),
     });
   }, [
     applyImportedMidiResult,
@@ -8941,25 +9023,29 @@ useEffect(() => {
   ]);
   const confirmPendingMidiTempoPrompt = React.useCallback(() => {
     if (!pendingMidiTempoPrompt?.imported) return;
-    const nextBpm = clampBpm(Math.round(Number(pendingMidiTempoPrompt.bpm) || bpm));
+    const nextBpm = roundTempoForImport(Number(pendingMidiTempoPrompt.bpm) || bpm);
     const bpmOverride = getImportedMidiBpmOverride(
       pendingMidiTempoPrompt.imported,
       pendingMidiTempoPrompt.bpm,
-      bpm
+      bpm,
+      pendingMidiTempoPrompt.tempoMultiplier
     );
     const importedForApply =
-      pendingMidiTempoPrompt.imported.kind === "arrangement"
-        ? importDrumMidi({
-            arrayBuffer: pendingMidiTempoPrompt.arrayBuffer,
-            instruments: ALL_INSTRUMENTS,
-            arrangementSplitBars:
-              Math.max(1, Math.min(8, Math.round(Number(pendingMidiTempoPrompt.splitBars) || midiImportSplitBars))),
-            noteAssignments: pendingMidiTempoPrompt.noteAssignments || {},
-            noteVelocityModes: pendingMidiTempoPrompt.noteVelocityModes || {},
-            timingShiftSixteenths: pendingMidiTempoPrompt.timingShiftSixteenths || 0,
-            velocityThresholds: midiImportVelocityThresholds,
-          })
-        : pendingMidiTempoPrompt.imported;
+      applyImportedMidiTempoMultiplier(
+        pendingMidiTempoPrompt.imported.kind === "arrangement"
+          ? importDrumMidi({
+              arrayBuffer: pendingMidiTempoPrompt.arrayBuffer,
+              instruments: ALL_INSTRUMENTS,
+              arrangementSplitBars:
+                Math.max(1, Math.min(8, Math.round(Number(pendingMidiTempoPrompt.splitBars) || midiImportSplitBars))),
+              noteAssignments: pendingMidiTempoPrompt.noteAssignments || {},
+              noteVelocityModes: pendingMidiTempoPrompt.noteVelocityModes || {},
+              timingShiftSixteenths: pendingMidiTempoPrompt.timingShiftSixteenths || 0,
+              velocityThresholds: midiImportVelocityThresholds,
+            })
+          : pendingMidiTempoPrompt.imported,
+        pendingMidiTempoPrompt.tempoMultiplier
+      );
     if (importedForApply.kind === "needs-mapping") return;
     setLastMidiImportSession({
       arrayBuffer: pendingMidiTempoPrompt.arrayBuffer,
@@ -8973,6 +9059,7 @@ useEffect(() => {
       splitBars:
         Math.max(1, Math.min(8, Math.round(Number(pendingMidiTempoPrompt.splitBars) || midiImportSplitBars))),
       timingShiftSixteenths: pendingMidiTempoPrompt.timingShiftSixteenths || 0,
+      tempoMultiplier: Math.max(0.25, Math.min(4, Number(pendingMidiTempoPrompt.tempoMultiplier) || 1)),
       bpm: nextBpm,
       noteAssignments: pendingMidiTempoPrompt.noteAssignments || {},
       noteVelocityModes: pendingMidiTempoPrompt.noteVelocityModes || {},
@@ -8991,6 +9078,7 @@ useEffect(() => {
       composer: importedForApply.composer || "",
       splitBars:
         Math.max(1, Math.min(8, Math.round(Number(pendingMidiTempoPrompt.splitBars) || midiImportSplitBars))),
+      tempoMultiplier: Math.max(0.25, Math.min(4, Number(pendingMidiTempoPrompt.tempoMultiplier) || 1)),
       bpm: nextBpm,
       noteAssignments: pendingMidiTempoPrompt.noteAssignments || {},
       noteVelocityModes: pendingMidiTempoPrompt.noteVelocityModes || {},
@@ -9022,6 +9110,7 @@ useEffect(() => {
     midiImportSplitBars,
     midiImportVelocityThresholds,
     pendingMidiTempoPrompt,
+    applyImportedMidiTempoMultiplier,
   ]);
   const pendingMidiImportVelocityRanges = React.useMemo(() => {
     const arrayBuffer = pendingMidiImportMapping?.arrayBuffer || pendingMidiTempoPrompt?.arrayBuffer;
@@ -11255,7 +11344,13 @@ useEffect(() => {
           noteAssignments: tempoPending.noteAssignments || {},
           noteVelocityModes: tempoPending.noteVelocityModes || {},
           timingShiftSixteenths: tempoPending.timingShiftSixteenths || 0,
-          bpmOverride: getImportedMidiBpmOverride(tempoPending.imported, tempoPending.bpm, bpm),
+          tempoMultiplier: Math.max(0.25, Math.min(4, Number(tempoPending.tempoMultiplier) || 1)),
+          bpmOverride: getImportedMidiBpmOverride(
+            tempoPending.imported,
+            tempoPending.bpm,
+            bpm,
+            tempoPending.tempoMultiplier
+          ),
         }
       : mappingPending?.arrayBuffer
         ? {
@@ -11315,7 +11410,11 @@ useEffect(() => {
       restoreMidiImportPreviewSnapshot();
       return;
     }
-    const preparedImported = buildPreparedImportedMidiResult(imported, previewSource.bpmOverride);
+    const preparedImported = buildPreparedImportedMidiResult(
+      imported,
+      previewSource.bpmOverride,
+      previewSource.tempoMultiplier || 1
+    );
     let previewPayload =
       preparedImported.kind === "arrangement"
         ? preparedImported.sections?.[0]?.payload
@@ -13265,19 +13364,6 @@ useEffect(() => {
             </button>
             {hasSupabaseEnabled && (
               <>
-                {isAdminUser ? (
-                  <span className="hidden md:inline-block rounded border border-amber-700/60 bg-amber-950/30 px-2 py-1 text-[11px] text-amber-200">
-                    Admin
-                  </span>
-                ) : null}
-                {authUserEmail ? (
-                  <span
-                    className="hidden md:inline-block max-w-[170px] truncate text-xs text-neutral-500"
-                    title={authUserEmail}
-                  >
-                    {authUserEmail}
-                  </span>
-                ) : null}
                 <button
                   type="button"
                   onClick={authUser ? handleSignOut : openAuthDialog}
@@ -13292,6 +13378,19 @@ useEffect(() => {
                 >
                   {authPending ? "…" : <UserIcon />}
                 </button>
+                {isAdminUser ? (
+                  <span className="hidden md:inline-block rounded border border-amber-700/60 bg-amber-950/30 px-2 py-1 text-[11px] text-amber-200">
+                    Admin
+                  </span>
+                ) : null}
+                {authUserEmail ? (
+                  <span
+                    className="hidden md:inline-block max-w-[170px] truncate text-xs text-neutral-500"
+                    title={authUserEmail}
+                  >
+                    {authUserEmail}
+                  </span>
+                ) : null}
               </>
             )}
           </div>
@@ -17093,6 +17192,7 @@ useEffect(() => {
                 inputMode="numeric"
                 min={20}
                 max={400}
+                step={0.1}
                 value={pendingMidiTempoPrompt.bpm}
                 onChange={(e) =>
                   setPendingMidiTempoPrompt((prev) => (
@@ -17112,6 +17212,69 @@ useEffect(() => {
                 className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1.5 text-sm text-white"
               />
             </label>
+            {pendingMidiTempoPrompt.imported?.hasTempo && (
+              <div className="mt-4 flex items-center justify-between gap-3">
+                <span className="text-sm text-neutral-300">Multiplier</span>
+                <div className="text-right">
+                  <div className="mb-1 text-[11px] text-neutral-500 tabular-nums">
+                    {`${getSuggestedImportedMidiBpm(
+                      pendingMidiTempoPrompt.imported,
+                      bpm,
+                      pendingMidiTempoPrompt.tempoMultiplier || 1
+                    )} BPM`}
+                  </div>
+                  <div
+                    className={`flex items-stretch overflow-hidden rounded-md border ${
+                      Math.abs((Number(pendingMidiTempoPrompt.tempoMultiplier) || 1) - 1) < 0.001
+                        ? "border-neutral-800 bg-neutral-900/60"
+                        : "border-neutral-700 bg-neutral-800"
+                    }`}
+                  >
+                    <button
+                      type="button"
+                      onPointerDown={() => startMidiTempoMultiplierRepeat(-0.05)}
+                      onPointerUp={stopMidiTempoMultiplierRepeat}
+                      onPointerCancel={stopMidiTempoMultiplierRepeat}
+                      onPointerLeave={stopMidiTempoMultiplierRepeat}
+                      className={`px-1.5 text-sm leading-none ${
+                        Math.abs((Number(pendingMidiTempoPrompt.tempoMultiplier) || 1) - 1) < 0.001
+                          ? "text-neutral-500 hover:bg-neutral-800/40"
+                          : "text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                      }`}
+                      aria-label="Decrease MIDI tempo multiplier"
+                    >
+                      −
+                    </button>
+                    <button
+                      type="button"
+                      onClick={resetPendingMidiTempoMultiplier}
+                      className={`min-w-[56px] border-l border-r px-2 py-1 text-center text-xs tabular-nums ${
+                        Math.abs((Number(pendingMidiTempoPrompt.tempoMultiplier) || 1) - 1) < 0.001
+                          ? "text-neutral-500 border-neutral-800 bg-neutral-900/60 hover:bg-neutral-800/40"
+                          : "text-white border-neutral-700 bg-neutral-800 hover:bg-neutral-700/40"
+                      } touch-none select-none`}
+                    >
+                      {`x${(Number(pendingMidiTempoPrompt.tempoMultiplier) || 1).toFixed(2).replace(/\.?0+$/, "")}`}
+                    </button>
+                    <button
+                      type="button"
+                      onPointerDown={() => startMidiTempoMultiplierRepeat(0.05)}
+                      onPointerUp={stopMidiTempoMultiplierRepeat}
+                      onPointerCancel={stopMidiTempoMultiplierRepeat}
+                      onPointerLeave={stopMidiTempoMultiplierRepeat}
+                      className={`px-1.5 text-sm leading-none ${
+                        Math.abs((Number(pendingMidiTempoPrompt.tempoMultiplier) || 1) - 1) < 0.001
+                          ? "text-neutral-500 hover:bg-neutral-800/40"
+                          : "text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                      }`}
+                      aria-label="Increase MIDI tempo multiplier"
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
             <div className="mt-4 flex flex-wrap items-center gap-3">
               <span className="text-sm text-neutral-300">Shift</span>
               <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">

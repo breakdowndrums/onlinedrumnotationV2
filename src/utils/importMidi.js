@@ -683,7 +683,7 @@ export function importDrumMidi({
             (data[2] || 0);
           tempos.push({
             tick,
-            bpm: Math.round(60000000 / Math.max(1, mpqn || 500000)),
+            bpm: Math.round((60000000 / Math.max(1, mpqn || 500000)) * 10) / 10,
           });
         } else if (type === 0x58 && data.length >= 2) {
           timeSigs.push({
