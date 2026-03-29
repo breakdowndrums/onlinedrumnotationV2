@@ -980,6 +980,10 @@ function normalizeArrangementItems(items) {
     .filter((item) => item.id && item.beatId);
 }
 
+function isUuidLike(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || "").trim());
+}
+
 function readStoredLocalBeats() {
   try {
     const raw = window.localStorage.getItem(LOCAL_BEAT_LIBRARY_STORAGE_KEY);
@@ -6023,7 +6027,7 @@ useEffect(() => {
   const deleteLocalBeatById = React.useCallback(async (beatId) => {
     const key = String(beatId || "");
     if (!key) return;
-    if (authUser?.id && hasSupabaseEnabled && supabase) {
+    if (authUser?.id && hasSupabaseEnabled && supabase && isUuidLike(key)) {
       const { error } = await supabase
         .from("beats")
         .delete()
@@ -7007,7 +7011,7 @@ useEffect(() => {
     if (String(loadedLocalBeatId || "") === key) {
       setBeatNameDraft(nextName);
     }
-    if (authUser?.id && hasSupabaseEnabled && supabase) {
+    if (authUser?.id && hasSupabaseEnabled && supabase && isUuidLike(key)) {
       const { error } = await supabase
         .from("beats")
         .update({
@@ -7061,7 +7065,7 @@ useEffect(() => {
             }
           : targetBeat.payload;
 
-      if (authUser?.id && hasSupabaseEnabled && supabase) {
+      if (authUser?.id && hasSupabaseEnabled && supabase && isUuidLike(key)) {
         const { error } = await supabase
           .from("beats")
           .update({
@@ -7156,14 +7160,16 @@ useEffect(() => {
 
       if (authUser?.id && hasSupabaseEnabled && supabase) {
         const updates = Array.from(updatedById.values()).map((beat) =>
-          supabase
-            .from("beats")
-            .update({
-              payload: beat.payload,
-              updated_at: new Date().toISOString(),
-            })
-            .eq("id", String(beat.id))
-            .eq("user_id", authUser.id)
+          isUuidLike(beat?.id)
+            ? supabase
+                .from("beats")
+                .update({
+                  payload: beat.payload,
+                  updated_at: new Date().toISOString(),
+                })
+                .eq("id", String(beat.id))
+                .eq("user_id", authUser.id)
+            : Promise.resolve({ error: null })
         );
         const results = await Promise.all(updates);
         const failed = results.find((result) => result.error);
@@ -11646,7 +11652,7 @@ useEffect(() => {
         : {};
     const category = beatCategoryDraft === "all" ? "Groove" : beatCategoryDraft;
     const style = beatStyleDraft === "all" ? undefined : beatStyleDraft.trim() || undefined;
-    if (authUser?.id && hasSupabaseEnabled && supabase) {
+    if (authUser?.id && hasSupabaseEnabled && supabase && isUuidLike(String(loadedLocalBeatId))) {
       const now = new Date().toISOString();
       const { data, error } = await supabase
         .from("beats")
@@ -11716,7 +11722,7 @@ useEffect(() => {
       delete nextPayload.notationStickingSelection;
     }
 
-    if (authUser?.id && hasSupabaseEnabled && supabase) {
+    if (authUser?.id && hasSupabaseEnabled && supabase && isUuidLike(String(loadedLocalBeatId))) {
       const now = new Date().toISOString();
       const { data, error } = await supabase
         .from("beats")
