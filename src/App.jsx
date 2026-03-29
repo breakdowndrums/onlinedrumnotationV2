@@ -1,18 +1,18 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { exportNotationPdf } from "./utils/exportNotationPdf";
+import { exportNotationPng } from "./utils/exportNotationPng";
 import { exportArrangementPdf } from "./utils/exportArrangementPdf";
 import { exportArrangementMidi, exportDrumMidi } from "./utils/exportMidi";
 import { importDrumMidi } from "./utils/importMidi";
 import AuthDialog from "./components/AuthDialog";
 import LegalDialog from "./components/LegalDialog";
-import BeatLibraryWindow from "./components/BeatLibraryWindow";
 import { hasSupabaseEnabled, supabase } from "./lib/supabase";
 import QRCode from "qrcode";
 import { usePlayback } from "./audio/usePlayback";
 import * as Vex from "vexflow";
 import customSmuflFont from "./fonts/customSmuflFont.json";
-import { DndContext, PointerSensor, closestCenter, useDroppable, useSensor, useSensors } from "@dnd-kit/core";
+import { DndContext, DragOverlay, PointerSensor, closestCenter, pointerWithin, useDroppable, useSensor, useSensors } from "@dnd-kit/core";
 import {
   SortableContext,
   arrayMove,
@@ -34,6 +34,7 @@ const TEMPO_QUARTER_UP_PATH =
   "M302 115v760h30v-828c0 -95 -123 -188 -223 -188c-61 0 -109 35 -109 94c0 97 99 188 222 188c33 0 61 -9 80 -26z";
 const MIDI_NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 const SHORTCUT_BINDINGS_STORAGE_KEY = "drum-grid-shortcut-bindings-v1";
+const BEAT_AUTO_UPDATE_ENABLED_STORAGE_KEY = "drum-grid-beat-auto-update-enabled-v1";
 const SHORTCUTS = [
   {
     id: "play_toggle",
@@ -197,11 +198,201 @@ function PencilIcon() {
   );
 }
 
-function BeatLibraryDropTarget({ id, children, ...props }) {
-  const { setNodeRef } = useDroppable({ id });
+function TrashIcon() {
   return (
-    <div ref={setNodeRef} {...props}>
+    <svg viewBox="0 0 16 16" className="h-3.5 w-3.5 fill-current" aria-hidden="true">
+      <path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0z" />
+      <path d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4zM2.5 3h11V2h-11z" />
+    </svg>
+  );
+}
+
+function UserIcon() {
+  return (
+    <svg viewBox="0 0 16 16" className="h-4 w-4 fill-none stroke-current" aria-hidden="true">
+      <circle cx="8" cy="5" r="2.5" strokeWidth="1.4" />
+      <path d="M3 13c.7-2 2.5-3 5-3s4.3 1 5 3" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function BeatLibraryDropTarget({ id, children, dropTargetRef = null, ...props }) {
+  const { setNodeRef } = useDroppable({ id });
+  const handleRef = React.useCallback((node) => {
+    setNodeRef(node);
+    if (!dropTargetRef) return;
+    if (typeof dropTargetRef === "function") {
+      dropTargetRef(node);
+    } else {
+      dropTargetRef.current = node;
+    }
+  }, [dropTargetRef, setNodeRef]);
+  return (
+    <div ref={handleRef} {...props}>
       {children}
+    </div>
+  );
+}
+
+function BeatLibraryDragOverlayCard({ beat, beatBpm }) {
+  if (!beat) return null;
+  const beatBars = Math.max(1, Number(beat?.payload?.bars) || 1);
+  return (
+    <div className="flex min-w-[240px] items-center gap-2 rounded border border-cyan-700/70 bg-cyan-950/85 px-2.5 py-2 text-left text-sm shadow-xl">
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-sm text-white">{beat.name || "Untitled Beat"}</div>
+        <div className="truncate text-xs text-neutral-300">
+          {(beat.timeSigCategory || "4/4") +
+            (Number.isFinite(beatBpm) ? ` · ${beatBpm} BPM` : "") +
+            ` · ${beatBars} ${beatBars === 1 ? "bar" : "bars"}`}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function BeatLibraryReservedBeatRowSlot() {
+  return (
+    <div className="mb-2.5 last:mb-0 pointer-events-none">
+      <div className="h-[54px] rounded border border-transparent opacity-0" />
+    </div>
+  );
+}
+
+function GridSettingsPresetReservedRowSlot() {
+  return (
+    <div className="pointer-events-none">
+      <div className="h-[52px] rounded border border-transparent opacity-0" />
+    </div>
+  );
+}
+
+function GridSettingsPresetDragOverlayCard({ preset }) {
+  if (!preset) return null;
+  return (
+    <div className="flex min-w-[240px] items-center gap-2 rounded border border-cyan-700/70 bg-cyan-950/85 px-2.5 py-2 text-left text-sm shadow-xl">
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-sm text-white">{preset.name || "Untitled Preset"}</div>
+        <div className="truncate text-xs text-neutral-300">
+          {`${preset.timeSig?.n || 4}/${preset.timeSig?.d || 4} · ${
+            preset.resolution === 4 ? "4th" : preset.resolution === 8 ? "8th" : preset.resolution === 16 ? "16th" : "32th"
+          } · ${preset.bars || 1} ${(preset.bars || 1) === 1 ? "bar" : "bars"} · ${preset.bpm || 120} BPM`}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SortableGridSettingsPresetRow({
+  preset,
+  isActive,
+  isEditing,
+  editingName,
+  setEditingName,
+  commitEditing,
+  cancelEditing,
+  startEditing,
+  onApply,
+  pendingPresetRenameExitRef,
+  disableTransition = false,
+}) {
+  const id = `preset:${String(preset.id)}`;
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+  const verticalTransform = transform ? { ...transform, x: 0 } : null;
+  const style = {
+    transform: CSS.Transform.toString(verticalTransform),
+    transition: disableTransition ? undefined : transition,
+  };
+  return (
+    <div ref={setNodeRef} style={style} className={isDragging ? "opacity-0" : ""}>
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={onApply}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onApply();
+          }
+        }}
+        {...attributes}
+        {...listeners}
+        className={`cursor-pointer rounded border px-2.5 py-2 outline-none focus:outline-none focus-visible:outline-none ${
+          isActive
+            ? "border-neutral-800 bg-neutral-900/40"
+            : isDragging
+              ? "border-cyan-700/70 bg-cyan-950/20"
+              : "border-neutral-800 bg-neutral-900/40 hover:bg-neutral-800/60"
+        }`}
+      >
+        <div className="flex items-center gap-2">
+          <div className="min-w-0 flex-1">
+            {isEditing ? (
+              <input
+                type="text"
+                value={editingName}
+                onChange={(e) => setEditingName(e.target.value)}
+                onClick={(e) => e.stopPropagation()}
+                onFocus={(e) => e.currentTarget.select()}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    commitEditing();
+                  } else if (e.key === "Escape") {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    cancelEditing();
+                  } else if (e.key === " " || e.key === "Spacebar") {
+                    e.stopPropagation();
+                  }
+                }}
+                onBlur={() => commitEditing()}
+                autoFocus
+                className="w-full bg-transparent px-0 py-0 text-sm text-white outline-none"
+              />
+            ) : (
+              <div className="text-sm text-white truncate">{preset.name}</div>
+            )}
+            <div className="truncate text-xs text-neutral-400">
+              {`${preset.timeSig.n}/${preset.timeSig.d} · ${preset.resolution === 4 ? "4th" : preset.resolution === 8 ? "8th" : preset.resolution === 16 ? "16th" : "32th"} · ${preset.bars} ${preset.bars === 1 ? "bar" : "bars"} · ${preset.bpm} BPM`}
+            </div>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onPointerDown={(e) => {
+                if (isEditing) {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  if (pendingPresetRenameExitRef) {
+                    pendingPresetRenameExitRef.current = String(preset.id);
+                  }
+                  return;
+                }
+                e.stopPropagation();
+              }}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (pendingPresetRenameExitRef?.current === String(preset.id)) {
+                  pendingPresetRenameExitRef.current = "";
+                  commitEditing();
+                  return;
+                }
+                if (isEditing) return;
+                if (pendingPresetRenameExitRef) {
+                  pendingPresetRenameExitRef.current = "";
+                }
+                startEditing(preset.id);
+              }}
+              className="inline-flex h-6 min-w-6 items-center justify-center rounded text-neutral-400 hover:bg-neutral-800/60 hover:text-white"
+              title="Rename preset"
+            >
+              <PencilIcon />
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -211,6 +402,7 @@ function SortableArrangementSourceBeatRow({
   depth,
   beatRowKey,
   beatBpm,
+  isActiveDraggedBeat,
   beatLibraryDropTargetId,
   isLoadedTrackedBeat,
   isSelectedArrangementSourceBeat,
@@ -220,9 +412,14 @@ function SortableArrangementSourceBeatRow({
   commitEditingBeatLibraryBeat,
   cancelEditingBeatLibraryBeat,
   startEditingBeatLibraryBeat,
+  showUpdateButton,
+  updateCurrentLoadedBeatLocal,
   loadBeatIntoEditor,
   arrangementAddBeat,
   handleDeleteLocalBeatClick,
+  hideSourceWhileDragging,
+  pendingBeatRenameExitRef,
+  disableTransition = false,
 }) {
   const id = `beat:${String(beat.id)}`;
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
@@ -230,11 +427,22 @@ function SortableArrangementSourceBeatRow({
   const style = {
     marginLeft: `${Math.max(0, depth) * 0.5}rem`,
     transform: CSS.Transform.toString(verticalTransform),
-    transition,
+    transition: disableTransition ? undefined : transition,
   };
+  const isVisuallyActive = isLoadedTrackedBeat || (!isLoadedTrackedBeat && isSelectedArrangementSourceBeat);
 
   return (
-    <div ref={setNodeRef} className="relative" style={style}>
+    <div
+      ref={setNodeRef}
+      className={`relative ${
+        hideSourceWhileDragging
+          ? "mb-2.5 last:mb-0 opacity-0 pointer-events-none"
+          : isActiveDraggedBeat
+            ? "mb-2.5 last:mb-0 opacity-0"
+            : "mb-2.5 last:mb-0"
+      }`}
+      style={style}
+    >
       <div
         data-beat-row-id={beatRowKey}
         role="button"
@@ -248,17 +456,14 @@ function SortableArrangementSourceBeatRow({
         }}
         {...attributes}
         {...listeners}
-        className={`flex items-center gap-2 rounded border px-2 py-1 text-left text-sm outline-none focus:outline-none focus-visible:outline-none ${
-          isLoadedTrackedBeat || isSelectedArrangementSourceBeat
-            ? "border-sky-500/70 bg-sky-900/30 shadow-[0_0_0_1px_rgba(14,165,233,0.35)]"
+        className={`flex items-center gap-2 rounded border px-2.5 py-2 text-left text-sm outline-none focus:outline-none focus-visible:outline-none ${
+          isVisuallyActive
+            ? "border-sky-500/70 bg-sky-900/20 shadow-[0_0_0_1px_rgba(14,165,233,0.35)]"
             : isDragging
               ? "border-cyan-700/70 bg-cyan-950/20"
               : "border-neutral-800 bg-neutral-900/40 hover:bg-neutral-800/60"
         }`}
       >
-        <span className="inline-flex h-5 min-w-5 items-center justify-center text-neutral-700" aria-hidden="true">
-          •
-        </span>
         <div className="min-w-0 flex-1">
           {String(editingBeatLibraryBeatId || "") === String(beat.id) ? (
             <input
@@ -276,16 +481,18 @@ function SortableArrangementSourceBeatRow({
                   e.preventDefault();
                   e.stopPropagation();
                   cancelEditingBeatLibraryBeat();
+                } else if (e.key === " " || e.key === "Spacebar") {
+                  e.stopPropagation();
                 }
               }}
               onBlur={() => commitEditingBeatLibraryBeat()}
               autoFocus
-              className="w-full rounded bg-neutral-950/70 px-1 py-0.5 text-sm text-white outline-none"
+              className="w-full bg-transparent px-0 py-0 text-sm text-white outline-none"
             />
           ) : (
-            <div className="truncate text-white">{beat.name || "Untitled Beat"}</div>
+            <div className="truncate text-sm text-white">{beat.name || "Untitled Beat"}</div>
           )}
-          <div className="truncate text-[11px] text-neutral-500">
+          <div className="truncate text-xs text-neutral-400">
             {(() => {
               const beatBars = Math.max(1, Number(beat?.payload?.bars) || 1);
               return (beat.timeSigCategory || "4/4") +
@@ -294,22 +501,47 @@ function SortableArrangementSourceBeatRow({
             })()}
           </div>
         </div>
+        <div className="flex items-center gap-1.5">
+        {showUpdateButton ? (
+          <button
+            type="button"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              updateCurrentLoadedBeatLocal();
+            }}
+            className="px-2 py-1 rounded border border-cyan-700 text-xs text-cyan-100 bg-cyan-900/20 hover:bg-cyan-800/30"
+            title="Update loaded beat"
+          >
+            Update
+          </button>
+        ) : null}
         <button
           type="button"
           onPointerDown={(e) => {
             if (String(editingBeatLibraryBeatId || "") === String(beat.id)) {
               e.preventDefault();
               e.stopPropagation();
-              commitEditingBeatLibraryBeat();
+              if (pendingBeatRenameExitRef) {
+                pendingBeatRenameExitRef.current = String(beat.id);
+              }
               return;
             }
             e.stopPropagation();
           }}
           onClick={(e) => {
             e.stopPropagation();
+            if (pendingBeatRenameExitRef?.current === String(beat.id)) {
+              pendingBeatRenameExitRef.current = "";
+              commitEditingBeatLibraryBeat();
+              return;
+            }
             if (String(editingBeatLibraryBeatId || "") === String(beat.id)) {
               return;
             } else {
+              if (pendingBeatRenameExitRef) {
+                pendingBeatRenameExitRef.current = "";
+              }
               startEditingBeatLibraryBeat(beat.id);
             }
           }}
@@ -325,20 +557,11 @@ function SortableArrangementSourceBeatRow({
             e.stopPropagation();
             arrangementAddBeat("local", beat.id);
           }}
-          className="px-2 py-1 rounded border border-neutral-700 text-xs text-white bg-neutral-800 hover:bg-neutral-700/60"
+          className="px-2 py-1 rounded border border-neutral-800 text-xs text-neutral-400 bg-neutral-900/60 hover:bg-neutral-800/60"
         >
           Add
         </button>
-        <button
-          type="button"
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={(e) => handleDeleteLocalBeatClick(e, beat.id)}
-          className="px-2 py-1 rounded border border-red-900 text-xs text-red-200 hover:bg-red-900/30"
-          aria-label="Delete beat"
-          title="Delete beat (Cmd/Ctrl+click: clear all)"
-        >
-          ×
-        </button>
+        </div>
       </div>
     </div>
   );
@@ -417,20 +640,20 @@ const METRONOME_COUNT_IN_ENABLED_STORAGE_KEY = "drum-grid-metronome-count-in-ena
 const MIDI_IMPORT_SNARE_GHOST_MAX_STORAGE_KEY = "drum-grid-midi-import-snare-ghost-max-v1";
 const MIDI_IMPORT_TOM_GHOST_MAX_STORAGE_KEY = "drum-grid-midi-import-tom-ghost-max-v1";
 const MIDI_IMPORT_HIHAT_GHOST_MAX_STORAGE_KEY = "drum-grid-midi-import-hihat-ghost-max-v1";
-const ARRANGEMENT_NOTATION_PAGE_MODE_STORAGE_KEY = "drum-grid-arrangement-notation-page-mode-v1";
-const LEGACY_SELECTION_ENABLED_STORAGE_KEY = "drum-grid-legacy-selection-enabled-v1";
 const GRID_SELECTION_HOLD_SPEED_STORAGE_KEY = "drum-grid-selection-hold-speed-v1";
-const MOVE_MODE_DEBUG_ENABLED_STORAGE_KEY = "drum-grid-move-mode-debug-enabled-v1";
 const STICKING_GUIDE_ENABLED_STORAGE_KEY = "drum-grid-sticking-guide-enabled-v1";
 const STICKING_HANDEDNESS_STORAGE_KEY = "drum-grid-sticking-handedness-v1";
 const STICKING_LEAD_HAND_STORAGE_KEY = "drum-grid-sticking-lead-hand-v1";
 const STICKING_EDIT_MODE_ENABLED_STORAGE_KEY = "drum-grid-sticking-edit-mode-enabled-v1";
+const NOTATION_STICKING_SELECTION_MODE_ENABLED_STORAGE_KEY =
+  "drum-grid-notation-sticking-selection-mode-enabled-v1";
 const STICKING_OVERRIDES_STORAGE_KEY = "drum-grid-sticking-overrides-v1";
 const STICKING_KEEP_QUARTER_LEAD_HAND_STORAGE_KEY =
   "drum-grid-sticking-keep-quarter-lead-hand-v1";
 const SHOW_EDITED_STICKING_STORAGE_KEY = "drum-grid-show-edited-sticking-v1";
 const SHOW_NOTATION_STICKING_STORAGE_KEY = "drum-grid-show-notation-sticking-v1";
 const NOTATION_STICKING_VIEW_STORAGE_KEY = "drum-grid-notation-sticking-view-v2";
+const NOTATION_STICKING_SELECTION_STORAGE_KEY = "drum-grid-notation-sticking-selection-v1";
 const ARRANGEMENT_NOTATION_BARS_PER_ROW_STORAGE_KEY =
   "drum-grid-arrangement-notation-bars-per-row-v1";
 const ARRANGEMENT_NOTATION_DYNAMIC_SPACING_STORAGE_KEY =
@@ -441,6 +664,8 @@ const ARRANGEMENT_NOTATION_THEME_STORAGE_KEY =
   "drum-grid-arrangement-notation-theme-v1";
 const ARRANGEMENT_NOTATION_VIRTUALIZE_STORAGE_KEY =
   "drum-grid-arrangement-notation-virtualize-v1";
+const ARRANGEMENT_NOTATION_PREVIEW_SCALE_STORAGE_KEY =
+  "drum-grid-arrangement-notation-preview-scale-v1";
 const ARRANGEMENT_TITLE_LINE1_STORAGE_KEY = "drum-grid-arrangement-title-line1-v1";
 const ARRANGEMENT_TITLE_LINE2_STORAGE_KEY = "drum-grid-arrangement-title-line2-v1";
 const ARRANGEMENT_COMPOSER_STORAGE_KEY = "drum-grid-arrangement-composer-v1";
@@ -449,6 +674,7 @@ const DEFAULT_LOOP_REPEATS_STORAGE_KEY = "drum-grid-default-loop-repeats-v1";
 const BEAT_LIBRARY_CONTAINERS_STORAGE_KEY = "drum-grid-beat-library-containers-v1";
 const BEAT_LIBRARY_SELECTED_CONTAINER_STORAGE_KEY = "drum-grid-beat-library-selected-container-v1";
 const BEAT_LIBRARY_ROOT_COLLAPSED_STORAGE_KEY = "drum-grid-beat-library-root-collapsed-v1";
+const GRID_SETTINGS_PRESET_LIBRARY_STORAGE_KEY = "drum-grid-grid-settings-presets-v1";
 const BEAT_CATEGORY_OPTIONS = [
   "Groove",
   "Fill",
@@ -474,12 +700,18 @@ const GHOST_NOTATION_ENABLED = new Set(["snare", "tom1", "tom2", "floorTom", "hi
 const CELL_CYCLE = [CELL.OFF, CELL.ON];
 const MOVE_OVERLAP_MODES = [
   { id: "all-to-all", label: "All overwrites" },
-  { id: "active-to-all", label: "Hits ovewrite" },
+  { id: "active-to-all", label: "Hits overwrite" },
   { id: "active-to-empty", label: "Fill in gaps" },
 ];
+const getOverlapModeDescription = (modeId) => {
+  if (modeId === "all-to-all") return "Every looped step overwrites whatever is already in the target area.";
+  if (modeId === "active-to-all") return "Only looped hits overwrite the target area. Empty loop steps do not erase notes.";
+  if (modeId === "active-to-empty") return "Looped hits are written only into empty target steps. Existing notes stay unchanged.";
+  return "Choose how looped notes interact with existing notes.";
+};
 const LIBRARY_SORT_MODES = [
-  { id: "latest", label: "Upload date: newest" },
-  { id: "oldest", label: "Upload date: oldest" },
+  { id: "latest", label: "Creation date: newest" },
+  { id: "oldest", label: "Creation date: oldest" },
   { id: "bpm-asc", label: "BPM: low to high" },
   { id: "bpm-desc", label: "BPM: high to low" },
 ];
@@ -488,6 +720,11 @@ const LIBRARY_BPM_FILTER_MODES = [
   { id: "exact", label: "Exact BPM" },
   { id: "pm5", label: "BPM ±5" },
   { id: "pm10", label: "BPM ±10" },
+];
+const DEFAULT_GRID_SETTINGS_PRESETS = [
+  { id: "grid-4-4-16-1", name: "Preset 1", bars: 1, resolution: 16, timeSig: { n: 4, d: 4 }, bpm: 120 },
+  { id: "grid-7-4-8-2", name: "Preset 2", bars: 2, resolution: 8, timeSig: { n: 7, d: 4 }, bpm: 120 },
+  { id: "grid-5-4-8-2", name: "Preset 3", bars: 2, resolution: 8, timeSig: { n: 5, d: 4 }, bpm: 120 },
 ];
 const LOOP_REPEATS_ORDER = ["all", "off", "1", "2", "3", "4", "5", "6", "7", "8"];
 const BEAT_LIBRARY_CONTAINER_TYPES = [
@@ -747,9 +984,126 @@ function readStoredLocalBeats() {
   try {
     const raw = window.localStorage.getItem(LOCAL_BEAT_LIBRARY_STORAGE_KEY);
     const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed : [];
+    if (!Array.isArray(parsed)) return [];
+    const fallbackBaseTime = Date.now();
+    return parsed
+      .map((entry, index) => {
+        if (!entry || typeof entry !== "object") return null;
+        const payload = entry?.payload && typeof entry.payload === "object" ? { ...entry.payload } : {};
+        const entryNotationStickingSelection =
+          entry?.notationStickingSelection && typeof entry.notationStickingSelection === "object"
+            ? Object.fromEntries(
+                Object.entries(entry.notationStickingSelection).filter(([, value]) => value === true)
+              )
+            : null;
+        if (
+          entryNotationStickingSelection &&
+          !(
+            payload.notationStickingSelection &&
+            typeof payload.notationStickingSelection === "object"
+          )
+        ) {
+          payload.notationStickingSelection = entryNotationStickingSelection;
+        }
+        const fallbackCreatedAt = new Date(fallbackBaseTime - index * 1000).toISOString();
+        const createdAt = String(
+          entry?.createdAt ||
+            entry?.updatedAt ||
+            payload?.createdAt ||
+            fallbackCreatedAt
+        );
+        const updatedAt = String(entry?.updatedAt || createdAt);
+        return {
+          ...entry,
+          id: String(entry?.id || `local-${index}`),
+          name: String(entry?.name || "").trim() || "Untitled Beat",
+          category: String(entry?.category || "Groove"),
+          style: entry?.style ? String(entry.style) : undefined,
+          timeSigCategory:
+            String(entry?.timeSigCategory || "") ||
+            `${payload?.timeSig?.n || 4}/${payload?.timeSig?.d || 4}`,
+          bpm: Math.max(20, Math.min(400, Number(entry?.bpm ?? payload?.bpm) || 120)),
+          createdAt,
+          updatedAt,
+          payload,
+          notationStickingSelection:
+            payload?.notationStickingSelection &&
+            typeof payload.notationStickingSelection === "object"
+              ? Object.fromEntries(
+                  Object.entries(payload.notationStickingSelection).filter(([, value]) => value === true)
+                )
+              : {},
+          libraryMeta:
+            entry?.libraryMeta && typeof entry.libraryMeta === "object"
+              ? {
+                  parentId: entry.libraryMeta.parentId ? String(entry.libraryMeta.parentId) : null,
+                  manualOrder: Number.isFinite(Number(entry.libraryMeta.manualOrder))
+                    ? Number(entry.libraryMeta.manualOrder)
+                    : 0,
+                }
+              : payload?.libraryMeta && typeof payload.libraryMeta === "object"
+                ? {
+                    parentId: payload.libraryMeta.parentId ? String(payload.libraryMeta.parentId) : null,
+                    manualOrder: Number.isFinite(Number(payload.libraryMeta.manualOrder))
+                      ? Number(payload.libraryMeta.manualOrder)
+                      : 0,
+                  }
+                : null,
+          source: "local",
+        };
+      })
+      .filter(Boolean);
   } catch (_) {
     return [];
+  }
+}
+
+function buildEmptyTupletOverridesForPreset(bars, timeSig) {
+  const safeBars = Math.max(1, Number(bars) || 1);
+  const quarterCount = Math.max(1, getQuarterBeatsPerBar(timeSig || { n: 4, d: 4 }));
+  return Array.from({ length: safeBars }, () =>
+    Array.from({ length: quarterCount }, () => null)
+  );
+}
+
+function normalizeGridSettingsPresetEntry(entry, index = 0) {
+  if (!entry || typeof entry !== "object") return null;
+  const bars = Math.max(1, Number(entry?.bars) || 1);
+  const resolution = [4, 8, 16, 32].includes(Number(entry?.resolution))
+    ? Number(entry.resolution)
+    : 8;
+  const timeSig = {
+    n: Math.max(2, Math.min(15, Number(entry?.timeSig?.n) || 4)),
+    d: Number(entry?.timeSig?.d) === 8 ? 8 : 4,
+  };
+  return {
+    id: String(entry?.id || `grid-preset-${index}`),
+    name: String(entry?.name || "").trim() || `Preset ${index + 1}`,
+    bars,
+    resolution,
+    timeSig,
+    bpm: Math.max(20, Math.min(400, Number(entry?.bpm) || 120)),
+    tupletsByBar: buildEmptyTupletOverridesForPreset(bars, timeSig),
+  };
+}
+
+function readStoredGridSettingsPresets() {
+  try {
+    const raw = window.localStorage.getItem(GRID_SETTINGS_PRESET_LIBRARY_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : DEFAULT_GRID_SETTINGS_PRESETS;
+    const source = Array.isArray(parsed) && parsed.length ? parsed : DEFAULT_GRID_SETTINGS_PRESETS;
+    const normalized = source
+      .map((entry, index) => normalizeGridSettingsPresetEntry(entry, index))
+      .filter(Boolean);
+    return normalized.length
+      ? normalized
+      : DEFAULT_GRID_SETTINGS_PRESETS
+          .map((entry, index) => normalizeGridSettingsPresetEntry(entry, index))
+          .filter(Boolean);
+  } catch (_) {
+    return DEFAULT_GRID_SETTINGS_PRESETS
+      .map((entry, index) => normalizeGridSettingsPresetEntry(entry, index))
+      .filter(Boolean);
   }
 }
 
@@ -783,6 +1137,19 @@ function getBeatLibraryMeta(beat) {
     parentId: meta?.parentId ? String(meta.parentId) : null,
     manualOrder: Number.isFinite(Number(meta?.manualOrder)) ? Number(meta.manualOrder) : 0,
   };
+}
+
+function getComparableBeatPayload(payload) {
+  if (!payload || typeof payload !== "object") return {};
+  const next = { ...payload };
+  delete next.libraryMeta;
+  return next;
+}
+
+function getComparableBeatPayloadWithoutNotationSticking(payload) {
+  const next = getComparableBeatPayload(payload);
+  delete next.notationStickingSelection;
+  return next;
 }
 
 function compareBeatLibraryOrder(a, b) {
@@ -819,6 +1186,12 @@ function normalizeCloudBeatRow(row) {
   if (!row || typeof row !== "object") return null;
   const payload = row.payload && typeof row.payload === "object" ? row.payload : null;
   if (!payload) return null;
+  const notationStickingSelection =
+    payload?.notationStickingSelection && typeof payload.notationStickingSelection === "object"
+      ? Object.fromEntries(
+          Object.entries(payload.notationStickingSelection).filter(([, value]) => value === true)
+        )
+      : {};
   const libraryMeta = payload?.libraryMeta && typeof payload.libraryMeta === "object"
     ? {
         parentId: payload.libraryMeta.parentId ? String(payload.libraryMeta.parentId) : null,
@@ -837,6 +1210,7 @@ function normalizeCloudBeatRow(row) {
     createdAt: String(row.created_at || row.updated_at || ""),
     updatedAt: String(row.updated_at || row.created_at || ""),
     payload,
+    notationStickingSelection,
     libraryMeta,
     source: "local",
   };
@@ -901,6 +1275,54 @@ function normalizePublishedArrangementEntry(row) {
 function getArrangementNameFromTitles(titleLine1, titleLine2, fallback = "Arrangement") {
   const parts = [String(titleLine1 || "").trim(), String(titleLine2 || "").trim()].filter(Boolean);
   return parts.join(" ") || String(fallback || "Arrangement").trim() || "Arrangement";
+}
+
+function getNextNumberedArrangementName(baseName, existingEntries = []) {
+  const rawBase = String(baseName || "").trim() || "Arrangement";
+  const match = rawBase.match(/^(.*?)(?:\s+(\d+))?$/);
+  const normalizedBase = String(match?.[1] || rawBase).trim() || "Arrangement";
+  let highest = 1;
+  existingEntries.forEach((entry) => {
+    const name = String(entry?.name || "").trim();
+    if (!name) return;
+    if (name === normalizedBase) {
+      highest = Math.max(highest, 1);
+      return;
+    }
+    const numbered = name.match(/^(.*)\s+(\d+)$/);
+    if (!numbered) return;
+    if (String(numbered[1] || "").trim() !== normalizedBase) return;
+    const nextNum = Number(numbered[2]);
+    if (Number.isFinite(nextNum)) highest = Math.max(highest, nextNum);
+  });
+  return `${normalizedBase} ${highest + 1}`;
+}
+
+function getUniqueArrangementName(baseName, existingEntries = [], excludeId = null) {
+  const rawBase = String(baseName || "").trim() || "Arrangement";
+  const normalizedBase = rawBase || "Arrangement";
+  const lowerBase = normalizedBase.toLowerCase();
+  const normalizedExcludeId = excludeId ? String(excludeId) : null;
+  const collides = existingEntries.some((entry) => {
+    if (!entry) return false;
+    if (normalizedExcludeId && String(entry.id || "") === normalizedExcludeId) return false;
+    return String(entry.name || "").trim().toLowerCase() === lowerBase;
+  });
+  if (!collides) return normalizedBase;
+  const filteredEntries = normalizedExcludeId
+    ? existingEntries.filter((entry) => String(entry?.id || "") !== normalizedExcludeId)
+    : existingEntries;
+  return getNextNumberedArrangementName(normalizedBase, filteredEntries);
+}
+
+function sortSavedArrangementsMostRecent(entries = []) {
+  const byMostRecent = (a, b) => {
+    const aTime = new Date(a?.updatedAt || a?.createdAt || 0).getTime();
+    const bTime = new Date(b?.updatedAt || b?.createdAt || 0).getTime();
+    if (aTime !== bTime) return bTime - aTime;
+    return String(a?.name || "").localeCompare(String(b?.name || ""));
+  };
+  return [...entries].sort(byMostRecent);
 }
 
 function estimateNotationBarWidthDemand({
@@ -1239,13 +1661,22 @@ function buildNotationStateFromPayload(payload) {
     }
     grid[inst.id] = row;
   });
+  const notationStickingSelection =
+    payload?.notationStickingSelection && typeof payload.notationStickingSelection === "object"
+      ? Object.fromEntries(
+          Object.entries(payload.notationStickingSelection).filter(([, value]) => value === true)
+        )
+      : {};
+  const timeSigByBar = Array.from({ length: bars }, () => ({ ...timeSig }));
   return {
     instruments,
     grid,
+    notationStickingSelection,
     resolution,
     bars,
     barsPerLine: Math.max(1, Math.min(4, bars)),
     timeSig,
+    timeSigByBar,
     quarterSubdivisionsByBar,
     barStepOffsets,
   };
@@ -1334,11 +1765,40 @@ function expandNotationStateForRepeats(state, repeats) {
     }
     grid[inst.id] = row;
   });
+  const notationStickingSelection = {};
+  const timeSigByBar = [];
+  const srcNotationStickingSelection =
+    state?.notationStickingSelection && typeof state.notationStickingSelection === "object"
+      ? state.notationStickingSelection
+      : {};
+  const srcTimeSigByBar =
+    Array.isArray(state?.timeSigByBar) && state.timeSigByBar.length === baseBars
+      ? state.timeSigByBar
+      : Array.from({ length: baseBars }, () => ({ ...(state?.timeSig || { n: 4, d: 4 }) }));
+  Object.entries(srcNotationStickingSelection).forEach(([key, enabled]) => {
+    if (!enabled) return;
+    const [instId, rawIdx] = String(key).split(":");
+    const idx = Number(rawIdx);
+    if (!instId || !Number.isFinite(idx) || idx < 0 || idx >= baseColumns) return;
+    for (let i = 0; i < count; i++) {
+      notationStickingSelection[`${instId}:${i * baseColumns + idx}`] = true;
+    }
+  });
+  for (let i = 0; i < count; i++) {
+    srcTimeSigByBar.forEach((ts) => {
+      timeSigByBar.push({
+        n: Math.max(1, Number(ts?.n) || 4),
+        d: Math.max(1, Number(ts?.d) || 4),
+      });
+    });
+  }
   return {
     ...state,
     grid,
+    notationStickingSelection,
     bars: baseBars * count,
     barsPerLine: Math.max(1, Math.min(4, baseBars * count)),
+    timeSigByBar,
     quarterSubdivisionsByBar,
     barStepOffsets,
   };
@@ -1390,6 +1850,8 @@ function mergeNotationStates(states) {
   });
 
   let colOffset = 0;
+  const notationStickingSelection = {};
+  const timeSigByBar = [];
   valid.forEach((s) => {
     const sBars = Math.max(1, Number(s.bars) || 1);
     const sCols = Math.max(0, Number(s.barStepOffsets?.[sBars] ?? 0));
@@ -1401,12 +1863,35 @@ function mergeNotationStates(states) {
         if (v !== CELL.OFF) dst[colOffset + c] = v;
       }
     });
+    Object.entries(
+      s?.notationStickingSelection && typeof s.notationStickingSelection === "object"
+        ? s.notationStickingSelection
+        : {}
+    ).forEach(([key, enabled]) => {
+      if (!enabled) return;
+      const [instId, rawIdx] = String(key).split(":");
+      const idx = Number(rawIdx);
+      if (!instId || !Number.isFinite(idx) || idx < 0 || idx >= sCols) return;
+      notationStickingSelection[`${instId}:${colOffset + idx}`] = true;
+    });
+    const sBarsCount = Math.max(1, Number(s.bars) || 1);
+    const sTimeSigByBar =
+      Array.isArray(s?.timeSigByBar) && s.timeSigByBar.length === sBarsCount
+        ? s.timeSigByBar
+        : Array.from({ length: sBarsCount }, () => ({ ...(s?.timeSig || { n: 4, d: 4 }) }));
+    sTimeSigByBar.forEach((ts) => {
+      timeSigByBar.push({
+        n: Math.max(1, Number(ts?.n) || 4),
+        d: Math.max(1, Number(ts?.d) || 4),
+      });
+    });
     colOffset += sCols;
   });
 
   return {
     instruments,
     grid,
+    notationStickingSelection,
     resolution: valid.reduce(
       (max, state) => Math.max(max, Number(state?.resolution) || 0),
       Number(valid[0]?.resolution) || 8
@@ -1414,6 +1899,7 @@ function mergeNotationStates(states) {
     bars,
     barsPerLine: 4,
     timeSig: valid[0].timeSig,
+    timeSigByBar,
     quarterSubdivisionsByBar,
     barStepOffsets,
   };
@@ -1448,11 +1934,33 @@ function sliceNotationStateByBars(state, startBar, barCount) {
       grid[inst.id] = [...grid[inst.id], ...Array(columns - grid[inst.id].length).fill(CELL.OFF)];
     }
   });
+  const notationStickingSelection = {};
+  const timeSigByBar =
+    Array.isArray(state?.timeSigByBar)
+      ? state.timeSigByBar.slice(safeStartBar, safeEndBar).map((ts) => ({
+          n: Math.max(1, Number(ts?.n) || 4),
+          d: Math.max(1, Number(ts?.d) || 4),
+        }))
+      : Array.from({ length: nextBars }, () => ({ ...(state?.timeSig || { n: 4, d: 4 }) }));
+  Object.entries(
+    state?.notationStickingSelection && typeof state.notationStickingSelection === "object"
+      ? state.notationStickingSelection
+      : {}
+  ).forEach(([key, enabled]) => {
+    if (!enabled) return;
+    const [instId, rawIdx] = String(key).split(":");
+    const idx = Number(rawIdx);
+    if (!instId || !Number.isFinite(idx) || idx < startStep || idx >= endStep) return;
+    notationStickingSelection[`${instId}:${idx - startStep}`] = true;
+  });
   return {
     ...state,
     grid,
+    notationStickingSelection,
     bars: nextBars,
     barsPerLine: Math.max(1, Math.min(4, nextBars)),
+    timeSig: timeSigByBar[0] || state?.timeSig || { n: 4, d: 4 },
+    timeSigByBar,
     quarterSubdivisionsByBar,
     barStepOffsets,
   };
@@ -2042,6 +2550,12 @@ export default function App() {
     return { embed, exampleId, shared, shareId };
   });
   const isEmbedMode = routeOptions.embed;
+  const [viewportSize, setViewportSize] = useState(() => ({
+    width: window.innerWidth || document.documentElement.clientWidth || 0,
+    height: window.innerHeight || document.documentElement.clientHeight || 0,
+  }));
+  const useFixedDesktopFooter =
+    !isEmbedMode && viewportSize.width >= 768 && viewportSize.height >= 820;
   const requestedExample = React.useMemo(() => {
     if (!routeOptions.exampleId) return null;
     return EMBED_EXAMPLES[routeOptions.exampleId] || null;
@@ -2094,7 +2608,7 @@ export default function App() {
   const [preferencesCategory, setPreferencesCategory] = useState(() => {
     try {
       const raw = (window.localStorage.getItem(PREFERENCES_CATEGORY_STORAGE_KEY) || "").toLowerCase();
-      const allowed = new Set(["timing", "notation", "editor", "library", "playback", "appearance"]);
+      const allowed = new Set(["timing", "notation", "editor", "playback", "appearance"]);
       return allowed.has(raw) ? raw : "timing";
     } catch (_) {
       return "timing";
@@ -2106,6 +2620,16 @@ export default function App() {
   const [isLoopAdvancedMenuOpen, setIsLoopAdvancedMenuOpen] = useState(false);
   const [legalTab, setLegalTab] = useState("impressum"); // impressum | privacy
   const [showLegalEmail, setShowLegalEmail] = useState(false);
+  useEffect(() => {
+    const onViewportChange = () => {
+      setViewportSize({
+        width: window.innerWidth || document.documentElement.clientWidth || 0,
+        height: window.innerHeight || document.documentElement.clientHeight || 0,
+      });
+    };
+    window.addEventListener("resize", onViewportChange);
+    return () => window.removeEventListener("resize", onViewportChange);
+  }, []);
   const [arrangementBoundaryCompScale, setArrangementBoundaryCompScale] = useState(() => {
     try {
       const raw = Number(window.localStorage.getItem(ARRANGEMENT_BOUNDARY_COMP_SCALE_STORAGE_KEY));
@@ -2123,24 +2647,6 @@ export default function App() {
       return raw === "1";
     } catch (_) {
       return true;
-    }
-  });
-  const [legacySelectionEnabled, setLegacySelectionEnabled] = useState(() => {
-    try {
-      const raw = window.localStorage.getItem(LEGACY_SELECTION_ENABLED_STORAGE_KEY);
-      if (raw == null) return false;
-      return raw === "1";
-    } catch (_) {
-      return false;
-    }
-  });
-  const [moveModeDebugEnabled, setMoveModeDebugEnabled] = useState(() => {
-    try {
-      const raw = window.localStorage.getItem(MOVE_MODE_DEBUG_ENABLED_STORAGE_KEY);
-      if (raw == null) return false;
-      return raw === "1";
-    } catch (_) {
-      return false;
     }
   });
   const [stickingGuideEnabled, setStickingGuideEnabled] = useState(() => {
@@ -2172,6 +2678,17 @@ export default function App() {
   const [stickingEditModeEnabled, setStickingEditModeEnabled] = useState(() => {
     try {
       const raw = window.localStorage.getItem(STICKING_EDIT_MODE_ENABLED_STORAGE_KEY);
+      if (raw == null) return false;
+      return raw === "1";
+    } catch (_) {
+      return false;
+    }
+  });
+  const [notationStickingSelectionModeEnabled, setNotationStickingSelectionModeEnabled] = useState(() => {
+    try {
+      const raw = window.localStorage.getItem(
+        NOTATION_STICKING_SELECTION_MODE_ENABLED_STORAGE_KEY
+      );
       if (raw == null) return false;
       return raw === "1";
     } catch (_) {
@@ -2219,6 +2736,15 @@ export default function App() {
       return false;
     }
   });
+  const [beatAutoUpdateEnabled, setBeatAutoUpdateEnabled] = useState(() => {
+    try {
+      const raw = window.localStorage.getItem(BEAT_AUTO_UPDATE_ENABLED_STORAGE_KEY);
+      if (raw == null) return false;
+      return raw === "1";
+    } catch (_) {
+      return false;
+    }
+  });
   const [notationStickingView, setNotationStickingView] = useState(() => {
     try {
       const raw = window.localStorage.getItem(NOTATION_STICKING_VIEW_STORAGE_KEY);
@@ -2227,18 +2753,24 @@ export default function App() {
       return "stacked";
     }
   });
-  const [isBeatLibraryOpen, setIsBeatLibraryOpen] = useState(false);
-  const [isArrangementOpen, setIsArrangementOpen] = useState(false);
-  const [isArrangementNotationOpen, setIsArrangementNotationOpen] = useState(false);
-  const [arrangementNotationViewMode, setArrangementNotationViewMode] = useState("sheet"); // sections | sheet
-  const [arrangementNotationPageMode, setArrangementNotationPageMode] = useState(() => {
+  const [notationStickingSelection, setNotationStickingSelection] = useState(() => {
     try {
-      const raw = window.localStorage.getItem(ARRANGEMENT_NOTATION_PAGE_MODE_STORAGE_KEY);
-      return raw === "continuous" ? "continuous" : "pages";
+      const raw = window.localStorage.getItem(NOTATION_STICKING_SELECTION_STORAGE_KEY);
+      const parsed = raw ? JSON.parse(raw) : {};
+      if (!parsed || typeof parsed !== "object") return {};
+      const out = {};
+      Object.entries(parsed).forEach(([k, v]) => {
+        if (v === true) out[k] = true;
+      });
+      return out;
     } catch (_) {
-      return "pages";
+      return {};
     }
   });
+  const [isArrangementOpen, setIsArrangementOpen] = useState(false);
+  const [isArrangementNotationOpen, setIsArrangementNotationOpen] = useState(false);
+  const arrangementNotationViewMode = "sheet";
+  const arrangementNotationPageMode = "pages";
   const [arrangementNotationBarsPerRow, setArrangementNotationBarsPerRow] = useState(() => {
     try {
       const raw = Number(window.localStorage.getItem(ARRANGEMENT_NOTATION_BARS_PER_ROW_STORAGE_KEY));
@@ -2278,6 +2810,50 @@ export default function App() {
       return false;
     }
   });
+  const [arrangementNotationPreviewScale, setArrangementNotationPreviewScale] = useState(() => {
+    try {
+      const raw = Number(window.localStorage.getItem(ARRANGEMENT_NOTATION_PREVIEW_SCALE_STORAGE_KEY));
+      if (!Number.isFinite(raw)) return 0.6;
+      return Math.max(0.6, Math.min(1, Math.round(raw * 100) / 100));
+    } catch (_) {
+      return 0.6;
+    }
+  });
+  const [arrangementNotationPreviewScaledHeight, setArrangementNotationPreviewScaledHeight] = useState(0);
+  const arrangementNotationPanelWidth = React.useMemo(
+    () => {
+      if (arrangementNotationPreviewScale === 0.6) return 545;
+      if (arrangementNotationPreviewScale === 0.65) return 605;
+      if (arrangementNotationPreviewScale === 0.7) return 651;
+      if (arrangementNotationPreviewScale === 0.75) return 696;
+      if (arrangementNotationPreviewScale === 0.8) return 741;
+      if (arrangementNotationPreviewScale === 0.85) return 787;
+      if (arrangementNotationPreviewScale === 0.9) return 832;
+      if (arrangementNotationPreviewScale === 0.95) return 877;
+      if (arrangementNotationPreviewScale === 1) return 923;
+      return Math.max(
+        520,
+        Math.round(
+          794 * arrangementNotationPreviewScale +
+            96 +
+            100 * (arrangementNotationPreviewScale - 0.7)
+        )
+      );
+    },
+    [arrangementNotationPreviewScale]
+  );
+  const arrangementNotationTopGap = React.useMemo(() => {
+    if (arrangementNotationPreviewScale === 0.6) return -6;
+    if (arrangementNotationPreviewScale === 0.65) return -5;
+    if (arrangementNotationPreviewScale === 0.7) return -4;
+    if (arrangementNotationPreviewScale === 0.75) return -4;
+    if (arrangementNotationPreviewScale === 0.8) return -4;
+    if (arrangementNotationPreviewScale === 0.85) return -3;
+    if (arrangementNotationPreviewScale === 0.9) return -2;
+    if (arrangementNotationPreviewScale === 0.95) return -2;
+    if (arrangementNotationPreviewScale === 1) return -1;
+    return 0;
+  }, [arrangementNotationPreviewScale]);
   const [arrangementPdfQrEnabled, setArrangementPdfQrEnabled] = useState(false);
   const [arrangementPdfWatermarkEnabled, setArrangementPdfWatermarkEnabled] = useState(true);
   useEffect(() => {
@@ -2315,13 +2891,16 @@ export default function App() {
   const [arrangementPos, setArrangementPos] = useState({ x: 56, y: 112 });
   const [arrangementNotationPos, setArrangementNotationPos] = useState({ x: 56, y: 128 });
   const [isPublicSubmitDialogOpen, setIsPublicSubmitDialogOpen] = useState(false);
-  const [beatLibraryPos, setBeatLibraryPos] = useState({ x: 56, y: 80 });
-  const [beatLibraryTab, setBeatLibraryTab] = useState("local"); // local | public
   const [loadedLocalBeatId, setLoadedLocalBeatId] = useState(null);
-  const [arrangementSourceTab, setArrangementSourceTab] = useState("local"); // local | public
+  const [arrangementSourceTab, setArrangementSourceTab] = useState("local"); // presets | local | public
   const [arrangementSourcesCollapsed, setArrangementSourcesCollapsed] = useState(false);
   const [arrangementDetailsCollapsed, setArrangementDetailsCollapsed] = useState(true);
-  const arrangementPanelWidth = arrangementSourcesCollapsed || arrangementDetailsCollapsed ? 576 : 1088; // max-w-[36rem] / max-w-[68rem]
+  const arrangementPanelWidth =
+    arrangementDetailsCollapsed && !arrangementSourcesCollapsed
+      ? 368 // max-w-[23rem]
+      : arrangementSourcesCollapsed || arrangementDetailsCollapsed
+        ? 432 // max-w-[27rem]
+        : 800; // max-w-[50rem]
   const [arrangementItems, setArrangementItems] = useState(() => {
     try {
       const raw = window.localStorage.getItem(SONG_ARRANGEMENT_STORAGE_KEY);
@@ -2356,6 +2935,8 @@ export default function App() {
       return "";
     }
   });
+  const [isArrangementSheetTitleEditing, setIsArrangementSheetTitleEditing] = useState(false);
+  const arrangementSheetTitleEditorRef = React.useRef(null);
   const [loadedArrangementId, setLoadedArrangementId] = useState(() => {
     try {
       return String(window.localStorage.getItem(LAST_USED_ARRANGEMENT_ID_STORAGE_KEY) || "").trim() || null;
@@ -2363,19 +2944,28 @@ export default function App() {
       return null;
     }
   });
-  const [arrangementSaveAsOpen, setArrangementSaveAsOpen] = useState(false);
+  const [arrangementPickerId, setArrangementPickerId] = useState(null);
+  const arrangementPickerIdRef = React.useRef(null);
+  const selectArrangementPickerId = React.useCallback((arrangementId) => {
+    const nextId = arrangementId ? String(arrangementId) : null;
+    arrangementPickerIdRef.current = nextId;
+    setArrangementPickerId(nextId);
+  }, []);
   const [arrangementLibraryTab, setArrangementLibraryTab] = useState("local");
   const [arrangementTitleMenuOpen, setArrangementTitleMenuOpen] = useState(false);
   const [arrangementTitleMenuPosition, setArrangementTitleMenuPosition] = useState({ top: 0, left: 0 });
-  const [arrangementGlobalSettingsMenuOpen, setArrangementGlobalSettingsMenuOpen] = useState(false);
-  const [arrangementGlobalSettingsMenuPosition, setArrangementGlobalSettingsMenuPosition] = useState({ top: 0, left: 0 });
   const [arrangementNotationMoreMenuOpen, setArrangementNotationMoreMenuOpen] = useState(false);
+  const arrangementGlobalSettingsMenuOpen = arrangementNotationMoreMenuOpen;
+  const setArrangementGlobalSettingsMenuOpen = setArrangementNotationMoreMenuOpen;
   const [arrangementNotationMoreMenuPosition, setArrangementNotationMoreMenuPosition] = useState({ top: 0, left: 0 });
   const [arrangementNotationRowMenuState, setArrangementNotationRowMenuState] = useState(null);
   const [pendingArrangementDeleteEntry, setPendingArrangementDeleteEntry] = useState(null);
   const [fileMenuPosition, setFileMenuPosition] = useState({ top: 0, left: 0 });
   const [arrangementDropActive, setArrangementDropActive] = useState(false);
   const [arrangementDropTarget, setArrangementDropTarget] = useState(null);
+  const [activeArrangementSortRowId, setActiveArrangementSortRowId] = useState(null);
+  const [arrangementOrderDropTargetId, setArrangementOrderDropTargetId] = useState(null);
+  const [arrangementOrderTrashHover, setArrangementOrderTrashHover] = useState(false);
   const [beatNameDraft, setBeatNameDraft] = useState("");
   const [publicSubmitTitle, setPublicSubmitTitle] = useState("");
   const [publicSubmitComposer, setPublicSubmitComposer] = useState("");
@@ -2400,6 +2990,12 @@ export default function App() {
   const [localBeats, setLocalBeats] = useState(() => {
     return readStoredLocalBeats();
   });
+  const [gridSettingsPresets, setGridSettingsPresets] = useState(() => readStoredGridSettingsPresets());
+  const [selectedGridSettingsPresetId, setSelectedGridSettingsPresetId] = useState("");
+  const [editingGridSettingsPresetId, setEditingGridSettingsPresetId] = useState("");
+  const [editingGridSettingsPresetName, setEditingGridSettingsPresetName] = useState("");
+  const [activeGridSettingsPresetDragId, setActiveGridSettingsPresetDragId] = useState(null);
+  const [presetLibraryDropTargetId, setPresetLibraryDropTargetId] = useState(null);
   const [beatLibraryContainers, setBeatLibraryContainers] = useState(() => readStoredBeatLibraryContainers());
   const [selectedBeatLibraryContainerId, setSelectedBeatLibraryContainerId] = useState(() => {
     try {
@@ -2408,6 +3004,12 @@ export default function App() {
       return "all";
     }
   });
+  const selectedBeatLibraryContainerIdRef = React.useRef(selectedBeatLibraryContainerId);
+  const selectBeatLibraryContainer = React.useCallback((containerId) => {
+    const nextId = String(containerId || "all");
+    selectedBeatLibraryContainerIdRef.current = nextId;
+    setSelectedBeatLibraryContainerId(nextId);
+  }, []);
   const [beatLibraryRootCollapsed, setBeatLibraryRootCollapsed] = useState(() => {
     try {
       return window.localStorage.getItem(BEAT_LIBRARY_ROOT_COLLAPSED_STORAGE_KEY) === "1";
@@ -2420,7 +3022,14 @@ export default function App() {
   const [editingBeatLibraryBeatId, setEditingBeatLibraryBeatId] = useState(null);
   const [editingBeatLibraryBeatName, setEditingBeatLibraryBeatName] = useState("");
   const [beatLibraryDropTargetId, setBeatLibraryDropTargetId] = useState(null);
+  const [activeBeatLibraryDragBeatId, setActiveBeatLibraryDragBeatId] = useState(null);
+  const gridSettingsPresetLastOverIdRef = React.useRef("");
   const beatLibraryLastHoverTargetRef = React.useRef("");
+  const beatLibraryLastBeatOverIdRef = React.useRef("");
+  const beatLibraryPendingRenameExitRef = React.useRef("");
+  const beatLibraryPendingBeatRenameExitRef = React.useRef("");
+  const gridSettingsPresetPendingRenameExitRef = React.useRef("");
+  const beatLibraryJustDraggedContainerRef = React.useRef({ id: "", at: 0 });
   const beatLibraryExpandAllSnapshotRef = React.useRef(null);
   const [localBeatPast, setLocalBeatPast] = useState([]);
   const [localBeatFuture, setLocalBeatFuture] = useState([]);
@@ -2431,7 +3040,13 @@ export default function App() {
   const [publicArrangementLibraryLoading, setPublicArrangementLibraryLoading] = useState(false);
   const [publicLibraryError, setPublicLibraryError] = useState("");
   const [libraryFiltersOpen, setLibraryFiltersOpen] = useState(false);
+  const [isBeatLibraryActionsMenuOpen, setIsBeatLibraryActionsMenuOpen] = useState(false);
   const libraryFiltersRef = useRef(null);
+  const libraryFiltersButtonRef = useRef(null);
+  const beatLibraryActionsMenuRef = useRef(null);
+  const beatLibraryActionsMenuButtonRef = useRef(null);
+  const [libraryFiltersMenuStyle, setLibraryFiltersMenuStyle] = useState(null);
+  const [beatLibraryActionsMenuStyle, setBeatLibraryActionsMenuStyle] = useState(null);
   const [savedPresets, setSavedPresets] = useState(() => {
     try {
       const raw = window.localStorage.getItem(USER_PRESETS_STORAGE_KEY);
@@ -2509,14 +3124,98 @@ export default function App() {
       const target = event.target;
       if (!(target instanceof Node)) return;
       const root = libraryFiltersRef.current;
+      const button = libraryFiltersButtonRef.current;
       if (root instanceof HTMLElement && root.contains(target)) return;
+      if (button instanceof HTMLElement && button.contains(target)) return;
       setLibraryFiltersOpen(false);
     };
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") setLibraryFiltersOpen(false);
+    };
     document.addEventListener("pointerdown", handlePointerDown, true);
+    document.addEventListener("keydown", handleKeyDown);
     return () => {
       document.removeEventListener("pointerdown", handlePointerDown, true);
+      document.removeEventListener("keydown", handleKeyDown);
     };
   }, [libraryFiltersOpen]);
+  useEffect(() => {
+    if (!libraryFiltersOpen) {
+      setLibraryFiltersMenuStyle(null);
+      return undefined;
+    }
+    const updatePosition = () => {
+      const button = libraryFiltersButtonRef.current;
+      if (!(button instanceof HTMLElement)) return;
+      const rect = button.getBoundingClientRect();
+      const gap = 8;
+      const estimatedHeight = 220;
+      const shouldOpenUp = window.innerHeight - rect.bottom < estimatedHeight && rect.top > estimatedHeight / 2;
+      setLibraryFiltersMenuStyle({
+        position: "fixed",
+        zIndex: 120,
+        right: Math.max(8, window.innerWidth - rect.right),
+        top: shouldOpenUp ? "auto" : rect.bottom + gap,
+        bottom: shouldOpenUp ? Math.max(8, window.innerHeight - rect.top + gap) : "auto",
+      });
+    };
+    updatePosition();
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
+    return () => {
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+    };
+  }, [libraryFiltersOpen]);
+  useEffect(() => {
+    if (!isBeatLibraryActionsMenuOpen) return undefined;
+    const handlePointerDown = (event) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      const menu = beatLibraryActionsMenuRef.current;
+      const button = beatLibraryActionsMenuButtonRef.current;
+      if (menu instanceof HTMLElement && menu.contains(target)) return;
+      if (button instanceof HTMLElement && button.contains(target)) return;
+      setIsBeatLibraryActionsMenuOpen(false);
+    };
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") setIsBeatLibraryActionsMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", handlePointerDown, true);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown, true);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isBeatLibraryActionsMenuOpen]);
+  useEffect(() => {
+    if (!isBeatLibraryActionsMenuOpen) {
+      setBeatLibraryActionsMenuStyle(null);
+      return undefined;
+    }
+    const updatePosition = () => {
+      const button = beatLibraryActionsMenuButtonRef.current;
+      if (!(button instanceof HTMLElement)) return;
+      const rect = button.getBoundingClientRect();
+      const gap = 8;
+      const estimatedHeight = 100;
+      const shouldOpenUp = window.innerHeight - rect.bottom < estimatedHeight && rect.top > estimatedHeight / 2;
+      setBeatLibraryActionsMenuStyle({
+        position: "fixed",
+        zIndex: 120,
+        right: Math.max(8, window.innerWidth - rect.right),
+        top: shouldOpenUp ? "auto" : rect.bottom + gap,
+        bottom: shouldOpenUp ? Math.max(8, window.innerHeight - rect.top + gap) : "auto",
+      });
+    };
+    updatePosition();
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
+    return () => {
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+    };
+  }, [isBeatLibraryActionsMenuOpen]);
   const [playbackRate, setPlaybackRate] = useState(() => {
     try {
       const raw = window.localStorage.getItem(PLAYBACK_RATE_STORAGE_KEY);
@@ -2553,20 +3252,9 @@ export default function App() {
   const [showBraveAudioNotice, setShowBraveAudioNotice] = useState(true);
   const [shareCopied, setShareCopied] = useState(false);
   const [shareLinkType, setShareLinkType] = useState("");
-  const [isLibraryMenuOpen, setIsLibraryMenuOpen] = useState(false);
   const [bpmDraft, setBpmDraft] = useState("120");
   const [menuViewportTick, setMenuViewportTick] = useState(0);
   const activeTabRef = React.useRef(activeTab);
-  const wasBeatLibraryOpenRef = React.useRef(false);
-  const beatLibraryDragRef = React.useRef({
-    dragging: false,
-    offsetX: 0,
-    offsetY: 0,
-    pointerId: null,
-    holdTimer: null,
-    startX: 0,
-    startY: 0,
-  });
   const arrangementDragRef = React.useRef({
     dragging: false,
     offsetX: 0,
@@ -2589,12 +3277,18 @@ export default function App() {
   const arrangementDragBeatRef = React.useRef(null);
   const beatLibraryTreeDragRef = React.useRef(null);
   const arrangementNotationPanelRef = React.useRef(null);
+  const arrangementNotationPreviewInnerRef = React.useRef(null);
   const arrangementNotationExportRef = React.useRef(null);
   const arrangementNotationVisiblePagesRef = React.useRef(null);
   const arrangementNotationPageRefs = React.useRef([]);
   const arrangementNotationScrollBucketRef = React.useRef(-1);
   const arrangementTitleMenuRef = React.useRef(null);
   const arrangementTitleMenuButtonRef = React.useRef(null);
+  const arrangementPickerSelectRef = React.useRef(null);
+  const arrangementTrashTargetRef = React.useRef(null);
+  const arrangementSortLastOverIdRef = React.useRef("");
+  const arrangementSortDragOverTrashRef = React.useRef(false);
+  const arrangementOrderTrashHoverRef = React.useRef(false);
   const isFloatingPanelDragBlockedTarget = React.useCallback((target) => {
     return (
       target instanceof Element &&
@@ -2659,12 +3353,8 @@ export default function App() {
       drag.holdTimer = null;
     }, 180);
   }, [clearFloatingPanelTouchHold, isFloatingPanelDragBlockedTarget]);
-  const arrangementGlobalSettingsMenuRef = React.useRef(null);
-  const arrangementGlobalSettingsMenuButtonRef = React.useRef(null);
   const arrangementNotationMoreMenuRef = React.useRef(null);
   const arrangementNotationMoreMenuButtonRef = React.useRef(null);
-  const libraryMenuRef = React.useRef(null);
-  const libraryMenuButtonRef = React.useRef(null);
   const fileMenuRef = React.useRef(null);
   const fileMenuButtonRef = React.useRef(null);
   const authEmailInputRef = React.useRef(null);
@@ -2676,7 +3366,6 @@ export default function App() {
   const editingAdvancedMenuButtonRef = React.useRef(null);
   const loopAdvancedMenuRef = React.useRef(null);
   const loopAdvancedMenuButtonRef = React.useRef(null);
-  const beatLibraryPanelRef = React.useRef(null);
   const midiImportInputRef = React.useRef(null);
   const kitOrderListRef = React.useRef(null);
   const arrangementListRef = React.useRef(null);
@@ -2695,6 +3384,7 @@ export default function App() {
   const appliedExampleIdRef = React.useRef(null);
   const pendingSharedLoadRef = React.useRef(null);
   const appliedSharedKeyRef = React.useRef(null);
+  const importedBeatLoadInProgressRef = React.useRef(false);
   const gridMenuButtonRef = React.useRef(null);
   const gridMenuPopupRef = React.useRef(null);
   const authUser = authSession?.user || null;
@@ -3054,22 +3744,6 @@ export default function App() {
   useEffect(() => {
     try {
       window.localStorage.setItem(
-        LEGACY_SELECTION_ENABLED_STORAGE_KEY,
-        legacySelectionEnabled ? "1" : "0"
-      );
-    } catch (_) {}
-  }, [legacySelectionEnabled]);
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(
-        MOVE_MODE_DEBUG_ENABLED_STORAGE_KEY,
-        moveModeDebugEnabled ? "1" : "0"
-      );
-    } catch (_) {}
-  }, [moveModeDebugEnabled]);
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(
         STICKING_GUIDE_ENABLED_STORAGE_KEY,
         stickingGuideEnabled ? "1" : "0"
       );
@@ -3093,6 +3767,14 @@ export default function App() {
       );
     } catch (_) {}
   }, [stickingEditModeEnabled]);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        NOTATION_STICKING_SELECTION_MODE_ENABLED_STORAGE_KEY,
+        notationStickingSelectionModeEnabled ? "1" : "0"
+      );
+    } catch (_) {}
+  }, [notationStickingSelectionModeEnabled]);
   useEffect(() => {
     try {
       window.localStorage.setItem(
@@ -3126,16 +3808,26 @@ export default function App() {
     } catch (_) {}
   }, [showNotationSticking]);
   useEffect(() => {
-    // Notation sticking is the single source of truth for sticking visibility.
-    if (stickingGuideEnabled !== showNotationSticking) {
-      setStickingGuideEnabled(showNotationSticking);
-    }
-  }, [showNotationSticking, stickingGuideEnabled]);
+    try {
+      window.localStorage.setItem(
+        BEAT_AUTO_UPDATE_ENABLED_STORAGE_KEY,
+        beatAutoUpdateEnabled ? "1" : "0"
+      );
+    } catch (_) {}
+  }, [beatAutoUpdateEnabled]);
   useEffect(() => {
     try {
       window.localStorage.setItem(NOTATION_STICKING_VIEW_STORAGE_KEY, notationStickingView);
     } catch (_) {}
   }, [notationStickingView]);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        NOTATION_STICKING_SELECTION_STORAGE_KEY,
+        JSON.stringify(notationStickingSelection || {})
+      );
+    } catch (_) {}
+  }, [notationStickingSelection]);
   useEffect(() => {
     try {
       window.localStorage.setItem(PREFERENCES_CATEGORY_STORAGE_KEY, preferencesCategory);
@@ -3156,6 +3848,7 @@ export default function App() {
         String(selectedBeatLibraryContainerId || "all")
       );
     } catch (_) {}
+    selectedBeatLibraryContainerIdRef.current = String(selectedBeatLibraryContainerId || "all");
   }, [selectedBeatLibraryContainerId]);
   useEffect(() => {
     try {
@@ -3208,11 +3901,11 @@ export default function App() {
   useEffect(() => {
     try {
       window.localStorage.setItem(
-        ARRANGEMENT_NOTATION_PAGE_MODE_STORAGE_KEY,
-        arrangementNotationPageMode
+        ARRANGEMENT_NOTATION_PREVIEW_SCALE_STORAGE_KEY,
+        String(arrangementNotationPreviewScale)
       );
     } catch (_) {}
-  }, [arrangementNotationPageMode]);
+  }, [arrangementNotationPreviewScale]);
   useEffect(() => {
     try {
       window.localStorage.setItem(ARRANGEMENT_TITLE_LINE1_STORAGE_KEY, arrangementTitleLine1Draft);
@@ -3276,42 +3969,6 @@ export default function App() {
     };
   }, [arrangementTitleMenuOpen]);
   React.useEffect(() => {
-    if (!arrangementGlobalSettingsMenuOpen) return undefined;
-    const updateMenuPosition = () => {
-      const button = arrangementGlobalSettingsMenuButtonRef.current;
-      if (!(button instanceof HTMLElement)) return;
-      const rect = button.getBoundingClientRect();
-      const menuWidth = 248;
-      const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
-      const left = Math.max(8, Math.min(rect.left, viewportWidth - menuWidth - 8));
-      const top = Math.max(8, rect.bottom + 8);
-      setArrangementGlobalSettingsMenuPosition({ top, left });
-    };
-    const handlePointerDown = (event) => {
-      const target = event.target;
-      if (!(target instanceof Node)) return;
-      const menu = arrangementGlobalSettingsMenuRef.current;
-      const button = arrangementGlobalSettingsMenuButtonRef.current;
-      if (menu instanceof HTMLElement && menu.contains(target)) return;
-      if (button instanceof HTMLElement && button.contains(target)) return;
-      setArrangementGlobalSettingsMenuOpen(false);
-    };
-    const handleKeyDown = (event) => {
-      if (event.key === "Escape") setArrangementGlobalSettingsMenuOpen(false);
-    };
-    updateMenuPosition();
-    document.addEventListener("pointerdown", handlePointerDown, true);
-    document.addEventListener("keydown", handleKeyDown);
-    window.addEventListener("resize", updateMenuPosition);
-    window.addEventListener("scroll", updateMenuPosition, true);
-    return () => {
-      document.removeEventListener("pointerdown", handlePointerDown, true);
-      document.removeEventListener("keydown", handleKeyDown);
-      window.removeEventListener("resize", updateMenuPosition);
-      window.removeEventListener("scroll", updateMenuPosition, true);
-    };
-  }, [arrangementGlobalSettingsMenuOpen]);
-  React.useEffect(() => {
     if (!arrangementNotationMoreMenuOpen) return undefined;
     const updateMenuPosition = () => {
       const button = arrangementNotationMoreMenuButtonRef.current;
@@ -3367,27 +4024,6 @@ export default function App() {
       setArrangementNotationRowMenuState(null);
     }
   }, [arrangementNotationRowMenuState, arrangementSelection]);
-  React.useEffect(() => {
-    if (!isLibraryMenuOpen) return undefined;
-    const handlePointerDown = (event) => {
-      const target = event.target;
-      if (!(target instanceof Node)) return;
-      const menu = libraryMenuRef.current;
-      const button = libraryMenuButtonRef.current;
-      if (menu instanceof HTMLElement && menu.contains(target)) return;
-      if (button instanceof HTMLElement && button.contains(target)) return;
-      setIsLibraryMenuOpen(false);
-    };
-    const handleKeyDown = (event) => {
-      if (event.key === "Escape") setIsLibraryMenuOpen(false);
-    };
-    document.addEventListener("pointerdown", handlePointerDown, true);
-    document.addEventListener("keydown", handleKeyDown);
-    return () => {
-      document.removeEventListener("pointerdown", handlePointerDown, true);
-      document.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [isLibraryMenuOpen]);
   React.useEffect(() => {
     if (!isShareActionsDialogOpen) return undefined;
     const updateMenuPosition = () => {
@@ -3534,13 +4170,6 @@ export default function App() {
       );
     } catch (_) {}
   }, [midiImportHihatGhostMax]);
-  useEffect(() => {
-    if (isBeatLibraryOpen && !wasBeatLibraryOpenRef.current) {
-      setLibraryBpmTarget(bpm);
-    }
-    wasBeatLibraryOpenRef.current = isBeatLibraryOpen;
-  }, [isBeatLibraryOpen, bpm]);
-
   useEffect(() => {
     activeTabRef.current = activeTab;
   }, [activeTab]);
@@ -3835,6 +4464,7 @@ export default function App() {
   const [selection, setSelection] = useState(null);
   const [selectionFinalized, setSelectionFinalized] = useState(0);
   const lastHandledSelectionFinalizedRef = React.useRef(0);
+  const lastHandledNotationStickingSelectionFinalizedRef = React.useRef(0);
   const tupletBaselineGridRef = React.useRef(null);
   const tupletBaselineSubsByBarRef = React.useRef(null);
   const applyingTupletRemapRef = React.useRef(false);
@@ -3904,7 +4534,6 @@ useEffect(() => {
       if (
         pendingPresetChange ||
         isKitEditorOpen ||
-        isBeatLibraryOpen ||
         isArrangementOpen ||
         isArrangementNotationOpen ||
         isPublicSubmitDialogOpen ||
@@ -3930,7 +4559,6 @@ useEffect(() => {
     loopRule,
     pendingPresetChange,
     isKitEditorOpen,
-    isBeatLibraryOpen,
     isArrangementOpen,
     isArrangementNotationOpen,
     isPublicSubmitDialogOpen,
@@ -3942,33 +4570,6 @@ useEffect(() => {
     isPreferencesDialogOpen,
   ]);
 
-  useEffect(() => {
-    if (!isBeatLibraryOpen) return;
-    const panelWidth = 704; // max-w-[44rem]
-    const margin = 8;
-    const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
-    const nextX =
-      viewportWidth > 0 && viewportWidth < 768
-        ? margin
-        : Math.max(margin, viewportWidth - panelWidth - margin);
-    setBeatLibraryPos((prev) => ({ ...prev, x: nextX }));
-    const shouldFocusBeatSaveButton = !loadedLocalBeatId;
-    const raf = shouldFocusBeatSaveButton
-      ? window.requestAnimationFrame(() => {
-          beatSaveButtonRef.current?.focus?.();
-        })
-      : 0;
-    const onKeyDown = (e) => {
-      if (e.key !== "Escape") return;
-      e.preventDefault();
-      setIsBeatLibraryOpen(false);
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      if (raf) window.cancelAnimationFrame(raf);
-      window.removeEventListener("keydown", onKeyDown);
-    };
-  }, [isBeatLibraryOpen, loadedLocalBeatId]);
   useEffect(() => {
     if (!loadedLocalBeatId) return;
     const stillExists = localBeats.some((b) => String(b?.id || "") === String(loadedLocalBeatId));
@@ -3990,7 +4591,7 @@ useEffect(() => {
   useEffect(() => {
     if (!isArrangementNotationOpen) return;
     const margin = 8;
-    const panelWidth = 1040;
+    const panelWidth = arrangementNotationPanelWidth;
     const panelHeight = arrangementNotationPanelRef.current?.offsetHeight || 760;
     const nextX = Math.max(margin, window.innerWidth - panelWidth - margin);
     const nextY = Math.max(margin, Math.round((window.innerHeight - panelHeight) / 2));
@@ -4002,11 +4603,43 @@ useEffect(() => {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [isArrangementNotationOpen]);
+  }, [isArrangementNotationOpen, arrangementNotationPanelWidth]);
   useEffect(() => {
-    if (isBeatLibraryOpen) return;
+    if (!isArrangementNotationOpen) return;
+    const node = arrangementNotationPreviewInnerRef.current;
+    if (!(node instanceof HTMLElement)) return;
+    let raf = 0;
+    const measure = () => {
+      const nextHeight = Math.ceil(node.scrollHeight * arrangementNotationPreviewScale);
+      setArrangementNotationPreviewScaledHeight((prev) =>
+        Math.abs(prev - nextHeight) < 1 ? prev : nextHeight
+      );
+    };
+    const scheduleMeasure = () => {
+      if (raf) window.cancelAnimationFrame(raf);
+      raf = window.requestAnimationFrame(measure);
+    };
+    scheduleMeasure();
+    const observer = new ResizeObserver(scheduleMeasure);
+    observer.observe(node);
+    window.addEventListener("resize", scheduleMeasure);
+    return () => {
+      if (raf) window.cancelAnimationFrame(raf);
+      observer.disconnect();
+      window.removeEventListener("resize", scheduleMeasure);
+    };
+  }, [
+    isArrangementNotationOpen,
+    arrangementNotationPreviewScale,
+    arrangementNotationViewMode,
+    arrangementNotationPageMode,
+    arrangementNotationBarsPerRow,
+    arrangementNotationTheme,
+  ]);
+  useEffect(() => {
+    if (isArrangementOpen) return;
     setIsPublicSubmitDialogOpen(false);
-  }, [isBeatLibraryOpen]);
+  }, [isArrangementOpen]);
   useEffect(() => {
     if (!isPublicSubmitDialogOpen) return;
     const raf = window.requestAnimationFrame(() => {
@@ -4032,39 +4665,6 @@ useEffect(() => {
       window.removeEventListener("keydown", onKeyDown);
     };
   }, [isPublicSubmitDialogOpen, lockedPublicComposer]);
-  useEffect(() => {
-    if (!isBeatLibraryOpen) return;
-    const onPointerMove = (e) => {
-      const drag = beatLibraryDragRef.current;
-      if (drag.dragging) {
-        if (drag.pointerId != null && e.pointerId !== drag.pointerId) return;
-        const minX = 8;
-        const minY = 8;
-        const nextX = Math.max(minX, e.clientX - drag.offsetX);
-        const nextY = Math.max(minY, e.clientY - drag.offsetY);
-        setBeatLibraryPos({ x: nextX, y: nextY });
-        return;
-      }
-      if (drag.pointerId == null || e.pointerId !== drag.pointerId || !drag.holdTimer) return;
-      const dx = e.clientX - drag.startX;
-      const dy = e.clientY - drag.startY;
-      if (dx * dx + dy * dy > 36) clearFloatingPanelTouchHold(beatLibraryDragRef);
-    };
-    const stopDrag = (e) => {
-      const drag = beatLibraryDragRef.current;
-      if (drag.pointerId != null && e.pointerId !== drag.pointerId) return;
-      drag.dragging = false;
-      clearFloatingPanelTouchHold(beatLibraryDragRef);
-    };
-    window.addEventListener("pointermove", onPointerMove);
-    window.addEventListener("pointerup", stopDrag);
-    window.addEventListener("pointercancel", stopDrag);
-    return () => {
-      window.removeEventListener("pointermove", onPointerMove);
-      window.removeEventListener("pointerup", stopDrag);
-      window.removeEventListener("pointercancel", stopDrag);
-    };
-  }, [isBeatLibraryOpen, clearFloatingPanelTouchHold]);
   useEffect(() => {
     if (!isArrangementOpen) return;
     const onPointerMove = (e) => {
@@ -4206,10 +4806,10 @@ useEffect(() => {
       if (raw === "fast") return 130;
       if (raw === "slow") return 500;
       const value = Number(raw);
-      if (!Number.isFinite(value)) return 130;
+      if (!Number.isFinite(value)) return 300;
       return Math.max(130, Math.min(800, Math.round(value)));
     } catch (_) {
-      return 130;
+      return 300;
     }
   });
   const getShortcutBinding = React.useCallback(
@@ -4248,7 +4848,8 @@ useEffect(() => {
       window.localStorage.setItem(GRID_SELECTION_HOLD_SPEED_STORAGE_KEY, String(gridSelectionHoldDelayMs));
     } catch (_) {}
   }, [gridSelectionHoldDelayMs]);
-  const loopModeEnabled = loopRepeats !== "off" && !stickingEditModeEnabled;
+  const loopModeEnabled =
+    loopRepeats !== "off" && !stickingEditModeEnabled && !notationStickingSelectionModeEnabled;
 
 // If selection collapses to a single cell while looping is active, drop the loop.
   useEffect(() => {
@@ -4297,6 +4898,10 @@ useEffect(() => {
     if (!stickingEditModeEnabled) return;
     if (loopRule) setLoopRule(null);
   }, [stickingEditModeEnabled, loopRule]);
+  useEffect(() => {
+    if (!notationStickingSelectionModeEnabled) return;
+    if (loopRule) setLoopRule(null);
+  }, [notationStickingSelectionModeEnabled, loopRule]);
 // { rowStart, rowEnd, start, length }
   const [mergeRests, setMergeRests] = useState(true);
   const [mergeNotes, setMergeNotes] = useState(true);
@@ -4306,8 +4911,9 @@ useEffect(() => {
   const [printComposer, setPrintComposer] = useState("");
   const [printWatermarkEnabled, setPrintWatermarkEnabled] = useState(true);
   const [printQrEnabled, setPrintQrEnabled] = useState(false);
+  const [isNotationPngDialogOpen, setIsNotationPngDialogOpen] = useState(false);
+  const [notationPngColor, setNotationPngColor] = useState("black");
   const beatNameInputRef = useRef(null);
-  const beatSaveButtonRef = useRef(null);
   const publicSubmitTitleInputRef = useRef(null);
   const publicSubmitComposerInputRef = useRef(null);
   const printTitleInputRef = useRef(null);
@@ -4779,6 +5385,66 @@ useEffect(() => {
     },
     [rankCell]
   );
+  const remapNotationStickingSelectionBySubdivisions = React.useCallback(
+    (prevSelection, prevGrid, oldSubsByBar, newSubsByBar) => {
+      if (!prevSelection || typeof prevSelection !== "object") return {};
+      const oldStepsByBar = oldSubsByBar.map((subs) => buildStepMeta(subs));
+      const newStepsByBar = newSubsByBar.map((subs) => buildStepMeta(subs));
+      const oldOffsets = [0];
+      for (let i = 0; i < oldStepsByBar.length; i++) oldOffsets.push(oldOffsets[i] + oldStepsByBar[i].length);
+      const newOffsets = [0];
+      for (let i = 0; i < newStepsByBar.length; i++) newOffsets.push(newOffsets[i] + newStepsByBar[i].length);
+      const next = {};
+
+      ALL_INSTRUMENTS.forEach((inst) => {
+        const instId = inst.id;
+        const prevRow = prevGrid?.[instId] || [];
+        for (let b = 0; b < Math.min(oldStepsByBar.length, newStepsByBar.length); b++) {
+          const oldMeta = oldStepsByBar[b];
+          const newMeta = newStepsByBar[b];
+          const oldStart = oldOffsets[b];
+          const newStart = newOffsets[b];
+          const oldQuarterCount = Math.max(1, oldSubsByBar[b]?.length || 0);
+          const newQuarterCount = Math.max(1, newSubsByBar[b]?.length || 0);
+          const quarterCount = Math.min(oldQuarterCount, newQuarterCount);
+
+          for (let q = 0; q < quarterCount; q++) {
+            const events = [];
+            for (let oldStep = 0; oldStep < oldMeta.length; oldStep++) {
+              const m = oldMeta[oldStep];
+              if (!m || m.quarterIndex !== q) continue;
+              const oldGlobal = oldStart + oldStep;
+              if (prevSelection[`${instId}:${oldGlobal}`] !== true) continue;
+              if ((prevRow[oldGlobal] ?? CELL.OFF) === CELL.OFF) continue;
+              const subdiv = Math.max(1, m.subdiv || 1);
+              events.push({
+                phase: m.subIndex / subdiv,
+                srcSub: m.subIndex,
+              });
+            }
+            if (!events.length) continue;
+            events.sort((a, b) => (a.phase - b.phase) || (a.srcSub - b.srcSub));
+
+            const newSubdiv = Math.max(1, Number(newSubsByBar[b]?.[q]) || 1);
+            const slots = assignPhasesToSlots(events.map((e) => e.phase), newSubdiv);
+
+            for (let i = 0; i < events.length; i++) {
+              const targetSub = Math.max(0, Math.min(newSubdiv - 1, slots[i]));
+              const mappedIdx = newMeta.findIndex(
+                (m) => m?.quarterIndex === q && m?.subIndex === targetSub
+              );
+              if (mappedIdx < 0) continue;
+              const nextGlobal = newStart + mappedIdx;
+              next[`${instId}:${nextGlobal}`] = true;
+            }
+          }
+        }
+      });
+
+      return next;
+    },
+    []
+  );
 
   const handleResolutionChange = (newRes) => {
     tupletBaselineGridRef.current = null;
@@ -4794,6 +5460,14 @@ useEffect(() => {
 
     if (keepTiming) {
       setBaseGridWithUndo((prev) => remapGridBySubdivisions(prev, oldSubsByBar, nextSubsByBar));
+      setNotationStickingSelection((prev) =>
+        remapNotationStickingSelectionBySubdivisions(
+          prev,
+          baseGridRef.current,
+          oldSubsByBar,
+          nextSubsByBar
+        )
+      );
     }
     setTupletOverridesByBar(nextOverridesByBar);
     setResolution(newRes);
@@ -4815,6 +5489,14 @@ useEffect(() => {
     );
     if (keepTiming) {
       setBaseGridWithUndo((prev) => remapGridBySubdivisions(prev, oldSubsByBar, nextSubsByBar));
+      setNotationStickingSelection((prev) =>
+        remapNotationStickingSelectionBySubdivisions(
+          prev,
+          baseGridRef.current,
+          oldSubsByBar,
+          nextSubsByBar
+        )
+      );
     }
     setTupletOverridesByBar(nextOverridesByBar);
     setTimeSig(newTS);
@@ -4860,6 +5542,14 @@ useEffect(() => {
             nextSubsByBar
           );
         });
+        setNotationStickingSelection((prev) =>
+          remapNotationStickingSelectionBySubdivisions(
+            prev,
+            tupletBaselineGridRef.current || baseGridRef.current,
+            tupletBaselineSubsByBarRef.current || oldSubsByBar,
+            nextSubsByBar
+          )
+        );
       } else {
         tupletBaselineGridRef.current = null;
         tupletBaselineSubsByBarRef.current = null;
@@ -4901,6 +5591,14 @@ useEffect(() => {
       if (keepTiming) {
         applyingTupletRemapRef.current = true;
         setBaseGridWithUndo((prev) => remapGridBySubdivisions(prev, oldSubsByBar, nextSubsByBar));
+        setNotationStickingSelection((prev) =>
+          remapNotationStickingSelectionBySubdivisions(
+            prev,
+            baseGridRef.current,
+            oldSubsByBar,
+            nextSubsByBar
+          )
+        );
       } else {
         tupletBaselineGridRef.current = null;
         tupletBaselineSubsByBarRef.current = null;
@@ -4914,6 +5612,7 @@ useEffect(() => {
       baseSubdivPerQuarter,
       keepTiming,
       remapGridBySubdivisions,
+      remapNotationStickingSelectionBySubdivisions,
     ]
   );
   const stepGlobalTupletValue = React.useCallback(
@@ -4961,6 +5660,8 @@ useEffect(() => {
   const arrangementComposerDraftRef = React.useRef(arrangementComposerDraft);
   const loadedArrangementIdRef = React.useRef(loadedArrangementId);
   const loadedLocalBeatIdRef = React.useRef(loadedLocalBeatId);
+  const isLoadedLocalBeatNotationSelectionDirtyRef = React.useRef(false);
+  const flushLoadedLocalBeatNotationSelectionRef = React.useRef(async () => {});
   const beatNameDraftRef = React.useRef(beatNameDraft);
   const beatCategoryDraftRef = React.useRef(beatCategoryDraft);
   const beatStyleDraftRef = React.useRef(beatStyleDraft);
@@ -5159,9 +5860,24 @@ useEffect(() => {
       }
     });
   }, []);
+  const cloneBeatLibraryContainerList = React.useCallback((items) => {
+    if (!Array.isArray(items)) return [];
+    return items.map((entry) => {
+      try {
+        return structuredClone(entry);
+      } catch (_) {
+        try {
+          return JSON.parse(JSON.stringify(entry));
+        } catch (_) {
+          return entry;
+        }
+      }
+    });
+  }, []);
   const snapshotLibraryState = React.useCallback(() => {
     return {
       localBeats: cloneLocalBeatList(localBeatsRef.current),
+      beatLibraryContainers: cloneBeatLibraryContainerList(beatLibraryContainers),
       arrangementItems: normalizeArrangementItems(arrangementItemsRef.current),
       savedArrangements: cloneSavedArrangementList(savedArrangementsRef.current),
       arrangementNameDraft: String(arrangementNameDraftRef.current || ""),
@@ -5173,11 +5889,21 @@ useEffect(() => {
       beatNameDraft: String(beatNameDraftRef.current || ""),
       beatCategoryDraft: String(beatCategoryDraftRef.current || "all"),
       beatStyleDraft: String(beatStyleDraftRef.current || "all"),
+      selectedBeatLibraryContainerId: String(selectedBeatLibraryContainerId || "all"),
+      beatLibraryRootCollapsed: Boolean(beatLibraryRootCollapsed),
     };
-  }, [cloneLocalBeatList, cloneSavedArrangementList]);
+  }, [
+    beatLibraryContainers,
+    beatLibraryRootCollapsed,
+    cloneBeatLibraryContainerList,
+    cloneLocalBeatList,
+    cloneSavedArrangementList,
+    selectedBeatLibraryContainerId,
+  ]);
   const applyLibraryState = React.useCallback((snapshot) => {
     if (!snapshot || typeof snapshot !== "object") return;
     const nextLocalBeats = cloneLocalBeatList(snapshot.localBeats);
+    const nextBeatLibraryContainers = cloneBeatLibraryContainerList(snapshot.beatLibraryContainers);
     const nextArrangementItems = normalizeArrangementItems(snapshot.arrangementItems);
     const nextSavedArrangements = cloneSavedArrangementList(snapshot.savedArrangements);
     localBeatsRef.current = nextLocalBeats;
@@ -5193,6 +5919,14 @@ useEffect(() => {
     beatCategoryDraftRef.current = String(snapshot.beatCategoryDraft || "all");
     beatStyleDraftRef.current = String(snapshot.beatStyleDraft || "all");
     setLocalBeats(nextLocalBeats);
+    setBeatLibraryContainers(nextBeatLibraryContainers);
+    selectBeatLibraryContainer(String(snapshot.selectedBeatLibraryContainerId || "all"));
+    setBeatLibraryRootCollapsed(Boolean(snapshot.beatLibraryRootCollapsed));
+    setEditingBeatLibraryContainerId(null);
+    setEditingBeatLibraryContainerName("");
+    setEditingBeatLibraryBeatId(null);
+    setEditingBeatLibraryBeatName("");
+    setBeatLibraryDropTargetId(null);
     setArrangementItems(nextArrangementItems);
     setSavedArrangements(nextSavedArrangements);
     setLoadedArrangementId(snapshot.loadedArrangementId || null);
@@ -5204,7 +5938,7 @@ useEffect(() => {
     setBeatNameDraft(String(snapshot.beatNameDraft || ""));
     setBeatCategoryDraft(String(snapshot.beatCategoryDraft || "all"));
     setBeatStyleDraft(String(snapshot.beatStyleDraft || "all"));
-  }, [cloneLocalBeatList, cloneSavedArrangementList]);
+  }, [cloneBeatLibraryContainerList, cloneLocalBeatList, cloneSavedArrangementList]);
 
   const syncLocalBeatHistoryState = React.useCallback(() => {
     setLocalBeatPast([...localBeatPastRef.current]);
@@ -5260,7 +5994,7 @@ useEffect(() => {
     arrangementNameDraftRef.current = "";
     setLocalBeats([]);
     setBeatLibraryContainers([]);
-    setSelectedBeatLibraryContainerId("all");
+    selectBeatLibraryContainer("all");
     setBeatLibraryRootCollapsed(false);
     setEditingBeatLibraryContainerId(null);
     setEditingBeatLibraryContainerName("");
@@ -5272,7 +6006,6 @@ useEffect(() => {
     setLoadedLocalBeatId(null);
     setLoadedArrangementId(null);
     setArrangementNameDraft("");
-    setArrangementSaveAsOpen(false);
     setArrangementSelection(null);
     setArrangementSelectionAnchor(null);
     setArrangementBarSelection(null);
@@ -5404,8 +6137,10 @@ useEffect(() => {
       gridPastRef.current = [];
       gridFutureRef.current = [];
       setBaseGrid(nextGrid);
+      setNotationStickingSelection(shared.notationStickingSelection || {});
       syncHistoryState();
       pendingSharedLoadRef.current = null;
+      importedBeatLoadInProgressRef.current = false;
       return;
     }
 
@@ -5479,6 +6214,14 @@ useEffect(() => {
       window.localStorage.setItem(LOCAL_BEAT_LIBRARY_STORAGE_KEY, JSON.stringify(localBeats));
     } catch (_) {}
   }, [localBeats, authUser?.id]);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        GRID_SETTINGS_PRESET_LIBRARY_STORAGE_KEY,
+        JSON.stringify(gridSettingsPresets)
+      );
+    } catch (_) {}
+  }, [gridSettingsPresets]);
 
   const getPresetIds = React.useCallback(
     (presetName) => {
@@ -5496,6 +6239,224 @@ useEffect(() => {
     },
     [savedPresets]
   );
+  const applyGridSettingsPreset = React.useCallback((preset) => {
+    if (!preset) return;
+    const nextBars = Math.max(1, Number(preset.bars) || 1);
+    const nextResolution = [4, 8, 16, 32].includes(Number(preset.resolution))
+      ? Number(preset.resolution)
+      : 8;
+    const nextTimeSig = {
+      n: Math.max(2, Math.min(15, Number(preset?.timeSig?.n) || 4)),
+      d: Number(preset?.timeSig?.d) === 8 ? 8 : 4,
+    };
+    const nextBpm = Math.max(20, Math.min(400, Number(preset?.bpm) || 120));
+    const tupletsByBar = buildEmptyTupletOverridesForPreset(nextBars, nextTimeSig);
+    const oldSubsByBar = quarterSubdivisionsByBar;
+    const nextBase = getBaseSubdivPerQuarter(nextResolution, nextTimeSig);
+    const nextSubsByBar = tupletsByBar.map((row) =>
+      resolveQuarterSubdivisions(row, nextBase)
+    );
+
+    tupletBaselineGridRef.current = null;
+    tupletBaselineSubsByBarRef.current = null;
+    setModifiedPresetBase(null);
+    setPendingPresetChange(null);
+    setPendingRemoval(null);
+    setSelection(null);
+    setLoopRule(null);
+    setLoopRepeats("off");
+    setLoadedLocalBeatId(null);
+    setBpm(nextBpm);
+    setBpmDraft(String(nextBpm));
+    setBaseGridWithUndo((prev) => remapGridBySubdivisions(prev, oldSubsByBar, nextSubsByBar));
+    setNotationStickingSelection((prev) =>
+      remapNotationStickingSelectionBySubdivisions(
+        prev,
+        baseGridRef.current,
+        oldSubsByBar,
+        nextSubsByBar
+      )
+    );
+    setBars(nextBars);
+    setResolution(nextResolution);
+    setTimeSig(nextTimeSig);
+    setTupletOverridesByBar(tupletsByBar);
+  }, [
+    bars,
+    resolution,
+    timeSig,
+    quarterSubdivisionsByBar,
+    setBaseGridWithUndo,
+    remapGridBySubdivisions,
+    remapNotationStickingSelectionBySubdivisions,
+  ]);
+  const activeGridSettingsPreset = React.useMemo(() => {
+    return (
+      gridSettingsPresets.find((preset) => {
+        if (bars !== preset.bars || resolution !== preset.resolution) return false;
+        if (timeSig.n !== preset.timeSig.n || timeSig.d !== preset.timeSig.d) return false;
+        const expectedTuplets = preset.tupletsByBar || [];
+        if (normalizedTupletOverridesByBar.length !== expectedTuplets.length) return false;
+        return expectedTuplets.every((row, barIdx) =>
+          row.every((val, qIdx) => (normalizedTupletOverridesByBar[barIdx]?.[qIdx] ?? null) === (val ?? null))
+        );
+      }) || null
+    );
+  }, [bars, resolution, timeSig, normalizedTupletOverridesByBar, gridSettingsPresets]);
+  const makeNextGridSettingsPresetName = React.useCallback(() => {
+    const used = new Set(
+      gridSettingsPresets.map((preset) => {
+        const match = String(preset?.name || "").trim().match(/^Preset\s+(\d+)$/i);
+        return match ? Number(match[1]) : null;
+      }).filter(Number.isFinite)
+    );
+    let next = 1;
+    while (used.has(next)) next += 1;
+    return `Preset ${next}`;
+  }, [gridSettingsPresets]);
+  const saveCurrentGridSettingsPreset = React.useCallback(() => {
+    const nextPreset = normalizeGridSettingsPresetEntry(
+      {
+        id: `grid-preset-${Math.random().toString(36).slice(2, 10)}`,
+        name: makeNextGridSettingsPresetName(),
+        bars,
+        resolution,
+        timeSig,
+        bpm,
+      },
+      gridSettingsPresets.length
+    );
+    if (!nextPreset) return;
+    setGridSettingsPresets((prev) => [nextPreset, ...prev]);
+    setSelectedGridSettingsPresetId(nextPreset.id);
+  }, [bars, resolution, timeSig, bpm, gridSettingsPresets.length, makeNextGridSettingsPresetName]);
+  const deleteSelectedGridSettingsPreset = React.useCallback(() => {
+    const targetId = String(selectedGridSettingsPresetId || "");
+    if (!targetId) return;
+    setGridSettingsPresets((prev) => prev.filter((preset) => String(preset?.id || "") !== targetId));
+    setSelectedGridSettingsPresetId("");
+    if (String(editingGridSettingsPresetId || "") === targetId) {
+      setEditingGridSettingsPresetId("");
+      setEditingGridSettingsPresetName("");
+    }
+  }, [selectedGridSettingsPresetId, editingGridSettingsPresetId]);
+  const startEditingGridSettingsPreset = React.useCallback((presetId) => {
+    const target = gridSettingsPresets.find((preset) => String(preset?.id || "") === String(presetId || ""));
+    if (!target) return;
+    gridSettingsPresetPendingRenameExitRef.current = "";
+    setEditingGridSettingsPresetId(String(target.id));
+    setEditingGridSettingsPresetName(String(target.name || ""));
+    setSelectedGridSettingsPresetId(String(target.id));
+  }, [gridSettingsPresets]);
+  const commitEditingGridSettingsPreset = React.useCallback(() => {
+    const targetId = String(editingGridSettingsPresetId || "");
+    if (!targetId) return;
+    gridSettingsPresetPendingRenameExitRef.current = "";
+    const nextName = String(editingGridSettingsPresetName || "").trim();
+    if (!nextName) {
+      setEditingGridSettingsPresetId("");
+      setEditingGridSettingsPresetName("");
+      return;
+    }
+    setGridSettingsPresets((prev) =>
+      prev.map((preset) =>
+        String(preset?.id || "") === targetId ? { ...preset, name: nextName } : preset
+      )
+    );
+    setEditingGridSettingsPresetId("");
+    setEditingGridSettingsPresetName("");
+  }, [editingGridSettingsPresetId, editingGridSettingsPresetName]);
+  const cancelEditingGridSettingsPreset = React.useCallback(() => {
+    gridSettingsPresetPendingRenameExitRef.current = "";
+    setEditingGridSettingsPresetId("");
+    setEditingGridSettingsPresetName("");
+  }, []);
+  const stepGridSettingsPreset = React.useCallback((delta) => {
+    if (!gridSettingsPresets.length) return;
+    const currentIdx = activeGridSettingsPreset
+      ? gridSettingsPresets.findIndex((preset) => preset.id === activeGridSettingsPreset.id)
+      : -1;
+    const safeIdx = currentIdx < 0 ? (delta >= 0 ? -1 : 0) : currentIdx;
+    const nextIdx =
+      delta >= 0
+        ? (safeIdx + 1 + gridSettingsPresets.length) % gridSettingsPresets.length
+        : (safeIdx - 1 + gridSettingsPresets.length) % gridSettingsPresets.length;
+    applyGridSettingsPreset(gridSettingsPresets[nextIdx]);
+  }, [activeGridSettingsPreset, applyGridSettingsPreset, gridSettingsPresets]);
+  const activeGridSettingsPresetDrag = React.useMemo(
+    () =>
+      gridSettingsPresets.find((preset) => String(preset?.id || "") === String(activeGridSettingsPresetDragId || "")) || null,
+    [activeGridSettingsPresetDragId, gridSettingsPresets]
+  );
+  const detectGridSettingsPresetDropCollision = React.useCallback((args) => {
+    const pointer = args?.pointerCoordinates;
+    const trashEl = beatLibraryTrashTargetRef.current;
+    if (pointer && trashEl) {
+      const rect = trashEl.getBoundingClientRect();
+      if (
+        pointer.x >= rect.left &&
+        pointer.x <= rect.right &&
+        pointer.y >= rect.top &&
+        pointer.y <= rect.bottom
+      ) {
+        const trashContainer = args?.droppableContainers?.find(
+          (entry) => String(entry?.id || "") === "__trash__"
+        );
+        if (trashContainer) {
+          return [{ id: "__trash__", data: { droppableContainer: trashContainer, value: Number.MAX_SAFE_INTEGER } }];
+        }
+      }
+    }
+    const pointerHits = pointerWithin(args);
+    const trashHit = pointerHits.find((entry) => String(entry?.id || "") === "__trash__");
+    if (trashHit) return [trashHit];
+    return closestCenter(args);
+  }, []);
+  const handleGridSettingsPresetDragStart = React.useCallback((event) => {
+    const activeId = String(event?.active?.id || "");
+    if (!activeId.startsWith("preset:")) return;
+    setActiveGridSettingsPresetDragId(activeId.slice(7));
+    gridSettingsPresetLastOverIdRef.current = "";
+  }, []);
+  const handleGridSettingsPresetDragOver = React.useCallback((event) => {
+    const overId = String(event?.over?.id || "");
+    if (overId.startsWith("preset:")) gridSettingsPresetLastOverIdRef.current = overId.slice(7);
+    setPresetLibraryDropTargetId(overId || null);
+  }, []);
+  const handleGridSettingsPresetDragCancel = React.useCallback(() => {
+    setActiveGridSettingsPresetDragId(null);
+    setPresetLibraryDropTargetId(null);
+    gridSettingsPresetLastOverIdRef.current = "";
+  }, []);
+  const handleGridSettingsPresetDragEnd = React.useCallback((event) => {
+    const activeId = String(event?.active?.id || "");
+    const overId = String(event?.over?.id || "");
+    setActiveGridSettingsPresetDragId(null);
+    setPresetLibraryDropTargetId(null);
+    gridSettingsPresetLastOverIdRef.current = "";
+    if (!activeId.startsWith("preset:") || !overId) return;
+    const draggedId = activeId.slice(7);
+    if (overId === "__trash__") {
+      setGridSettingsPresets((prev) =>
+        prev.filter((preset) => String(preset?.id || "") !== draggedId)
+      );
+      setSelectedGridSettingsPresetId((prev) => (String(prev || "") === draggedId ? "" : prev));
+      if (String(editingGridSettingsPresetId || "") === draggedId) {
+        setEditingGridSettingsPresetId("");
+        setEditingGridSettingsPresetName("");
+      }
+      return;
+    }
+    if (!overId.startsWith("preset:")) return;
+    const targetId = overId.slice(7);
+    if (!targetId || targetId === draggedId) return;
+    setGridSettingsPresets((prev) => {
+      const oldIndex = prev.findIndex((preset) => String(preset?.id || "") === draggedId);
+      const newIndex = prev.findIndex((preset) => String(preset?.id || "") === targetId);
+      if (oldIndex < 0 || newIndex < 0 || oldIndex === newIndex) return prev;
+      return arrayMove(prev, oldIndex, newIndex);
+    });
+  }, [editingGridSettingsPresetId]);
   useEffect(() => {
     if (routeOptions.shared || routeOptions.shareId) return;
     if (!requestedExample) return;
@@ -5817,7 +6778,7 @@ useEffect(() => {
     [libraryBpmFilterMode, libraryBpmTarget]
   );
   const getLibrarySortLabel = React.useCallback(
-    (sortMode) => LIBRARY_SORT_MODES.find((m) => m.id === sortMode)?.label || "Upload date: newest",
+    (sortMode) => LIBRARY_SORT_MODES.find((m) => m.id === sortMode)?.label || "Creation date: newest",
     []
   );
   const cycleLibrarySort = React.useCallback(() => {
@@ -5866,7 +6827,6 @@ useEffect(() => {
       order: nextOrder,
     };
     setBeatLibraryContainers((prev) => [...prev, nextContainer]);
-    setSelectedBeatLibraryContainerId(nextContainer.id);
   }, [beatLibraryContainers, selectedBeatLibraryContainerId]);
   const toggleBeatLibraryContainerCollapsed = React.useCallback((containerId) => {
     beatLibraryExpandAllSnapshotRef.current = null;
@@ -5881,7 +6841,7 @@ useEffect(() => {
     setBeatLibraryRootCollapsed((prev) => !prev);
   }, []);
   const toggleBeatLibraryExpandAll = React.useCallback(() => {
-    setSelectedBeatLibraryContainerId("all");
+    selectBeatLibraryContainer("all");
     const snapshot = beatLibraryExpandAllSnapshotRef.current;
     if (snapshot) {
       setBeatLibraryRootCollapsed(Boolean(snapshot.rootCollapsed));
@@ -5921,12 +6881,6 @@ useEffect(() => {
       const affectedBeats = localBeats.filter((beat) =>
         descendantIds.has(String(getBeatLibraryMeta(beat).parentId || ""))
       );
-      const containerLabel = `${target.type} "${target.name}"`;
-      const warning =
-        affectedBeats.length > 0
-          ? `Delete ${containerLabel}?\n\nNested folders/chapters will also be removed.\n${affectedBeats.length} beat${affectedBeats.length === 1 ? "" : "s"} will be moved to the library root.`
-          : `Delete ${containerLabel}?\n\nNested folders/chapters will also be removed.`;
-      if (!window.confirm(warning)) return;
 
       const reparentBeat = (beat) => {
         const meta = getBeatLibraryMeta(beat);
@@ -5973,7 +6927,7 @@ useEffect(() => {
       setBeatLibraryContainers((prev) =>
         prev.filter((entry) => !descendantIds.has(String(entry.id)))
       );
-      setSelectedBeatLibraryContainerId("all");
+      selectBeatLibraryContainer("all");
     },
     [authUser?.id, beatLibraryContainers, localBeats, setLocalBeatsWithUndo]
   );
@@ -5983,7 +6937,6 @@ useEffect(() => {
       if (!key || key === "all") return;
       const target = beatLibraryContainers.find((entry) => String(entry.id) === key);
       if (!target) return;
-      setSelectedBeatLibraryContainerId(key);
       setEditingBeatLibraryContainerId(key);
       setEditingBeatLibraryContainerName(String(target.name || ""));
     },
@@ -6141,14 +7094,8 @@ useEffect(() => {
       if (!draggedBeat || !targetBeat) return;
       const targetParentId = getBeatLibraryMeta(targetBeat).parentId || null;
       const siblingBeats = localBeats
-        .filter((beat) => {
-          const beatId = String(beat?.id || "");
-          if (beatId === draggedKey) return false;
-          return (getBeatLibraryMeta(beat).parentId || null) === targetParentId;
-        })
+        .filter((beat) => (getBeatLibraryMeta(beat).parentId || null) === targetParentId)
         .sort(compareBeatLibraryOrder);
-      const insertIndex = siblingBeats.findIndex((beat) => String(beat?.id || "") === targetKey);
-      const orderedBeats = [...siblingBeats];
       const draggedNext = {
         ...draggedBeat,
         payload:
@@ -6166,9 +7113,18 @@ useEffect(() => {
           parentId: targetParentId,
         },
       };
-      orderedBeats.splice(insertIndex < 0 ? orderedBeats.length : insertIndex, 0, draggedNext);
+      const orderedBeats = siblingBeats.map((beat) =>
+        String(beat?.id || "") === draggedKey ? draggedNext : beat
+      );
+      if (!orderedBeats.some((beat) => String(beat?.id || "") === draggedKey)) {
+        orderedBeats.push(draggedNext);
+      }
+      const oldIndex = orderedBeats.findIndex((beat) => String(beat?.id || "") === draggedKey);
+      const newIndex = orderedBeats.findIndex((beat) => String(beat?.id || "") === targetKey);
+      if (oldIndex < 0 || newIndex < 0 || oldIndex === newIndex) return;
+      const reorderedBeats = arrayMove(orderedBeats, oldIndex, newIndex);
       const updatedById = new Map(
-        orderedBeats.map((beat, index) => {
+        reorderedBeats.map((beat, index) => {
           const nextLibraryMeta = {
             ...getBeatLibraryMeta(beat),
             parentId: targetParentId,
@@ -6222,26 +7178,123 @@ useEffect(() => {
       activationConstraint: { distance: 4 },
     })
   );
+  const beatLibraryMoveUpTargetRef = React.useRef(null);
+  const beatLibraryTrashTargetRef = React.useRef(null);
+  const beatLibraryFolderExpandTimerRef = React.useRef(null);
+  const beatLibraryPendingExpandFolderIdRef = React.useRef(null);
+  const clearBeatLibraryFolderExpandTimer = React.useCallback(() => {
+    if (beatLibraryFolderExpandTimerRef.current) {
+      window.clearTimeout(beatLibraryFolderExpandTimerRef.current);
+      beatLibraryFolderExpandTimerRef.current = null;
+    }
+    beatLibraryPendingExpandFolderIdRef.current = null;
+  }, []);
+  const scheduleBeatLibraryFolderExpand = React.useCallback(
+    (containerId, shouldExpand) => {
+      const key = String(containerId || "");
+      if (!shouldExpand || !key) {
+        clearBeatLibraryFolderExpandTimer();
+        return;
+      }
+      if (beatLibraryPendingExpandFolderIdRef.current === key) return;
+      clearBeatLibraryFolderExpandTimer();
+      beatLibraryPendingExpandFolderIdRef.current = key;
+      beatLibraryFolderExpandTimerRef.current = window.setTimeout(() => {
+        setBeatLibraryContainers((prev) =>
+          prev.map((entry) =>
+            String(entry.id || "") === key && entry.collapsed
+              ? { ...entry, collapsed: false }
+              : entry
+          )
+        );
+        beatLibraryFolderExpandTimerRef.current = null;
+        beatLibraryPendingExpandFolderIdRef.current = null;
+      }, 350);
+    },
+    [clearBeatLibraryFolderExpandTimer]
+  );
+  const detectBeatLibraryDropCollision = React.useCallback((args) => {
+    const pointer = args?.pointerCoordinates;
+    const topEl = beatLibraryMoveUpTargetRef.current;
+    if (pointer && topEl) {
+      const rect = topEl.getBoundingClientRect();
+      if (
+        pointer.x >= rect.left &&
+        pointer.x <= rect.right &&
+        pointer.y >= rect.top &&
+        pointer.y <= rect.bottom
+      ) {
+        const topContainer = args?.droppableContainers?.find(
+          (entry) => String(entry?.id || "") === "__up__"
+        );
+        if (topContainer) {
+          return [{ id: "__up__", data: { droppableContainer: topContainer, value: Number.MAX_SAFE_INTEGER } }];
+        }
+      }
+    }
+    const trashEl = beatLibraryTrashTargetRef.current;
+    if (pointer && trashEl) {
+      const rect = trashEl.getBoundingClientRect();
+      if (
+        pointer.x >= rect.left &&
+        pointer.x <= rect.right &&
+        pointer.y >= rect.top &&
+        pointer.y <= rect.bottom
+      ) {
+        const trashContainer = args?.droppableContainers?.find(
+          (entry) => String(entry?.id || "") === "__trash__"
+        );
+        if (trashContainer) {
+          return [{ id: "__trash__", data: { droppableContainer: trashContainer, value: Number.MAX_SAFE_INTEGER } }];
+        }
+      }
+    }
+    const pointerHits = pointerWithin(args);
+    const topHit = pointerHits.find((entry) => String(entry?.id || "") === "__up__");
+    if (topHit) return [topHit];
+    const trashHit = pointerHits.find((entry) => String(entry?.id || "") === "__trash__");
+    if (trashHit) return [trashHit];
+    return closestCenter(args);
+  }, []);
   const handleBeatLibrarySortDragStart = React.useCallback((event) => {
     const activeId = String(event?.active?.id || "");
     if (!activeId.startsWith("beat:")) return;
-    beatLibraryTreeDragRef.current = { kind: "beat", beatId: activeId.slice(5) };
+    const beatId = activeId.slice(5);
+    beatLibraryTreeDragRef.current = { kind: "beat", beatId };
+    setActiveBeatLibraryDragBeatId(beatId);
     beatLibraryLastHoverTargetRef.current = "";
-  }, []);
+    beatLibraryLastBeatOverIdRef.current = "";
+    clearBeatLibraryFolderExpandTimer();
+  }, [clearBeatLibraryFolderExpandTimer]);
   const handleBeatLibrarySortDragOver = React.useCallback((event) => {
     const overId = String(event?.over?.id || "");
+    if (overId.startsWith("beat:")) beatLibraryLastBeatOverIdRef.current = overId.slice(5);
     setBeatLibraryDropTargetId(overId || null);
   }, []);
   const handleBeatLibrarySortDragEnd = React.useCallback(async (event) => {
     const activeId = String(event?.active?.id || "");
     const overId = String(event?.over?.id || "");
     beatLibraryTreeDragRef.current = null;
+    setActiveBeatLibraryDragBeatId(null);
     beatLibraryLastHoverTargetRef.current = "";
+    beatLibraryLastBeatOverIdRef.current = "";
     setBeatLibraryDropTargetId(null);
+    clearBeatLibraryFolderExpandTimer();
     if (!activeId.startsWith("beat:") || !overId) return;
     const draggedBeatId = activeId.slice(5);
     if (overId === "__trash__") {
       await deleteLocalBeatById(draggedBeatId);
+      return;
+    }
+    if (overId === "__up__") {
+      const selectedContainer =
+        selectedBeatLibraryContainerId === "all"
+          ? null
+          : beatLibraryContainers.find(
+              (entry) => String(entry.id || "") === String(selectedBeatLibraryContainerId || "")
+            ) || null;
+      const targetParentId = selectedContainer?.parentId ? String(selectedContainer.parentId) : null;
+      await moveBeatToLibraryContainer(draggedBeatId, targetParentId);
       return;
     }
     if (overId === "all") {
@@ -6255,12 +7308,15 @@ useEffect(() => {
       return;
     }
     await moveBeatToLibraryContainer(draggedBeatId, overId);
-  }, [deleteLocalBeatById, moveBeatToLibraryContainer, reorderBeatInLibrary]);
+  }, [beatLibraryContainers, clearBeatLibraryFolderExpandTimer, deleteLocalBeatById, moveBeatToLibraryContainer, reorderBeatInLibrary, selectedBeatLibraryContainerId]);
   const handleBeatLibrarySortDragCancel = React.useCallback(() => {
     beatLibraryTreeDragRef.current = null;
+    setActiveBeatLibraryDragBeatId(null);
     beatLibraryLastHoverTargetRef.current = "";
+    beatLibraryLastBeatOverIdRef.current = "";
     setBeatLibraryDropTargetId(null);
-  }, []);
+    clearBeatLibraryFolderExpandTimer();
+  }, [clearBeatLibraryFolderExpandTimer]);
   const moveBeatLibraryContainer = React.useCallback(
     (containerId, targetParentId) => {
       const key = String(containerId || "");
@@ -6287,7 +7343,6 @@ useEffect(() => {
             : entry
         )
       );
-      setSelectedBeatLibraryContainerId(key);
     },
     [beatLibraryContainers]
   );
@@ -6296,7 +7351,9 @@ useEffect(() => {
       const dragged = beatLibraryTreeDragRef.current;
       beatLibraryTreeDragRef.current = null;
       beatLibraryLastHoverTargetRef.current = "";
+      beatLibraryLastBeatOverIdRef.current = "";
       setBeatLibraryDropTargetId(null);
+      clearBeatLibraryFolderExpandTimer();
       if (!dragged || typeof dragged !== "object") return;
       const normalizedTargetParentId = targetParentId ? String(targetParentId) : null;
       if (dragged.kind === "container") {
@@ -6307,21 +7364,7 @@ useEffect(() => {
         await moveBeatToLibraryContainer(dragged.beatId, normalizedTargetParentId);
       }
     },
-    [moveBeatLibraryContainer, moveBeatToLibraryContainer]
-  );
-  const handleBeatLibraryBeatHover = React.useCallback(
-    async (targetBeatId) => {
-      const dragged = beatLibraryTreeDragRef.current;
-      if (!dragged || typeof dragged !== "object" || dragged.kind !== "beat") return;
-      const draggedKey = String(dragged.beatId || "");
-      const targetKey = String(targetBeatId || "");
-      if (!draggedKey || !targetKey || draggedKey === targetKey) return;
-      const hoverKey = `${draggedKey}->${targetKey}`;
-      if (beatLibraryLastHoverTargetRef.current === hoverKey) return;
-      beatLibraryLastHoverTargetRef.current = hoverKey;
-      await reorderBeatInLibrary(dragged.beatId, targetBeatId);
-    },
-    [reorderBeatInLibrary]
+    [clearBeatLibraryFolderExpandTimer, moveBeatLibraryContainer, moveBeatToLibraryContainer]
   );
   const handleBeatLibraryBeatDrop = React.useCallback(
     async (targetBeatId) => {
@@ -6350,13 +7393,13 @@ useEffect(() => {
     }
   }, [deleteBeatLibraryContainer, deleteLocalBeatById]);
   const libraryBpmValues = React.useMemo(() => {
-    const source = beatLibraryTab === "public" ? publicBeats : localBeats;
+    const source = arrangementSourceTab === "public" ? publicBeats : localBeats;
     const values = source
       .map((beat) => getBeatBpm(beat))
       .filter((v) => Number.isFinite(v))
       .map((v) => Math.round(v));
     return Array.from(new Set(values)).sort((a, b) => a - b);
-  }, [beatLibraryTab, publicBeats, localBeats, getBeatBpm]);
+  }, [arrangementSourceTab, publicBeats, localBeats, getBeatBpm]);
   const stepLibraryBpmTarget = React.useCallback(
     (delta) => {
       const direction = delta >= 0 ? 1 : -1;
@@ -6416,6 +7459,18 @@ useEffect(() => {
         : beatLibraryContainers.find((entry) => entry.id === selectedBeatLibraryContainerId) || null,
     [beatLibraryContainers, selectedBeatLibraryContainerId]
   );
+  const selectedBeatLibraryContainerPath = React.useMemo(() => {
+    if (!selectedBeatLibraryContainer) return [];
+    const byId = new Map(beatLibraryContainers.map((entry) => [String(entry.id), entry]));
+    const path = [];
+    let current = selectedBeatLibraryContainer;
+    while (current) {
+      path.unshift(current);
+      const parentId = current.parentId ? String(current.parentId) : "";
+      current = parentId ? byId.get(parentId) || null : null;
+    }
+    return path;
+  }, [beatLibraryContainers, selectedBeatLibraryContainer]);
   const beatLibraryContainerChildren = React.useMemo(() => {
     const byParent = new Map();
     [...beatLibraryContainers]
@@ -6464,10 +7519,7 @@ useEffect(() => {
     const byTime = (a, b) =>
       new Date(a?.createdAt || 0).getTime() - new Date(b?.createdAt || 0).getTime();
     const byBpm = (a, b) => (getBeatBpm(a) ?? -1) - (getBeatBpm(b) ?? -1);
-    const byManualOrder = (a, b) =>
-      (getBeatLibraryMeta(a).manualOrder || 0) - (getBeatLibraryMeta(b).manualOrder || 0);
     return [...list].sort((a, b) => {
-      if (selectedBeatLibraryContainerId !== "all") return byManualOrder(a, b) || byTime(b, a);
       if (librarySort === "oldest") return byTime(a, b);
       if (librarySort === "bpm-asc") return byBpm(a, b);
       if (librarySort === "bpm-desc") return byBpm(b, a);
@@ -6479,7 +7531,6 @@ useEffect(() => {
     beatStyleDraft,
     beatCategoryDraft,
     librarySort,
-    selectedBeatLibraryContainerId,
     getBeatBpm,
     bpmPassesLibraryFilter,
   ]);
@@ -6509,6 +7560,33 @@ useEffect(() => {
     getBeatBpm,
     bpmPassesLibraryFilter,
   ]);
+  const currentBeatLibraryParentId = selectedBeatLibraryContainerId !== "all" ? String(selectedBeatLibraryContainerId) : null;
+  const currentBeatLibraryUpperParentId = React.useMemo(
+    () => (selectedBeatLibraryContainer?.parentId ? String(selectedBeatLibraryContainer.parentId) : null),
+    [selectedBeatLibraryContainer]
+  );
+  const currentBeatLibraryFolders = React.useMemo(
+    () =>
+      beatLibraryContainers.filter(
+        (entry) => String(entry.parentId || "") === String(currentBeatLibraryParentId || "")
+      ),
+    [beatLibraryContainers, currentBeatLibraryParentId]
+  );
+  const currentBeatLibraryBeats = React.useMemo(
+    () =>
+      filteredLocalBeats
+        .filter((beat) => {
+          const direct = beat?.libraryMeta && typeof beat.libraryMeta === "object" ? beat.libraryMeta : null;
+          const payloadMeta =
+            beat?.payload?.libraryMeta && typeof beat.payload.libraryMeta === "object"
+              ? beat.payload.libraryMeta
+              : null;
+          const meta = direct || payloadMeta || null;
+          return String(meta?.parentId || "") === String(currentBeatLibraryParentId || "");
+        })
+        .sort(compareBeatLibraryOrder),
+    [filteredLocalBeats, currentBeatLibraryParentId]
+  );
   const getBeatBySourceRef = React.useCallback(
     (source, beatId) => {
       const list = source === "public" ? publicBeats : source === "shared" ? sharedArrangementBeats : localBeats;
@@ -6719,51 +7797,11 @@ useEffect(() => {
       };
     };
 
-    const first = arrangementNotationSections[0];
-    const allSameCompatibilityKey =
-      arrangementNotationSections.length > 0 &&
-      arrangementNotationSections.every((section) => {
-        const sectionTs = section?.notation?.timeSig || {};
-        const firstTs = first?.notation?.timeSig || {};
-        return (
-          Number(sectionTs.n) === Number(firstTs.n) &&
-          Number(sectionTs.d) === Number(firstTs.d)
-        );
-      });
-    if (allSameCompatibilityKey) {
-      const unified = buildMergedBlock(arrangementNotationSections, first?.startBarOffset || 0);
-      return unified ? [unified] : [];
-    }
-
-    let current = [];
-    let currentKey = "";
-    let currentStartBarOffset = 0;
-    let barCursor = 0;
-    arrangementNotationSections.forEach((section) => {
-      const ts = section?.notation?.timeSig || {};
-      const key = `${Number(ts.n) || 0}/${Number(ts.d) || 0}`;
-      if (!current.length || key === currentKey) {
-        if (!current.length) currentStartBarOffset = barCursor;
-        current.push(section);
-        currentKey = key;
-        barCursor += Math.max(1, Number(section?.sectionBars) || 1);
-        return;
-      }
-      const merged = mergeNotationStates(current.map((s) => s.notation));
-      if (merged) {
-        const block = buildMergedBlock(current, currentStartBarOffset);
-        if (block) chunks.push(block);
-      }
-      current = [section];
-      currentKey = key;
-      currentStartBarOffset = barCursor;
-      barCursor += Math.max(1, Number(section?.sectionBars) || 1);
-    });
-    if (current.length) {
-      const block = buildMergedBlock(current, currentStartBarOffset);
-      if (block) chunks.push(block);
-    }
-    return chunks;
+    const unified = buildMergedBlock(
+      arrangementNotationSections,
+      arrangementNotationSections[0]?.startBarOffset || 0
+    );
+    return unified ? [unified] : [];
   }, [
     arrangementNotationSections,
     stickingHandedness,
@@ -6940,6 +7978,14 @@ useEffect(() => {
   const arrangementRemoveRow = React.useCallback((rowId) => {
     setArrangementItemsWithUndo((prev) => prev.filter((row) => row.id !== rowId));
   }, [setArrangementItemsWithUndo]);
+  const arrangementRemoveSelectedRows = React.useCallback(() => {
+    if (!normalizedArrangementSelection) return;
+    setArrangementItemsWithUndo((prev) =>
+      prev.filter((_, index) => index < normalizedArrangementSelection.start || index > normalizedArrangementSelection.end)
+    );
+    setArrangementSelection(null);
+    setArrangementSelectionAnchor(null);
+  }, [normalizedArrangementSelection, setArrangementItemsWithUndo]);
   const arrangementUpdateRowNotationOptions = React.useCallback((rowId, updates) => {
     setArrangementItemsWithUndo((prev) =>
       prev.map((row) =>
@@ -7005,32 +8051,37 @@ useEffect(() => {
   }, [setArrangementItemsWithUndo]);
   const saveArrangementSnapshot = React.useCallback(async (options = {}) => {
     const normalizedItems = normalizeArrangementItems(arrangementItems);
-    const { mode = "auto" } = options;
+    const { mode = "auto", nameOverride = "" } = options;
     const now = new Date().toISOString();
-    const fallbackName = `Arrangement ${savedArrangements.length + 1}`;
-    const name = getArrangementNameFromTitles(
+    const fallbackName = getNextNumberedArrangementName("Arrangement", savedArrangements);
+    const derivedName = getArrangementNameFromTitles(
       arrangementTitleLine1Draft,
       arrangementTitleLine2Draft,
       fallbackName
     );
-    const lower = name.toLowerCase();
     const loadedEntry = loadedArrangementId
       ? savedArrangements.find((entry) => entry.id === loadedArrangementId) || null
       : null;
-    const isSameNameAsLoaded =
-      !!loadedEntry && loadedEntry.name.trim().toLowerCase() === lower;
     const byId = loadedArrangementId
       ? savedArrangements.find((entry) => entry.id === loadedArrangementId)
       : null;
-    const byName = savedArrangements.find((entry) => entry.name.toLowerCase() === lower);
     const target =
       mode === "update"
         ? byId || null
-        : (isSameNameAsLoaded ? byId : null) || byName || null;
+        : mode === "saveAs"
+          ? null
+          : byId || null;
+    const name =
+      mode === "saveAs"
+        ? getUniqueArrangementName(
+            String(nameOverride || "").trim() || derivedName,
+            savedArrangements
+          )
+        : getUniqueArrangementName(derivedName, savedArrangements, target?.id || null);
     const nextId = target?.id || `arrlib-${Math.random().toString(36).slice(2, 10)}`;
     const nextEntry = {
       id: nextId,
-      name: mode === "update" ? String(target?.name || name) : name,
+      name,
       titleLine1: String(arrangementTitleLine1Draft || ""),
       titleLine2: String(arrangementTitleLine2Draft || ""),
       composer: String(arrangementComposerDraft || ""),
@@ -7089,7 +8140,6 @@ useEffect(() => {
       setArrangementTitleLine2Draft(savedEntry.titleLine2);
       setArrangementComposerDraft(savedEntry.composer);
       setLoadedArrangementId(savedEntry.id);
-      setArrangementSaveAsOpen(false);
       return;
     }
     pushLocalBeatHistory();
@@ -7111,15 +8161,15 @@ useEffect(() => {
     setArrangementTitleLine2Draft(nextEntry.titleLine2);
     setArrangementComposerDraft(nextEntry.composer);
     setLoadedArrangementId(nextId);
-    setArrangementSaveAsOpen(false);
   }, [authUser?.id, arrangementItems, arrangementTitleLine1Draft, arrangementTitleLine2Draft, arrangementComposerDraft, savedArrangements, loadedArrangementId, pushLocalBeatHistory]);
   const createNewArrangement = React.useCallback(async () => {
     const now = new Date().toISOString();
     const nextId = `arrlib-${Math.random().toString(36).slice(2, 10)}`;
+    const defaultName = getNextNumberedArrangementName("Arrangement", savedArrangements);
     const nextEntry = {
       id: nextId,
-      name: `Arrangement ${savedArrangements.length + 1}`,
-      titleLine1: "",
+      name: defaultName,
+      titleLine1: defaultName,
       titleLine2: "",
       composer: "",
       createdAt: now,
@@ -7132,7 +8182,7 @@ useEffect(() => {
         .insert({
           user_id: authUser.id,
           name: nextEntry.name,
-          title_line_1: "",
+          title_line_1: nextEntry.titleLine1,
           title_line_2: "",
           author: "",
           rows: [],
@@ -7158,11 +8208,11 @@ useEffect(() => {
       setArrangementNameDraft(
         getArrangementNameFromTitles(savedEntry.titleLine1, savedEntry.titleLine2, savedEntry.name)
       );
-      setArrangementTitleLine1Draft("");
+      setArrangementTitleLine1Draft(savedEntry.titleLine1);
       setArrangementTitleLine2Draft("");
       setArrangementComposerDraft("");
       setLoadedArrangementId(savedEntry.id);
-      setArrangementSaveAsOpen(false);
+      selectArrangementPickerId(savedEntry.id);
       setArrangementSourcesCollapsed(false);
       setArrangementDetailsCollapsed(false);
       setArrangementSourceTab("local");
@@ -7183,11 +8233,11 @@ useEffect(() => {
         nextEntry.name
       )
     );
-    setArrangementTitleLine1Draft("");
+    setArrangementTitleLine1Draft(nextEntry.titleLine1);
     setArrangementTitleLine2Draft("");
     setArrangementComposerDraft("");
     setLoadedArrangementId(nextId);
-    setArrangementSaveAsOpen(false);
+    selectArrangementPickerId(nextId);
     setArrangementSourcesCollapsed(false);
     setArrangementDetailsCollapsed(false);
     setArrangementSourceTab("local");
@@ -7213,11 +8263,13 @@ useEffect(() => {
       setArrangementTitleLine2Draft(String(entry.titleLine2 || ""));
       setArrangementComposerDraft(String(entry.composer || ""));
       setLoadedArrangementId(entry.id || null);
-      setArrangementSaveAsOpen(false);
+      selectArrangementPickerId(entry.id || null);
     },
     [arrangementPlaybackEnabled, pushLocalBeatHistory]
   );
   const deleteSavedArrangement = React.useCallback(async (entryId) => {
+    const existingEntry =
+      savedArrangementsRef.current.find((entry) => String(entry?.id || "") === String(entryId || "")) || null;
     if (authUser?.id && hasSupabaseEnabled && supabase) {
       const { error } = await supabase
         .from("arrangements")
@@ -7229,31 +8281,97 @@ useEffect(() => {
         return;
       }
     }
+    const nextRemaining = savedArrangementsRef.current.filter((entry) => entry.id !== entryId);
+    const nextRemainingSorted = sortSavedArrangementsMostRecent(nextRemaining);
+    const nextSelectedEntry = nextRemainingSorted[0] || null;
     pushLocalBeatHistory();
-    setSavedArrangements((prev) => prev.filter((entry) => entry.id !== entryId));
-    setLoadedArrangementId((prev) => (prev === entryId ? null : prev));
-    setArrangementSaveAsOpen(false);
-  }, [authUser?.id, pushLocalBeatHistory]);
+    savedArrangementsRef.current = nextRemaining;
+    setSavedArrangements(nextRemaining);
+    if (String(loadedArrangementIdRef.current || "") === String(entryId || "")) {
+      if (nextSelectedEntry) {
+        if (arrangementPlaybackEnabled) {
+          setArrangementPlaybackEnabled(false);
+          setArrangementPlaybackIndex(0);
+        }
+        setArrangementItems(normalizeArrangementItems(nextSelectedEntry.items));
+        setArrangementSelection(null);
+        setArrangementSelectionAnchor(null);
+        setArrangementBarSelection(null);
+        setArrangementBarSelectionAnchor(null);
+        setArrangementNameDraft(
+          getArrangementNameFromTitles(
+            nextSelectedEntry.titleLine1,
+            nextSelectedEntry.titleLine2,
+            String(nextSelectedEntry.name || "")
+          )
+        );
+        setArrangementTitleLine1Draft(String(nextSelectedEntry.titleLine1 || ""));
+        setArrangementTitleLine2Draft(String(nextSelectedEntry.titleLine2 || ""));
+        setArrangementComposerDraft(String(nextSelectedEntry.composer || ""));
+        setLoadedArrangementId(nextSelectedEntry.id || null);
+        loadedArrangementIdRef.current = nextSelectedEntry.id || null;
+        selectArrangementPickerId(nextSelectedEntry.id || null);
+      } else {
+        setArrangementItems([]);
+        setArrangementSelection(null);
+        setArrangementSelectionAnchor(null);
+        setArrangementBarSelection(null);
+        setArrangementBarSelectionAnchor(null);
+        setArrangementNameDraft("Arrangement");
+        setArrangementTitleLine1Draft("");
+        setArrangementTitleLine2Draft("");
+        setArrangementComposerDraft("");
+        setLoadedArrangementId(null);
+        loadedArrangementIdRef.current = null;
+        selectArrangementPickerId(null);
+      }
+    } else if (arrangementPickerIdRef.current === entryId) {
+      selectArrangementPickerId(nextSelectedEntry?.id || null);
+    }
+  }, [authUser?.id, arrangementPlaybackEnabled, pushLocalBeatHistory, selectArrangementPickerId]);
   const requestDeleteSavedArrangement = React.useCallback((entry) => {
     if (!entry?.id) return;
-    if (Array.isArray(entry.items) && entry.items.length > 0) {
-      setPendingArrangementDeleteEntry(entry);
-      return;
+    setPendingArrangementDeleteEntry(entry);
+  }, []);
+  const loadBeatIntoEditor = React.useCallback(async (source, beat) => {
+    const freshestBeat =
+      source === "local"
+        ? localBeatsRef.current.find((entry) => String(entry?.id || "") === String(beat?.id || "")) || beat
+        : beat;
+    const mirroredNotationStickingSelection =
+      freshestBeat?.notationStickingSelection &&
+      typeof freshestBeat.notationStickingSelection === "object"
+        ? Object.fromEntries(
+            Object.entries(freshestBeat.notationStickingSelection).filter(([, value]) => value === true)
+          )
+        : null;
+    const effectivePayload =
+      freshestBeat?.payload && typeof freshestBeat.payload === "object"
+        ? {
+            ...freshestBeat.payload,
+            ...(mirroredNotationStickingSelection && Object.keys(mirroredNotationStickingSelection).length > 0
+              ? { notationStickingSelection: mirroredNotationStickingSelection }
+              : {}),
+          }
+        : null;
+    if (!effectivePayload) return;
+    if (
+      loadedLocalBeatIdRef.current &&
+      isLoadedLocalBeatNotationSelectionDirtyRef.current &&
+      String(loadedLocalBeatIdRef.current) !== String(freshestBeat?.id || "")
+    ) {
+      await flushLoadedLocalBeatNotationSelectionRef.current?.();
     }
-    deleteSavedArrangement(entry.id);
-  }, [deleteSavedArrangement]);
-  const loadBeatIntoEditor = React.useCallback((source, beat) => {
-    if (!beat?.payload) return;
     const normalizedSource = source === "public" ? "public" : source === "shared" ? "shared" : "local";
     applyImportedBeatPayloadRef.current?.(
-      beat.payload,
-      `${normalizedSource}:${beat.id}:${beat.createdAt || ""}`
+      effectivePayload,
+      `${normalizedSource}:${freshestBeat.id}:${freshestBeat.updatedAt || freshestBeat.createdAt || ""}`
     );
     if (normalizedSource === "local") {
-      setLoadedLocalBeatId(beat.id);
-      setBeatNameDraft(String(beat.name || ""));
-      setBeatCategoryDraft(String(beat.category || "Groove"));
-      setBeatStyleDraft(String(beat.style || "all"));
+      setLoadedLocalBeatId(freshestBeat.id);
+      setBeatNameDraft(String(freshestBeat.name || ""));
+      setBeatCategoryDraft(String(freshestBeat.category || "Groove"));
+      setBeatStyleDraft(String(freshestBeat.style || "all"));
     } else {
       setLoadedLocalBeatId(null);
     }
@@ -7496,7 +8614,6 @@ useEffect(() => {
         setArrangementTitleLine2Draft(nextArrangementEntry.titleLine2);
         setArrangementComposerDraft(nextArrangementEntry.composer);
         setLoadedArrangementId(nextArrangementId);
-        setArrangementSaveAsOpen(false);
       }
       setArrangementSourcesCollapsed(false);
       setArrangementDetailsCollapsed(false);
@@ -8061,7 +9178,7 @@ useEffect(() => {
     const menuWidth = 224;
     const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
     const left = Math.max(8, Math.min(Number(clientX) - menuWidth / 2, viewportWidth - menuWidth - 8));
-    const top = Math.max(8, Number(clientY) - 8);
+    const top = Math.max(8, Number(clientY) + 140);
     setArrangementNotationRowMenuState({
       rowIndex,
       position: { top, left },
@@ -8088,6 +9205,17 @@ useEffect(() => {
     if (!savedArrangements.length || !loadedArrangementId) return null;
     return savedArrangements.find((entry) => entry.id === loadedArrangementId) || null;
   }, [savedArrangements, loadedArrangementId]);
+  const selectedLocalBeatForTrash = React.useMemo(() => {
+    const loadedBeat =
+      loadedLocalBeatId != null
+        ? localBeats.find((entry) => String(entry?.id || "") === String(loadedLocalBeatId || "")) || null
+        : null;
+    if (loadedBeat) return loadedBeat;
+    if (!String(selectedArrangementSourceBeatKey || "").startsWith("local:")) return null;
+    const beatId = String(selectedArrangementSourceBeatKey || "").slice("local:".length);
+    if (!beatId) return null;
+    return localBeats.find((entry) => String(entry?.id || "") === beatId) || null;
+  }, [loadedLocalBeatId, localBeats, selectedArrangementSourceBeatKey]);
   const arrangementDisplayName = React.useMemo(
     () =>
       getArrangementNameFromTitles(
@@ -8103,14 +9231,59 @@ useEffect(() => {
     ]
   );
   const sortedSavedArrangements = React.useMemo(() => {
-    const byMostRecent = (a, b) => {
-      const aTime = new Date(a?.updatedAt || a?.createdAt || 0).getTime();
-      const bTime = new Date(b?.updatedAt || b?.createdAt || 0).getTime();
-      if (aTime !== bTime) return bTime - aTime;
-      return String(a?.name || "").localeCompare(String(b?.name || ""));
-    };
-    return [...savedArrangements].sort(byMostRecent);
+    return sortSavedArrangementsMostRecent(savedArrangements);
   }, [savedArrangements]);
+  const arrangementPickerEntry = React.useMemo(() => {
+    if (!sortedSavedArrangements.length) return null;
+    const effectivePickerId = arrangementPickerId || loadedArrangementId || "";
+    if (!effectivePickerId) return sortedSavedArrangements[0] || null;
+    return (
+      sortedSavedArrangements.find((entry) => entry.id === effectivePickerId) ||
+      sortedSavedArrangements[0] ||
+      null
+    );
+  }, [arrangementPickerId, loadedArrangementId, sortedSavedArrangements]);
+  useEffect(() => {
+    const seen = new Map();
+    const duplicates = [];
+    savedArrangements.forEach((entry, index) => {
+      const id = String(entry?.id || "");
+      if (!id) return;
+      const existing = seen.get(id);
+      if (existing != null) {
+        duplicates.push({
+          id,
+          firstIndex: existing,
+          secondIndex: index,
+          firstName: String(savedArrangements[existing]?.name || ""),
+          secondName: String(entry?.name || ""),
+        });
+        return;
+      }
+      seen.set(id, index);
+    });
+    if (duplicates.length) {
+      console.warn("[arrangement-delete] duplicate arrangement ids detected", duplicates);
+    }
+  }, [savedArrangements]);
+  useEffect(() => {
+    if (!sortedSavedArrangements.length) {
+      if (arrangementPickerId !== null) selectArrangementPickerId(null);
+      return;
+    }
+    const hasCurrentPicker =
+      arrangementPickerId &&
+      sortedSavedArrangements.some((entry) => entry.id === arrangementPickerId);
+    if (hasCurrentPicker) return;
+    const nextId =
+      (loadedArrangementId &&
+        sortedSavedArrangements.find((entry) => entry.id === loadedArrangementId)?.id) ||
+      sortedSavedArrangements[0]?.id ||
+      null;
+    if (nextId !== arrangementPickerId) {
+      selectArrangementPickerId(nextId);
+    }
+  }, [arrangementPickerId, loadedArrangementId, selectArrangementPickerId, sortedSavedArrangements]);
   const arrangementHasPendingUpdate = React.useMemo(() => {
     if (!selectedSavedArrangementEntry) return false;
     const currentItems = normalizeArrangementItems(arrangementItems);
@@ -8131,29 +9304,12 @@ useEffect(() => {
   }, [selectedSavedArrangementEntry, arrangementHasPendingUpdate, saveArrangementSnapshot]);
   const arrangementSourceBeats =
     arrangementSourceTab === "public" ? filteredPublicBeats : filteredLocalBeats;
-  const openBeatLibraryWindow = React.useCallback(() => {
-    setArrangementSourceTab("local");
-    setArrangementSourcesCollapsed(false);
-    setArrangementDetailsCollapsed(true);
-    setIsArrangementOpen((v) => {
-      const next = !v;
-      if (next && !loadedLocalBeatId) {
-        window.requestAnimationFrame(() => {
-          window.requestAnimationFrame(() => {
-            beatSaveButtonRef.current?.focus?.();
-          });
-        });
-      }
-      return next;
-    });
-  }, [loadedLocalBeatId]);
   const openArrangementWindow = React.useCallback(() => {
     setIsArrangementOpen((v) => !v);
   }, []);
   useEffect(() => {
     if (!savedArrangements.length) {
       if (loadedArrangementId !== null) setLoadedArrangementId(null);
-      setArrangementSaveAsOpen(true);
       return;
     }
     const activeEntry =
@@ -8171,7 +9327,6 @@ useEffect(() => {
             String(fallbackEntry.name || "")
           )
         );
-        setArrangementSaveAsOpen(false);
       }
       return;
     }
@@ -8179,10 +9334,9 @@ useEffect(() => {
       getArrangementNameFromTitles(
         activeEntry.titleLine1,
         activeEntry.titleLine2,
-        String(activeEntry.name || "")
+      String(activeEntry.name || "")
       )
     );
-    setArrangementSaveAsOpen(false);
   }, [loadedArrangementId, savedArrangements, sortedSavedArrangements]);
   useEffect(() => {
     if (!arrangementSelection) return;
@@ -8210,7 +9364,7 @@ useEffect(() => {
       setArrangementBarSelectionAnchor(null);
     }
   }, [arrangementBarSelection, arrangementTotals.totalBars]);
-  const isLibraryHistoryActive = isArrangementOpen || (isBeatLibraryOpen && beatLibraryTab === "local");
+  const isLibraryHistoryActive = isArrangementOpen;
   const canUndoTop = isLibraryHistoryActive ? localBeatPast.length > 0 : gridPast.length > 0;
   const canRedoTop = isLibraryHistoryActive ? localBeatFuture.length > 0 : gridFuture.length > 0;
   const handleTopUndo = React.useCallback(() => {
@@ -8416,16 +9570,78 @@ useEffect(() => {
       activationConstraint: { distance: 6 },
     })
   );
+  const detectArrangementOrderDropCollision = React.useCallback((args) => {
+    const pointer = args?.pointerCoordinates;
+    const trashEl = arrangementTrashTargetRef.current;
+    let trashHover = false;
+    if (pointer && trashEl) {
+      const rect = trashEl.getBoundingClientRect();
+      trashHover =
+        pointer.x >= rect.left &&
+        pointer.x <= rect.right &&
+        pointer.y >= rect.top &&
+        pointer.y <= rect.bottom;
+    }
+    arrangementSortDragOverTrashRef.current = trashHover;
+    if (arrangementOrderTrashHoverRef.current !== trashHover) {
+      arrangementOrderTrashHoverRef.current = trashHover;
+      setArrangementOrderTrashHover(trashHover);
+    }
+    const sortableContainers = (args?.droppableContainers || []).filter(
+      (entry) => String(entry?.id || "") !== "__trash__"
+    );
+    const nextArgs = { ...args, droppableContainers: sortableContainers };
+    if (trashHover && arrangementSortLastOverIdRef.current) {
+      const lastContainer = sortableContainers.find(
+        (entry) => String(entry?.id || "") === String(arrangementSortLastOverIdRef.current || "")
+      );
+      if (lastContainer) {
+        return [{
+          id: String(arrangementSortLastOverIdRef.current || ""),
+          data: { droppableContainer: lastContainer, value: Number.MAX_SAFE_INTEGER },
+        }];
+      }
+    }
+    const pointerHits = pointerWithin(nextArgs);
+    const nextHit = pointerHits[0] || closestCenter(nextArgs)[0] || null;
+    if (nextHit?.id) {
+      arrangementSortLastOverIdRef.current = String(nextHit.id || "");
+      return [nextHit];
+    }
+    return [];
+  }, []);
   const onArrangementOrderDragEnd = React.useCallback((event) => {
     const { active, over } = event;
-    if (!over || active.id === over.id) return;
+    if (arrangementSortDragOverTrashRef.current) {
+      arrangementRemoveRow(String(active?.id || ""));
+      arrangementSortLastOverIdRef.current = "";
+      arrangementSortDragOverTrashRef.current = false;
+      setActiveArrangementSortRowId(null);
+      setArrangementOrderDropTargetId(null);
+      setArrangementOrderTrashHover(false);
+      return;
+    }
+    const overId = over ? String(over.id || "") : "";
+    if (!over || active.id === over.id) {
+      arrangementSortLastOverIdRef.current = "";
+      arrangementSortDragOverTrashRef.current = false;
+      setActiveArrangementSortRowId(null);
+      setArrangementOrderDropTargetId(null);
+      setArrangementOrderTrashHover(false);
+      return;
+    }
     setArrangementItemsWithUndo((prev) => {
       const oldIndex = prev.findIndex((row) => row.id === String(active.id));
       const newIndex = prev.findIndex((row) => row.id === String(over.id));
       if (oldIndex < 0 || newIndex < 0) return prev;
       return arrayMove(prev, oldIndex, newIndex);
     });
-  }, [setArrangementItemsWithUndo]);
+    arrangementSortLastOverIdRef.current = "";
+    arrangementSortDragOverTrashRef.current = false;
+    setActiveArrangementSortRowId(null);
+    setArrangementOrderDropTargetId(null);
+    setArrangementOrderTrashHover(false);
+  }, [arrangementRemoveRow, setArrangementItemsWithUndo]);
   const restrictArrangementDragToList = React.useCallback(({ transform, activeNodeRect }) => {
     const listEl = arrangementListRef.current;
     if (!listEl || !transform || !activeNodeRect) {
@@ -8567,6 +9783,70 @@ useEffect(() => {
     }
     return applyLoopWrites(baseGrid, loopRule, loopRepeats, loopOverlapMode, loopRespectPlayability);
   }, [baseGrid, loopRule, loopRepeats, loopOverlapMode, loopRespectPlayability, applyLoopWrites, instruments]);
+  useEffect(() => {
+    if (importedBeatLoadInProgressRef.current) return;
+    setNotationStickingSelection((prev) => {
+      if (!prev || typeof prev !== "object") return {};
+      let changed = false;
+      const next = {};
+      Object.entries(prev).forEach(([key, enabled]) => {
+        if (!enabled) {
+          changed = true;
+          return;
+        }
+        const [instId, rawIdx] = String(key).split(":");
+        const idx = Number(rawIdx);
+        if (!instId || !Number.isFinite(idx) || FOOT_INSTRUMENTS.has(instId)) {
+          changed = true;
+          return;
+        }
+        if ((computedGrid[instId]?.[idx] ?? CELL.OFF) === CELL.OFF) {
+          changed = true;
+          return;
+        }
+        next[key] = true;
+      });
+      return changed ? next : prev;
+    });
+  }, [computedGrid]);
+  useEffect(() => {
+    if (!notationStickingSelectionModeEnabled) return;
+    if (!selection) return;
+    if (selectionFinalized <= 0) return;
+    if (selectionFinalized === lastHandledNotationStickingSelectionFinalizedRef.current) return;
+
+    const keys = [];
+    for (let c = selection.start; c < selection.endExclusive; c++) {
+      for (let r = selection.rowStart; r <= selection.rowEnd; r++) {
+        const instId = instruments[r]?.id;
+        if (!instId || FOOT_INSTRUMENTS.has(instId)) continue;
+        if ((computedGrid[instId]?.[c] ?? CELL.OFF) === CELL.OFF) continue;
+        keys.push(`${instId}:${c}`);
+      }
+    }
+    if (!keys.length) {
+      lastHandledNotationStickingSelectionFinalizedRef.current = selectionFinalized;
+      return;
+    }
+    setNotationStickingSelection((prev) => {
+      const next = { ...(prev || {}) };
+      const allSelected = keys.every((key) => next[key] === true);
+      keys.forEach((key) => {
+        if (allSelected) delete next[key];
+        else next[key] = true;
+      });
+      return next;
+    });
+    setShowNotationSticking(true);
+    setSelection(null);
+    lastHandledNotationStickingSelectionFinalizedRef.current = selectionFinalized;
+  }, [
+    notationStickingSelectionModeEnabled,
+    selection,
+    selectionFinalized,
+    instruments,
+    computedGrid,
+  ]);
   const quarterDownbeatStepSet = React.useMemo(() => {
     const out = new Set();
     const byBar = Array.isArray(quarterSubdivisionsByBar) ? quarterSubdivisionsByBar : [];
@@ -8860,6 +10140,25 @@ useEffect(() => {
     () => new Set(playabilityWarningSteps),
     [playabilityWarningSteps]
   );
+  const stickingConflictSteps = React.useMemo(() => {
+    const handIds = instruments.map((inst) => inst.id).filter((id) => !FOOT_INSTRUMENTS.has(id));
+    const warned = [];
+    for (let step = 0; step < columns; step++) {
+      const counts = { L: 0, R: 0 };
+      for (const id of handIds) {
+        const v = computedGrid[id]?.[step] ?? CELL.OFF;
+        if (v === CELL.OFF) continue;
+        const hand = stickingAssignmentsByStep?.[step]?.[id];
+        if (hand === "L" || hand === "R") counts[hand] += 1;
+      }
+      if (counts.L > 1 || counts.R > 1) warned.push(step);
+    }
+    return warned;
+  }, [computedGrid, stickingAssignmentsByStep, instruments, columns]);
+  const stickingConflictStepSet = React.useMemo(
+    () => new Set(stickingConflictSteps),
+    [stickingConflictSteps]
+  );
 
   const stepQuarterDurations = React.useMemo(() => {
     const out = [];
@@ -9149,30 +10448,6 @@ useEffect(() => {
   ]);
   useEffect(() => {
     if (!loadedLocalBeatId) return;
-    const wantedId = `local:${String(loadedLocalBeatId)}`;
-    const target = Array.from(
-      beatLibraryPanelRef.current?.querySelectorAll?.("[data-beat-row-id]") || []
-    ).find((node) => node instanceof HTMLElement && node.getAttribute("data-beat-row-id") === wantedId);
-    if (!(target instanceof HTMLElement)) return;
-    window.requestAnimationFrame(() => {
-      const listEl =
-        target.closest(".dg-scroll-follow-list") ||
-        target.parentElement;
-      if (!(listEl instanceof HTMLElement)) {
-        target.scrollIntoView({ block: "nearest", behavior: "smooth" });
-        return;
-      }
-      const rowTop = target.offsetTop;
-      const rowHeight = target.offsetHeight;
-      const targetTop = Math.max(
-        0,
-        rowTop - (listEl.clientHeight - rowHeight) * (2 / 3)
-      );
-      listEl.scrollTo({ top: targetTop, behavior: "smooth" });
-    });
-  }, [loadedLocalBeatId, beatLibraryTab, isBeatLibraryOpen]);
-  useEffect(() => {
-    if (!loadedLocalBeatId) return;
     if (!isArrangementOpen || arrangementSourcesCollapsed) return;
     if (arrangementSourceTab !== "local") return;
     const wantedId = `local:${String(loadedLocalBeatId)}`;
@@ -9205,45 +10480,14 @@ useEffect(() => {
   useEffect(() => {
     if (!selectedArrangementSourceBeatKey) return;
     const [wantedSource] = selectedArrangementSourceBeatKey.split(":");
-    if (isBeatLibraryOpen) {
-      setBeatLibraryTab((prev) => (prev === wantedSource ? prev : wantedSource));
-    }
     if (isArrangementOpen && !arrangementSourcesCollapsed) {
       setArrangementSourceTab((prev) => (prev === wantedSource ? prev : wantedSource));
     }
   }, [
     selectedArrangementSourceBeatKey,
-    isBeatLibraryOpen,
     isArrangementOpen,
     arrangementSourcesCollapsed,
   ]);
-  useEffect(() => {
-    if (!isBeatLibraryOpen || !selectedArrangementSourceBeatKey) return;
-    const target = Array.from(
-      beatLibraryPanelRef.current?.querySelectorAll?.("[data-beat-row-id]") || []
-    ).find(
-      (node) =>
-        node instanceof HTMLElement &&
-        node.getAttribute("data-beat-row-id") === selectedArrangementSourceBeatKey
-    );
-    if (!(target instanceof HTMLElement)) return;
-    window.requestAnimationFrame(() => {
-      const listEl =
-        target.closest(".dg-scroll-follow-list") ||
-        target.parentElement;
-      if (!(listEl instanceof HTMLElement)) {
-        target.scrollIntoView({ block: "nearest", behavior: "smooth" });
-        return;
-      }
-      const rowTop = target.offsetTop;
-      const rowHeight = target.offsetHeight;
-      const targetTop = Math.max(
-        0,
-        rowTop - (listEl.clientHeight - rowHeight) * (2 / 3)
-      );
-      listEl.scrollTo({ top: targetTop, behavior: "smooth" });
-    });
-  }, [selectedArrangementSourceBeatKey, beatLibraryTab, isBeatLibraryOpen]);
   useEffect(() => {
     if (!isArrangementOpen || arrangementSourcesCollapsed || !selectedArrangementSourceBeatKey) return;
     const target = Array.from(
@@ -9380,6 +10624,18 @@ useEffect(() => {
     () => computeArrangementLoopRange(arrangementPlayableEntries, normalizedArrangementLoopSelection),
     [arrangementPlayableEntries, normalizedArrangementLoopSelection, computeArrangementLoopRange]
   );
+  const stepArrangementNotationPreviewScale = React.useCallback((delta) => {
+    setArrangementNotationPreviewScale((prev) => {
+      const steps = [0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1];
+      const currentIdx = steps.reduce(
+        (bestIdx, step, idx) =>
+          Math.abs(step - prev) < Math.abs(steps[bestIdx] - prev) ? idx : bestIdx,
+        0
+      );
+      const nextIdx = Math.max(0, Math.min(steps.length - 1, currentIdx + delta));
+      return steps[nextIdx];
+    });
+  }, []);
   const arrangementCompiledPlayback = React.useMemo(() => {
     const sourceEntries = (Array.isArray(arrangementPlayableEntries) ? arrangementPlayableEntries : []).map((entry, idx) => ({
       ...entry,
@@ -9413,6 +10669,7 @@ useEffect(() => {
         const nearestBeat = Math.round(beatPos);
         if (metronomeEnabled && Math.abs(beatPos - nearestBeat) < 1e-6) {
           const beatIndex = ((nearestBeat % beatsPerBar) + beatsPerBar) % beatsPerBar;
+          const globalBarIndex = globalBarBase + getBarIndexForStepFromPayload(payload, step);
           events.push({
             timeSec,
             hits: [{
@@ -9420,6 +10677,14 @@ useEffect(() => {
               state: "on",
               gain: beatIndex === 0 ? 0.95 * metronomeVolume : 0.82 * metronomeVolume,
             }],
+            meta: {
+              mode: "arrangement-compiled",
+              queueIndex: Number(entry?.__queueIndex ?? -1),
+              rowIndex: Number(entry?.rowIndex ?? -1),
+              repeatIndex: Number(entry?.repeatIndex ?? 0),
+              globalBarIndex,
+              localStep: step,
+            },
           });
         }
         const hits = [];
@@ -9708,6 +10973,18 @@ useEffect(() => {
       alert(e?.message || "Failed to export PDF");
     }
   }, []);
+  const handleBeatPngExport = React.useCallback(async () => {
+    try {
+      await exportNotationPng(notationExportRef.current, {
+        filename: (beatNameDraft || printTitle || "Drum Notation").trim() || "Drum Notation",
+        color: notationPngColor,
+      });
+      setIsNotationPngDialogOpen(false);
+    } catch (e) {
+      console.error(e);
+      alert(e?.message || "Failed to export PNG");
+    }
+  }, [beatNameDraft, printTitle, notationPngColor]);
   const bakeLoopPreview = React.useCallback(() => {
     if (!loopRule) return;
     setBaseGridWithUndo((prev) => bakeLoopInto(prev, loopRule, loopRepeats, loopOverlapMode, loopRespectPlayability));
@@ -9727,6 +11004,9 @@ useEffect(() => {
       }
       if (events.length) grid[inst.id] = events;
     });
+    const compactNotationStickingSelection = Object.fromEntries(
+      Object.entries(notationStickingSelection || {}).filter(([, value]) => value === true)
+    );
     return {
       v: 1,
       kitInstrumentIds,
@@ -9737,6 +11017,9 @@ useEffect(() => {
       layout,
       tupletsByBar: normalizedTupletOverridesByBar,
       grid,
+      ...(Object.keys(compactNotationStickingSelection).length > 0
+        ? { notationStickingSelection: compactNotationStickingSelection }
+        : {}),
     };
   }, [
     baseGrid,
@@ -9748,17 +11031,74 @@ useEffect(() => {
     bpm,
     layout,
     normalizedTupletOverridesByBar,
+    notationStickingSelection,
   ]);
   const loadedLocalBeat = React.useMemo(
     () => localBeats.find((b) => String(b?.id || "") === String(loadedLocalBeatId || "")) || null,
     [localBeats, loadedLocalBeatId]
   );
+  const loadedLocalBeatNotationSelectionSyncKeyRef = React.useRef("");
+  useEffect(() => {
+    if (!loadedLocalBeatId || !loadedLocalBeat) {
+      loadedLocalBeatNotationSelectionSyncKeyRef.current = "";
+      return;
+    }
+    if (importedBeatLoadInProgressRef.current) return;
+    const syncKey = `${loadedLocalBeatId}:${loadedLocalBeat.updatedAt || loadedLocalBeat.createdAt || ""}`;
+    if (loadedLocalBeatNotationSelectionSyncKeyRef.current === syncKey) return;
+    const nextSelection =
+      loadedLocalBeat?.notationStickingSelection &&
+      typeof loadedLocalBeat.notationStickingSelection === "object"
+        ? Object.fromEntries(
+            Object.entries(loadedLocalBeat.notationStickingSelection).filter(([, value]) => value === true)
+          )
+        : loadedLocalBeat?.payload?.notationStickingSelection &&
+            typeof loadedLocalBeat.payload.notationStickingSelection === "object"
+          ? Object.fromEntries(
+              Object.entries(loadedLocalBeat.payload.notationStickingSelection).filter(([, value]) => value === true)
+            )
+          : {};
+    loadedLocalBeatNotationSelectionSyncKeyRef.current = syncKey;
+    setNotationStickingSelection(nextSelection);
+  }, [loadedLocalBeatId, loadedLocalBeat]);
+  const currentBeatPayload = React.useMemo(() => buildCurrentBeatPayload(), [buildCurrentBeatPayload]);
   const normalizedCurrentPayloadJson = React.useMemo(
-    () => JSON.stringify(buildCurrentBeatPayload()),
-    [buildCurrentBeatPayload]
+    () => JSON.stringify(getComparableBeatPayload(currentBeatPayload)),
+    [currentBeatPayload]
   );
   const loadedLocalPayloadJson = React.useMemo(
-    () => JSON.stringify(loadedLocalBeat?.payload || {}),
+    () => JSON.stringify(getComparableBeatPayload(loadedLocalBeat?.payload || {})),
+    [loadedLocalBeat]
+  );
+  const normalizedCurrentPayloadJsonWithoutNotationSticking = React.useMemo(
+    () => JSON.stringify(getComparableBeatPayloadWithoutNotationSticking(currentBeatPayload)),
+    [currentBeatPayload]
+  );
+  const loadedLocalPayloadJsonWithoutNotationSticking = React.useMemo(
+    () =>
+      JSON.stringify(
+        getComparableBeatPayloadWithoutNotationSticking(loadedLocalBeat?.payload || {})
+      ),
+    [loadedLocalBeat]
+  );
+  const currentNotationStickingSelectionJson = React.useMemo(
+    () =>
+      JSON.stringify(
+        ((currentBeatPayload?.notationStickingSelection &&
+          typeof currentBeatPayload.notationStickingSelection === "object")
+          ? currentBeatPayload.notationStickingSelection
+          : {})
+      ),
+    [currentBeatPayload]
+  );
+  const loadedNotationStickingSelectionJson = React.useMemo(
+    () =>
+      JSON.stringify(
+        loadedLocalBeat?.payload?.notationStickingSelection &&
+          typeof loadedLocalBeat.payload.notationStickingSelection === "object"
+          ? loadedLocalBeat.payload.notationStickingSelection
+          : {}
+      ),
     [loadedLocalBeat]
   );
   const normalizedDraftName = React.useMemo(() => beatNameDraft.trim(), [beatNameDraft]);
@@ -9793,11 +11133,40 @@ useEffect(() => {
     const savedName = String(loadedLocalBeat.name || "").trim();
     return normalizedDraftName !== savedName;
   }, [loadedLocalBeat, normalizedDraftName]);
+  const isLoadedLocalBeatNotationSelectionDirty = React.useMemo(() => {
+    if (!loadedLocalBeat) return false;
+    return currentNotationStickingSelectionJson !== loadedNotationStickingSelectionJson;
+  }, [
+    loadedLocalBeat,
+    currentNotationStickingSelectionJson,
+    loadedNotationStickingSelectionJson,
+  ]);
+  useEffect(() => {
+    isLoadedLocalBeatNotationSelectionDirtyRef.current = isLoadedLocalBeatNotationSelectionDirty;
+  }, [isLoadedLocalBeatNotationSelectionDirty]);
+  const isLoadedLocalBeatCoreDirty = React.useMemo(() => {
+    if (!loadedLocalBeat) return false;
+    const savedCategory = String(loadedLocalBeat.category || "Groove");
+    const savedStyle = loadedLocalBeat.style ? String(loadedLocalBeat.style).trim() : undefined;
+    const categoryChanged = normalizedDraftCategory !== savedCategory;
+    const styleChanged = (normalizedDraftStyle || undefined) !== (savedStyle || undefined);
+    const payloadChanged =
+      normalizedCurrentPayloadJsonWithoutNotationSticking !==
+      loadedLocalPayloadJsonWithoutNotationSticking;
+    return categoryChanged || styleChanged || payloadChanged;
+  }, [
+    loadedLocalBeat,
+    normalizedDraftCategory,
+    normalizedDraftStyle,
+    normalizedCurrentPayloadJsonWithoutNotationSticking,
+    loadedLocalPayloadJsonWithoutNotationSticking,
+  ]);
   const canUpdateLoadedLocalBeat =
     arrangementSourceTab === "local" &&
     Boolean(loadedLocalBeat) &&
     isLoadedLocalBeatDirty &&
-    !isLoadedLocalBeatNameChanged;
+    !isLoadedLocalBeatNameChanged &&
+    isLoadedLocalBeatCoreDirty;
 
   const applyImportedBeatPayload = React.useCallback(
     (payload, sourceKey) => {
@@ -9831,8 +11200,23 @@ useEffect(() => {
         timeSig: nextTimeSig,
         tupletsByBar,
         grid: payload.grid && typeof payload.grid === "object" ? payload.grid : {},
+        notationStickingSelection:
+          payload.notationStickingSelection && typeof payload.notationStickingSelection === "object"
+            ? Object.fromEntries(
+                Object.entries(payload.notationStickingSelection).filter(([, value]) => value === true)
+              )
+            : {},
       };
+      importedBeatLoadInProgressRef.current = true;
       appliedSharedKeyRef.current = shareSourceKey;
+
+      setNotationStickingSelection(
+        payload.notationStickingSelection && typeof payload.notationStickingSelection === "object"
+          ? Object.fromEntries(
+              Object.entries(payload.notationStickingSelection).filter(([, value]) => value === true)
+            )
+          : {}
+      );
 
       const nextLayout = payload.layout;
       const layoutOptions = ["grid-top", "notation-top", "grid-right", "notation-right"];
@@ -9843,7 +11227,6 @@ useEffect(() => {
         setBpm(clampedBpm);
         setBpmDraft(String(clampedBpm));
       }
-
       setModifiedPresetBase(null);
       setPendingPresetChange(null);
       setPendingRemoval(null);
@@ -10036,7 +11419,6 @@ useEffect(() => {
     }));
     setSharedArrangementBeats(sharedBeats);
     setLoadedArrangementId(null);
-    setArrangementSaveAsOpen(false);
     setArrangementSelection(null);
     setArrangementSelectionAnchor(null);
     setArrangementBarSelection(null);
@@ -10055,7 +11437,6 @@ useEffect(() => {
     setIsArrangementOpen(true);
     setArrangementSourcesCollapsed(isMobileViewport);
     setArrangementDetailsCollapsed(false);
-    if (isMobileViewport) setIsBeatLibraryOpen(false);
     const firstBeat = sharedBeats[0] || null;
     if (firstBeat?.payload) {
       applyImportedBeatPayloadRef.current?.(firstBeat.payload, `shared-arrangement:${payload?.name || ""}:0`);
@@ -10081,10 +11462,7 @@ useEffect(() => {
     const fallbackName = `Beat ${localBeats.length + 1}`;
     const name = beatNameDraft.trim() || fallbackName;
     const now = new Date().toISOString();
-    const selectedParentId =
-      beatLibraryTab === "local" && selectedBeatLibraryContainerId !== "all"
-        ? selectedBeatLibraryContainerId
-        : null;
+    const selectedParentId = selectedBeatLibraryContainerId !== "all" ? selectedBeatLibraryContainerId : null;
     const nextManualOrder =
       localBeats.reduce((max, beat) => {
         const meta = getBeatLibraryMeta(beat);
@@ -10098,6 +11476,10 @@ useEffect(() => {
         manualOrder: nextManualOrder,
       },
     };
+    const compactNotationStickingSelection =
+      payload.notationStickingSelection && typeof payload.notationStickingSelection === "object"
+        ? payload.notationStickingSelection
+        : {};
     const item = {
       id: `local-${Math.random().toString(36).slice(2, 10)}`,
       name,
@@ -10108,6 +11490,7 @@ useEffect(() => {
       createdAt: now,
       updatedAt: now,
       payload,
+      notationStickingSelection: compactNotationStickingSelection,
       libraryMeta: payload.libraryMeta,
       source: "local",
     };
@@ -10137,7 +11520,6 @@ useEffect(() => {
     setLoadedLocalBeatId(item.id);
   }, [
     authUser?.id,
-    beatLibraryTab,
     selectedBeatLibraryContainerId,
     beatNameDraft,
     beatCategoryDraft,
@@ -10159,6 +11541,10 @@ useEffect(() => {
         manualOrder: existingLibraryMeta.manualOrder,
       },
     };
+    const compactNotationStickingSelection =
+      payload.notationStickingSelection && typeof payload.notationStickingSelection === "object"
+        ? payload.notationStickingSelection
+        : {};
     const category = beatCategoryDraft === "all" ? "Groove" : beatCategoryDraft;
     const style = beatStyleDraft === "all" ? undefined : beatStyleDraft.trim() || undefined;
     if (authUser?.id && hasSupabaseEnabled && supabase) {
@@ -10196,6 +11582,7 @@ useEffect(() => {
               timeSigCategory: `${timeSig.n}/${timeSig.d}`,
               bpm,
               payload,
+              notationStickingSelection: compactNotationStickingSelection,
               libraryMeta: payload.libraryMeta,
             }
           : beat
@@ -10213,6 +11600,133 @@ useEffect(() => {
     timeSig.n,
     timeSig.d,
     bpm,
+  ]);
+  const updateCurrentLoadedBeatNotationSelectionOnly = React.useCallback(async () => {
+    if (!loadedLocalBeatId || !loadedLocalBeat) return;
+    const compactNotationStickingSelection = Object.fromEntries(
+      Object.entries(notationStickingSelection || {}).filter(([, value]) => value === true)
+    );
+    const nextPayload = {
+      ...(loadedLocalBeat.payload && typeof loadedLocalBeat.payload === "object"
+        ? loadedLocalBeat.payload
+        : {}),
+    };
+    if (Object.keys(compactNotationStickingSelection).length > 0) {
+      nextPayload.notationStickingSelection = compactNotationStickingSelection;
+    } else {
+      delete nextPayload.notationStickingSelection;
+    }
+
+    if (authUser?.id && hasSupabaseEnabled && supabase) {
+      const now = new Date().toISOString();
+      const { data, error } = await supabase
+        .from("beats")
+        .update({
+          payload: nextPayload,
+          updated_at: now,
+        })
+        .eq("id", String(loadedLocalBeatId))
+        .eq("user_id", authUser.id)
+        .select("id,name,payload,created_at,updated_at")
+        .single();
+      if (error) {
+        alert(error.message || "Failed to update notation sticking");
+        return;
+      }
+      const nextItem = normalizeCloudBeatRow(data);
+      if (!nextItem) return;
+      setLocalBeats((prev) =>
+        prev.map((beat) => (String(beat?.id || "") === String(loadedLocalBeatId) ? nextItem : beat))
+      );
+      localBeatsRef.current = localBeatsRef.current.map((beat) =>
+        String(beat?.id || "") === String(loadedLocalBeatId) ? nextItem : beat
+      );
+      return;
+    }
+
+    const nextUpdatedAt = new Date().toISOString();
+    const next = localBeatsRef.current.map((beat) =>
+      String(beat?.id || "") === String(loadedLocalBeatId)
+        ? {
+            ...beat,
+            updatedAt: nextUpdatedAt,
+            payload: nextPayload,
+            notationStickingSelection: compactNotationStickingSelection,
+          }
+        : beat
+    );
+    localBeatsRef.current = next;
+    setLocalBeats(next);
+  }, [
+    authUser?.id,
+    loadedLocalBeatId,
+    loadedLocalBeat,
+    notationStickingSelection,
+  ]);
+  useEffect(() => {
+    flushLoadedLocalBeatNotationSelectionRef.current = updateCurrentLoadedBeatNotationSelectionOnly;
+  }, [updateCurrentLoadedBeatNotationSelectionOnly]);
+  useEffect(() => {
+    if (importedBeatLoadInProgressRef.current) return;
+    if (!loadedLocalBeatId) return;
+    const compactNotationStickingSelection = Object.fromEntries(
+      Object.entries(notationStickingSelection || {}).filter(([, value]) => value === true)
+    );
+    const nextSelectionJson = JSON.stringify(compactNotationStickingSelection);
+    const savedSelectionJson = JSON.stringify(
+      loadedLocalBeat?.payload?.notationStickingSelection &&
+        typeof loadedLocalBeat.payload.notationStickingSelection === "object"
+        ? loadedLocalBeat.payload.notationStickingSelection
+        : {}
+    );
+    if (nextSelectionJson === savedSelectionJson) return;
+    const next = localBeatsRef.current.map((beat) => {
+      if (String(beat?.id || "") !== String(loadedLocalBeatId)) return beat;
+      const nextPayload = {
+        ...(beat?.payload && typeof beat.payload === "object" ? beat.payload : {}),
+      };
+      if (Object.keys(compactNotationStickingSelection).length > 0) {
+        nextPayload.notationStickingSelection = compactNotationStickingSelection;
+      } else {
+        delete nextPayload.notationStickingSelection;
+      }
+      return {
+        ...beat,
+        payload: nextPayload,
+        notationStickingSelection: compactNotationStickingSelection,
+      };
+    });
+    localBeatsRef.current = next;
+    setLocalBeats(next);
+  }, [notationStickingSelection, loadedLocalBeatId, loadedLocalBeat]);
+  useEffect(() => {
+    if (importedBeatLoadInProgressRef.current) return;
+    if (!loadedLocalBeatId) return;
+    if (isLoadedLocalBeatNameChanged) return;
+    if (!isLoadedLocalBeatNotationSelectionDirty) return;
+    updateCurrentLoadedBeatNotationSelectionOnly();
+  }, [
+    loadedLocalBeatId,
+    isLoadedLocalBeatNameChanged,
+    isLoadedLocalBeatNotationSelectionDirty,
+    updateCurrentLoadedBeatNotationSelectionOnly,
+  ]);
+  useEffect(() => {
+    if (importedBeatLoadInProgressRef.current) return;
+    if (!beatAutoUpdateEnabled) return;
+    if (!loadedLocalBeatId) return;
+    if (isLoadedLocalBeatNameChanged) return;
+    if (!isLoadedLocalBeatCoreDirty) return;
+    const timeoutId = window.setTimeout(() => {
+      updateCurrentLoadedBeatLocal();
+    }, 150);
+    return () => window.clearTimeout(timeoutId);
+  }, [
+    beatAutoUpdateEnabled,
+    loadedLocalBeatId,
+    isLoadedLocalBeatNameChanged,
+    isLoadedLocalBeatCoreDirty,
+    updateCurrentLoadedBeatLocal,
   ]);
 
   const submitCurrentBeatPublic = React.useCallback(async (opts = null) => {
@@ -10319,7 +11833,6 @@ useEffect(() => {
     setPrintComposer(composer);
     setBeatNameDraft(title);
     setIsPublicSubmitDialogOpen(false);
-    setIsBeatLibraryOpen(false);
   }, [
     publicSubmitTitle,
     publicSubmitComposer,
@@ -10376,9 +11889,9 @@ useEffect(() => {
   }, [librarySort, beatCategoryDraft, libraryTimeSigFilter, beatStyleDraft]);
   useEffect(() => {
     const libraryVisibleInCombinedWindow = isArrangementOpen && arrangementSourceTab === "public";
-    if (!isBeatLibraryOpen && !libraryVisibleInCombinedWindow) return;
+    if (!libraryVisibleInCombinedWindow) return;
     refreshPublicLibrary();
-  }, [isArrangementOpen, arrangementSourceTab, isBeatLibraryOpen, refreshPublicLibrary]);
+  }, [isArrangementOpen, arrangementSourceTab, refreshPublicLibrary]);
   useEffect(() => {
     const libraryVisibleInCombinedWindow = isArrangementOpen && arrangementSourceTab === "public";
     if (libraryVisibleInCombinedWindow) return;
@@ -10489,7 +12002,6 @@ useEffect(() => {
     setArrangementTitleLine2Draft(String(entry.titleLine2 || ""));
     setArrangementComposerDraft(String(entry.composer || ""));
     setLoadedArrangementId(null);
-    setArrangementSaveAsOpen(false);
     setSelectedPublicArrangementId(String(entry.id || ""));
   }, [arrangementPlaybackEnabled, pushLocalBeatHistory]);
   useEffect(() => {
@@ -10664,7 +12176,7 @@ useEffect(() => {
         className={
           exportMode
             ? "w-[794px] min-h-[1123px] px-3 pt-2 pb-4"
-            : "relative mx-auto w-full max-w-[794px] min-h-[1123px] px-3 pt-2 pb-4"
+            : "relative mx-auto w-[794px] max-w-none min-h-[1123px] px-3 pt-2 pb-4"
         }
       >
         {!exportMode ? (
@@ -10681,12 +12193,95 @@ useEffect(() => {
         >
           {pageIdx === 0 && (
             <div className="mb-6 flex justify-center">
-              <ArrangementPageHeaderSvg
-                titleLine1={arrangementTitleLine1Draft.trim() || arrangementDisplayName || "Arrangement"}
-                titleLine2={arrangementTitleLine2Draft.trim()}
-                composer={arrangementComposerDraft.trim()}
-                dark={dark}
-              />
+              {exportMode ? (
+                <ArrangementPageHeaderSvg
+                  titleLine1={arrangementTitleLine1Draft.trim() || arrangementDisplayName || "Arrangement"}
+                  titleLine2={arrangementTitleLine2Draft.trim()}
+                  composer={arrangementComposerDraft.trim()}
+                  dark={dark}
+                />
+              ) : (
+                <div className="w-full max-w-[46rem]">
+                  <div className="grid grid-cols-[12rem_minmax(0,1fr)_12rem] items-start gap-4">
+                    <div />
+                    <div
+                      ref={isArrangementSheetTitleEditing ? arrangementSheetTitleEditorRef : undefined}
+                      className="min-w-0 text-center"
+                      style={{ fontFamily: '"Liberation Serif", serif' }}
+                    >
+                      {isArrangementSheetTitleEditing ? (
+                        <div className="mx-auto max-w-[28rem]">
+                          <input
+                            type="text"
+                            value={arrangementTitleLine1Draft}
+                            onChange={(e) => setArrangementTitleLine1Draft(e.target.value)}
+                            placeholder="Main title"
+                            autoFocus
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" || e.key === "Escape") {
+                                e.preventDefault();
+                                setIsArrangementSheetTitleEditing(false);
+                              }
+                            }}
+                            className={`w-full bg-transparent p-0 text-center text-[2.85rem] font-normal leading-tight shadow-none outline-none ${
+                              dark
+                                ? "border-0 text-neutral-100"
+                                : "border-0 text-neutral-900"
+                            }`}
+                          />
+                          <div className="mt-1">
+                            <input
+                              type="text"
+                              value={arrangementTitleLine2Draft}
+                              onChange={(e) => setArrangementTitleLine2Draft(e.target.value)}
+                              placeholder="Subtitle"
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter" || e.key === "Escape") {
+                                  e.preventDefault();
+                                  setIsArrangementSheetTitleEditing(false);
+                                }
+                              }}
+                            className={`block w-full bg-transparent p-0 text-center text-[2.85rem] font-normal leading-tight shadow-none outline-none ${
+                              dark
+                                ? "border-0 text-neutral-200"
+                                : "border-0 text-neutral-900"
+                            }`}
+                            />
+                          </div>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setIsArrangementSheetTitleEditing(true)}
+                          className="w-full text-center"
+                          title="Edit title"
+                        >
+                          <div className={`text-[2.85rem] font-normal leading-tight ${
+                            dark ? "text-neutral-100" : "text-neutral-900"
+                          }`}>
+                            {arrangementTitleLine1Draft.trim() || arrangementDisplayName || "Arrangement"}
+                          </div>
+                          {arrangementTitleLine2Draft.trim() ? (
+                            <div className={`mt-1 text-[2.85rem] font-normal leading-tight ${
+                              dark ? "text-neutral-200" : "text-neutral-900"
+                            }`}>
+                              {arrangementTitleLine2Draft.trim()}
+                            </div>
+                          ) : null}
+                        </button>
+                      )}
+                    </div>
+                    <div
+                      className={`pt-1 text-right text-sm ${
+                        dark ? "text-neutral-300" : "text-neutral-700"
+                      }`}
+                      style={{ fontFamily: '"Liberation Serif", serif' }}
+                    >
+                      {arrangementComposerDraft.trim() || ""}
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           )}
           {page.segments.map((segment) => (
@@ -10709,6 +12304,7 @@ useEffect(() => {
                   grid={segment.notation.grid}
                   stickingAssignmentsByStep={segment.stickingAssignments || []}
                   showNotationSticking={showNotationSticking}
+                  notationStickingSelection={segment.notation.notationStickingSelection || {}}
                   notationStickingView={notationStickingView}
                   resolution={segment.notation.resolution}
                   bars={segment.notation.bars}
@@ -10720,6 +12316,7 @@ useEffect(() => {
                       segment.notation.resolution
                   )}
                   timeSig={segment.notation.timeSig}
+                  timeSigByBar={segment.notation.timeSigByBar}
                   quarterSubdivisionsByBar={segment.notation.quarterSubdivisionsByBar}
                   barStepOffsets={segment.notation.barStepOffsets}
                   mergeRests={mergeRests}
@@ -10832,6 +12429,21 @@ useEffect(() => {
     togglePlaybackFromBeginning,
     matchesShortcut,
   ]);
+  useEffect(() => {
+    if (!isArrangementSheetTitleEditing) return undefined;
+    const onPointerDown = (event) => {
+      const root = arrangementSheetTitleEditorRef.current;
+      if (!root) return;
+      if (root.contains(event.target)) return;
+      setIsArrangementSheetTitleEditing(false);
+    };
+    window.addEventListener("mousedown", onPointerDown, true);
+    window.addEventListener("touchstart", onPointerDown, true);
+    return () => {
+      window.removeEventListener("mousedown", onPointerDown, true);
+      window.removeEventListener("touchstart", onPointerDown, true);
+    };
+  }, [isArrangementSheetTitleEditing]);
 
   useEffect(() => {
     const onKey = (e) => {
@@ -10973,30 +12585,32 @@ useEffect(() => {
       const prevCycle = stickingSelectionCycleRef.current;
       const nextPhase =
         prevCycle.signature === selectionSignature
-          ? (prevCycle.phase + 1) % 4
+          ? (prevCycle.phase + 1) % 3
           : 0;
       stickingSelectionCycleRef.current = { signature: selectionSignature, phase: nextPhase };
       setStickingOverrides((prev) => {
         const next = { ...(prev || {}) };
-        for (let r = selection.rowStart; r <= selection.rowEnd; r++) {
-          const instId = instruments[r]?.id;
-          if (!instId || FOOT_INSTRUMENTS.has(instId)) continue;
-          for (let c = selection.start; c < selection.endExclusive; c++) {
+        const selectedActiveCells = [];
+        for (let c = selection.start; c < selection.endExclusive; c++) {
+          for (let r = selection.rowStart; r <= selection.rowEnd; r++) {
+            const instId = instruments[r]?.id;
+            if (!instId || FOOT_INSTRUMENTS.has(instId)) continue;
             if ((computedGrid[instId]?.[c] ?? CELL.OFF) === CELL.OFF) continue;
-            const k = `${instId}:${c}`;
-            const autoHand = autoStickingAssignmentsByStep?.[c]?.[instId] === "L" ? "L" : "R";
-            if (nextPhase === 3) {
-              // Original: clear manual edits for selected active cells.
-              delete next[k];
-              continue;
-            }
-            let desired = targetHand;
-            if (nextPhase === 0) desired = leadHand; // Force lead hand
-            else if (nextPhase === 1) desired = nonLeadHand; // Force non-lead hand
-            // nextPhase === 2: Toggle (existing behavior).
-            if (desired === autoHand) delete next[k];
-            else next[k] = desired;
+            selectedActiveCells.push({ instId, col: c });
           }
+        }
+        let alternatingHand = leadHand;
+        for (const cell of selectedActiveCells) {
+          const { instId, col } = cell;
+          const k = `${instId}:${col}`;
+          let desired = leadHand;
+          if (nextPhase === 1) {
+            desired = nonLeadHand;
+          } else if (nextPhase === 2) {
+            desired = alternatingHand;
+            alternatingHand = alternatingHand === "L" ? "R" : "L";
+          }
+          next[k] = desired;
         }
         return next;
       });
@@ -11018,6 +12632,24 @@ useEffect(() => {
     });
     return true;
   }, [computedGrid, autoStickingAssignmentsByStep, stickingAssignmentsByStep, instruments, selection, stickingLeadHand]);
+
+  const clearNotationStickingSelection = React.useCallback(() => {
+    setNotationStickingSelection({});
+  }, []);
+
+  const toggleNotationStickingSelectionAt = React.useCallback((inst, idx) => {
+    if (FOOT_INSTRUMENTS.has(inst)) return false;
+    if ((computedGrid[inst]?.[idx] ?? CELL.OFF) === CELL.OFF) return false;
+    const key = `${inst}:${idx}`;
+    setNotationStickingSelection((prev) => {
+      const next = { ...(prev || {}) };
+      if (next[key]) delete next[key];
+      else next[key] = true;
+      return next;
+    });
+    setShowNotationSticking(true);
+    return true;
+  }, [computedGrid]);
 
   const cycleArticulation = (inst, idx, forceValue = null) => {
     if (!GHOST_ENABLED.has(inst)) return;
@@ -11076,7 +12708,13 @@ useEffect(() => {
     const beatRowKey = `${sourceLabel}:${String(beat.id)}`;
     const isLoadedTrackedBeat =
       String(loadedLocalBeatId || "") === String(beat.id) && !isLoadedLocalBeatNameChanged;
-    const isSelectedArrangementSourceBeat = selectedArrangementSourceBeatKey === beatRowKey;
+    const isSelectedArrangementSourceBeat =
+      !loadedLocalBeatId && selectedArrangementSourceBeatKey === beatRowKey;
+    const isActiveDraggedBeat = String(activeBeatLibraryDragBeatId || "") === String(beat.id);
+    const hideSourceWhileDragging =
+      isActiveDraggedBeat &&
+      !!beatLibraryDropTargetId &&
+      !String(beatLibraryDropTargetId).startsWith("beat:");
     return (
       <SortableArrangementSourceBeatRow
         key={`arr-tree-beat-${beat.id}`}
@@ -11084,6 +12722,7 @@ useEffect(() => {
         depth={depth}
         beatRowKey={beatRowKey}
         beatBpm={beatBpm}
+        isActiveDraggedBeat={isActiveDraggedBeat}
         beatLibraryDropTargetId={beatLibraryDropTargetId}
         isLoadedTrackedBeat={isLoadedTrackedBeat}
         isSelectedArrangementSourceBeat={isSelectedArrangementSourceBeat}
@@ -11093,16 +12732,30 @@ useEffect(() => {
         commitEditingBeatLibraryBeat={commitEditingBeatLibraryBeat}
         cancelEditingBeatLibraryBeat={cancelEditingBeatLibraryBeat}
         startEditingBeatLibraryBeat={startEditingBeatLibraryBeat}
+        pendingBeatRenameExitRef={beatLibraryPendingBeatRenameExitRef}
+        showUpdateButton={
+          String(loadedLocalBeatId || "") === String(beat.id) &&
+          canUpdateLoadedLocalBeat
+        }
+        updateCurrentLoadedBeatLocal={updateCurrentLoadedBeatLocal}
         loadBeatIntoEditor={loadBeatIntoEditor}
         arrangementAddBeat={arrangementAddBeat}
         handleDeleteLocalBeatClick={handleDeleteLocalBeatClick}
+        hideSourceWhileDragging={hideSourceWhileDragging}
+        disableTransition={
+          !!activeBeatLibraryDragBeatId &&
+          !!beatLibraryDropTargetId &&
+          !String(beatLibraryDropTargetId).startsWith("beat:")
+        }
       />
     );
   }, [
+    activeBeatLibraryDragBeatId,
     arrangementAddBeat,
     commitEditingBeatLibraryBeat,
     cancelEditingBeatLibraryBeat,
     beatLibraryDropTargetId,
+    canUpdateLoadedLocalBeat,
     editingBeatLibraryBeatId,
     editingBeatLibraryBeatName,
     getBeatBpm,
@@ -11113,71 +12766,88 @@ useEffect(() => {
     setEditingBeatLibraryBeatName,
     selectedArrangementSourceBeatKey,
     startEditingBeatLibraryBeat,
+    updateCurrentLoadedBeatLocal,
   ]);
 
-  const renderArrangementSourceFolderBranch = React.useCallback((parentId, depth) => {
+  const countBeatLibraryFolderBeats = React.useCallback((containerId) => {
+    const targetId = String(containerId);
+    const directCount = localBeats.filter(
+      (beat) => String(getBeatLibraryParentId(beat) || "") === targetId
+    ).length;
     const childFolders = beatLibraryContainers.filter(
-      (entry) => String(entry.parentId || "") === String(parentId || "")
+      (entry) => String(entry.parentId || "") === targetId
     );
-    const childBeats = arrangementSourceBeats
-      .filter((beat) => String(getBeatLibraryParentId(beat) || "") === String(parentId || ""))
-      .sort(compareBeatLibraryOrder);
-    const nodes = [];
+    return directCount + childFolders.reduce((sum, child) => sum + countBeatLibraryFolderBeats(child.id), 0);
+  }, [beatLibraryContainers, getBeatLibraryParentId, localBeats]);
+
+  const renderArrangementSourceFolderRow = React.useCallback((entry, depth = 0) => {
+    const hasChildren = true;
+    const folderBeatCount = countBeatLibraryFolderBeats(entry.id);
+    const isSelected = String(selectedBeatLibraryContainerId) === String(entry.id);
     const suppressFolderSelectionHighlight =
       (Boolean(loadedLocalBeatId) && !isLoadedLocalBeatNameChanged) ||
       String(selectedArrangementSourceBeatKey || "").startsWith("local:");
-
-    childFolders.forEach((entry) => {
-      const hasChildren =
-        beatLibraryContainers.some((candidate) => String(candidate.parentId || "") === String(entry.id)) ||
-        localBeats.some((beat) => String(getBeatLibraryParentId(beat) || "") === String(entry.id));
-      const isSelected = String(selectedBeatLibraryContainerId) === String(entry.id);
-      nodes.push(
-        <BeatLibraryDropTarget
-          key={`arr-src-container-${entry.id}`}
-          id={String(entry.id)}
-          className="relative"
-          style={{ marginLeft: `${Math.max(0, depth) * 0.5}rem` }}
-          draggable
-          onDragStart={(e) => {
-            beginBeatLibraryTreeDrag({ kind: "container", containerId: entry.id });
-            try {
-              e.dataTransfer.effectAllowed = "move";
-              e.dataTransfer.setData("text/plain", `container:${String(entry.id)}`);
-            } catch (_) {}
-          }}
-          onDragEnd={clearBeatLibraryTreeDrag}
-          onDragEnter={(e) => {
-            e.preventDefault();
-            setBeatLibraryDropTargetId(String(entry.id));
-            if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
-          }}
-          onDragOver={(e) => {
-            e.preventDefault();
-            setBeatLibraryDropTargetId(String(entry.id));
-            if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
-          }}
-          onDrop={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            handleBeatLibraryTreeDrop(entry.id);
-          }}
+    return (
+      <BeatLibraryDropTarget
+        key={`arr-src-container-${entry.id}`}
+        id={String(entry.id)}
+        className="relative"
+        style={{ marginLeft: `${Math.max(0, depth) * 0.5}rem` }}
+        draggable
+        onDragStart={(e) => {
+          beatLibraryJustDraggedContainerRef.current = { id: String(entry.id), at: Date.now() };
+          beginBeatLibraryTreeDrag({ kind: "container", containerId: entry.id });
+          try {
+            e.dataTransfer.effectAllowed = "move";
+            e.dataTransfer.setData("text/plain", `container:${String(entry.id)}`);
+          } catch (_) {}
+        }}
+        onDragEnd={() => {
+          beatLibraryJustDraggedContainerRef.current = { id: String(entry.id), at: Date.now() };
+          clearBeatLibraryTreeDrag();
+        }}
+        onDragEnter={(e) => {
+          e.preventDefault();
+          setBeatLibraryDropTargetId(String(entry.id));
+          if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+          scheduleBeatLibraryFolderExpand(
+            entry.id,
+            beatLibraryTreeDragRef.current?.kind === "beat" && hasChildren && entry.collapsed
+          );
+        }}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setBeatLibraryDropTargetId(String(entry.id));
+          if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+          scheduleBeatLibraryFolderExpand(
+            entry.id,
+            beatLibraryTreeDragRef.current?.kind === "beat" && hasChildren && entry.collapsed
+          );
+        }}
+        onDragLeave={() => {
+          if (beatLibraryPendingExpandFolderIdRef.current === String(entry.id)) {
+            clearBeatLibraryFolderExpandTimer();
+          }
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          handleBeatLibraryTreeDrop(entry.id);
+        }}
+      >
+        <div
+          className={`flex w-full items-center gap-2 rounded-md px-1.5 py-0.5 text-left text-xs transition-colors ${
+            beatLibraryDropTargetId === String(entry.id)
+              ? "bg-cyan-950/20 text-cyan-50 ring-1 ring-inset ring-cyan-500/35"
+              : isSelected && !suppressFolderSelectionHighlight
+                ? "bg-sky-900/20 text-sky-100"
+                : "text-neutral-400 hover:bg-neutral-900/40 hover:text-neutral-200"
+          }`}
         >
-          <button
-            type="button"
-            onClick={() => setSelectedBeatLibraryContainerId(entry.id)}
-            className={`flex w-full items-center gap-2 rounded border px-2 py-1 text-left text-sm ${
-              beatLibraryDropTargetId === String(entry.id)
-                ? "border-cyan-400/80 bg-cyan-900/25 text-cyan-50 shadow-[0_0_0_1px_rgba(34,211,238,0.35)]"
-                : isSelected && !suppressFolderSelectionHighlight
-                  ? "border-sky-500/70 bg-sky-900/30 text-sky-100"
-                  : "border-neutral-800 bg-neutral-900/40 text-neutral-300 hover:bg-neutral-800/60"
-            }`}
-            title="Folder"
-          >
+          <div className="flex min-w-0 items-center gap-2">
             <span
-              className={`inline-flex h-5 min-w-5 items-center justify-center rounded text-xs ${
-                hasChildren ? "text-neutral-400 hover:bg-neutral-800/60" : "text-neutral-700"
+              className={`inline-flex h-6 min-w-6 items-center justify-center ${
+                hasChildren ? "text-neutral-500" : "text-neutral-800"
               }`}
               onClick={(e) => {
                 e.preventDefault();
@@ -11208,82 +12878,175 @@ useEffect(() => {
                 }}
                 onBlur={() => commitEditingBeatLibraryContainer()}
                 autoFocus
-                className="min-w-0 flex-1 rounded bg-neutral-950/70 px-1 py-0.5 text-sm text-white outline-none"
+                className="min-w-0 max-w-full bg-transparent px-1 py-0.5 text-xs text-white outline-none"
               />
             ) : (
-              <span className="min-w-0 flex-1 truncate">{entry.name}</span>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  if (
+                    beatLibraryJustDraggedContainerRef.current.id === String(entry.id) &&
+                    Date.now() - Number(beatLibraryJustDraggedContainerRef.current.at || 0) < 400
+                  ) {
+                    beatLibraryJustDraggedContainerRef.current = { id: "", at: 0 };
+                    return;
+                  }
+                  selectBeatLibraryContainer(entry.id);
+                }}
+                className="inline-flex min-w-0 max-w-full items-center rounded px-1 py-0.5 text-left hover:bg-neutral-800/40"
+                title="Open folder"
+              >
+                <span className="min-w-0 truncate">{entry.name}</span>
+              </button>
             )}
+          </div>
+          <div className="ml-auto flex items-center gap-2">
+            {folderBeatCount > 0 && <span className="text-[10px] text-neutral-600">{folderBeatCount}</span>}
             <button
               type="button"
               onPointerDown={(e) => {
-                if (String(editingBeatLibraryContainerId || "") !== String(entry.id)) return;
-                e.preventDefault();
+                if (String(editingBeatLibraryContainerId || "") === String(entry.id)) {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  beatLibraryPendingRenameExitRef.current = String(entry.id);
+                  return;
+                }
                 e.stopPropagation();
-                commitEditingBeatLibraryContainer();
               }}
               onClick={(e) => {
+                e.stopPropagation();
+                if (beatLibraryPendingRenameExitRef.current === String(entry.id)) {
+                  beatLibraryPendingRenameExitRef.current = "";
+                  commitEditingBeatLibraryContainer();
+                  return;
+                }
+                beatLibraryPendingRenameExitRef.current = "";
+                startEditingBeatLibraryContainer(entry.id);
+              }}
+              onKeyDown={(e) => {
+                if (e.key !== "Enter" && e.key !== " ") return;
                 e.preventDefault();
                 e.stopPropagation();
                 if (String(editingBeatLibraryContainerId || "") === String(entry.id)) {
-                  return;
+                  commitEditingBeatLibraryContainer();
                 } else {
                   startEditingBeatLibraryContainer(entry.id);
                 }
               }}
-              className="inline-flex h-6 min-w-6 items-center justify-center rounded text-neutral-400 hover:bg-neutral-800/60 hover:text-white"
+              className="inline-flex h-6 min-w-6 items-center justify-center text-neutral-400 hover:text-white"
               title="Rename folder"
             >
-              <PencilIcon />
+            <PencilIcon />
             </button>
-          </button>
-        </BeatLibraryDropTarget>
-      );
-      if (!entry.collapsed) nodes.push(...renderArrangementSourceFolderBranch(entry.id, depth + 1));
-    });
-
-    if (childBeats.length > 0) {
-      nodes.push(
-        <SortableContext
-          key={`arr-src-beat-sortable-${String(parentId || "root")}`}
-          items={childBeats.map((beat) => `beat:${String(beat.id)}`)}
-          strategy={verticalListSortingStrategy}
-        >
-          {childBeats.map((beat) => renderArrangementSourceTreeBeatRow(beat, depth))}
-        </SortableContext>
-      );
-    }
-
-    return nodes;
+          </div>
+        </div>
+      </BeatLibraryDropTarget>
+    );
   }, [
-    arrangementSourceBeats,
-    localBeats,
+    beatLibraryContainers,
+    beatLibraryDropTargetId,
     beginBeatLibraryTreeDrag,
-    clearBeatLibraryTreeDrag,
-    commitEditingBeatLibraryContainer,
     cancelEditingBeatLibraryContainer,
-    createBeatLibraryContainer,
-    deleteBeatLibraryContainer,
+    clearBeatLibraryTreeDrag,
+    clearBeatLibraryFolderExpandTimer,
+    commitEditingBeatLibraryContainer,
+    countBeatLibraryFolderBeats,
     editingBeatLibraryContainerId,
     editingBeatLibraryContainerName,
     getBeatLibraryParentId,
     handleBeatLibraryTreeDrop,
-    renderArrangementSourceTreeBeatRow,
-    selectedBeatLibraryContainerId,
+    isLoadedLocalBeatNameChanged,
+    loadedLocalBeatId,
+    localBeats,
     selectedArrangementSourceBeatKey,
-    setBeatLibraryDropTargetId,
+    selectedBeatLibraryContainerId,
+    scheduleBeatLibraryFolderExpand,
     setEditingBeatLibraryContainerName,
     startEditingBeatLibraryContainer,
     toggleBeatLibraryContainerCollapsed,
-    loadedLocalBeatId,
-    isLoadedLocalBeatNameChanged,
   ]);
+
+  const renderArrangementSourceFolderContents = React.useCallback((parentId, depth = 0) => {
+    const childBeats = filteredLocalBeats
+      .filter((beat) => {
+        const direct = beat?.libraryMeta && typeof beat.libraryMeta === "object" ? beat.libraryMeta : null;
+        const payloadMeta =
+          beat?.payload?.libraryMeta && typeof beat.payload.libraryMeta === "object"
+            ? beat.payload.libraryMeta
+            : null;
+        const meta = direct || payloadMeta || null;
+        return String(meta?.parentId || "") === String(parentId || "");
+      })
+      .sort(compareBeatLibraryOrder);
+    const childFolders = beatLibraryContainers.filter(
+      (entry) => String(entry.parentId || "") === String(parentId || "")
+    );
+    const nodes = [];
+    if (childBeats.length > 0) {
+      const shouldShowCrossFolderPlaceholder =
+        !!activeBeatLibraryDragBeatId &&
+        !!beatLibraryDropTargetId &&
+        !String(beatLibraryDropTargetId).startsWith("beat:") &&
+        childBeats.some((beat) => String(beat?.id || "") === String(activeBeatLibraryDragBeatId));
+      const visibleBeats = shouldShowCrossFolderPlaceholder
+        ? childBeats.filter((beat) => String(beat?.id || "") !== String(activeBeatLibraryDragBeatId))
+        : childBeats;
+      const originalIndex = childBeats.findIndex(
+        (beat) => String(beat?.id || "") === String(activeBeatLibraryDragBeatId)
+      );
+      const lastOverBeatId = String(beatLibraryLastBeatOverIdRef.current || "");
+      const targetIndex = childBeats.findIndex((beat) => String(beat?.id || "") === lastOverBeatId);
+      const placeholderIndex = shouldShowCrossFolderPlaceholder
+        ? Math.max(0, Math.min(visibleBeats.length, targetIndex >= 0 ? targetIndex : originalIndex))
+        : -1;
+      nodes.push(
+        <SortableContext
+          key={`arr-src-inline-sortable-${String(parentId || "root")}`}
+          items={childBeats.map((beat) => `beat:${String(beat.id)}`)}
+          strategy={verticalListSortingStrategy}
+        >
+          {visibleBeats.map((beat, index) => (
+            <React.Fragment key={`arr-src-inline-node-${String(parentId || "root")}-${String(beat.id)}`}>
+              {shouldShowCrossFolderPlaceholder && index === placeholderIndex ? <BeatLibraryReservedBeatRowSlot /> : null}
+              {renderArrangementSourceTreeBeatRow(beat, depth)}
+            </React.Fragment>
+          ))}
+          {shouldShowCrossFolderPlaceholder && placeholderIndex === visibleBeats.length ? (
+            <BeatLibraryReservedBeatRowSlot />
+          ) : null}
+        </SortableContext>
+      );
+    }
+    childFolders.forEach((entry) => {
+      nodes.push(renderArrangementSourceFolderRow(entry, depth));
+      if (!entry.collapsed) nodes.push(...renderArrangementSourceFolderContents(entry.id, depth + 1));
+    });
+    return nodes;
+  }, [
+    activeBeatLibraryDragBeatId,
+    beatLibraryDropTargetId,
+    beatLibraryContainers,
+    filteredLocalBeats,
+    renderArrangementSourceFolderRow,
+    renderArrangementSourceTreeBeatRow,
+  ]);
+  const activeBeatLibraryDragBeat = React.useMemo(
+    () => localBeats.find((beat) => String(beat?.id || "") === String(activeBeatLibraryDragBeatId || "")) || null,
+    [activeBeatLibraryDragBeatId, localBeats]
+  );
+  const activeBeatLibraryDragBeatBpm = React.useMemo(
+    () => (activeBeatLibraryDragBeat ? getBeatBpm(activeBeatLibraryDragBeat) : null),
+    [activeBeatLibraryDragBeat, getBeatBpm]
+  );
 
 
   return (
     <div
-      className={`${isEmbedMode ? "min-h-full bg-neutral-900 text-white p-3" : "min-h-screen bg-neutral-900 text-white p-6 pb-40 sm:pb-28 md:pb-32"}`}
+      className={`${isEmbedMode ? "min-h-full bg-neutral-900 text-white p-3" : `min-h-screen bg-neutral-900 text-white p-6 ${useFixedDesktopFooter ? "pb-40 sm:pb-28 md:pb-32" : "pb-28"}`}`}
       onMouseDown={(e) => {
-        if (!legacySelectionEnabled && selection) {
+        if (selection) {
           const el = e.target;
           if (el && el.closest && el.closest("[data-loopui='1']")) return;
           if (el && el.closest && el.closest("[data-gridsurface='1']")) {
@@ -11459,7 +13222,7 @@ useEffect(() => {
             <button
               type="button"
               onClick={handleMainTrashClick}
-              className={`touch-none select-none px-3 py-1.5 rounded border text-sm capitalize ${
+              className={`touch-none select-none inline-flex h-[2.125rem] w-[2.125rem] items-center justify-center rounded border text-sm capitalize ${
                 canClearSelection
                   ? "bg-neutral-800 border-neutral-600 text-white"
                   : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
@@ -11478,128 +13241,11 @@ useEffect(() => {
                 <path d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4zM2.5 3h11V2h-11z" />
               </svg>
             </button>
-            <div className="relative">
-              <button
-                ref={libraryMenuButtonRef}
-                type="button"
-                onClick={() => setIsLibraryMenuOpen((v) => !v)}
-                className={`touch-none select-none px-3 py-1.5 rounded border text-sm ${
-                  isLibraryMenuOpen
-                    ? "bg-neutral-800 border-neutral-600 text-white"
-                    : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
-                }`}
-                title="Open library menu"
-              >
-                Library
-              </button>
-              {isLibraryMenuOpen && (
-                <div
-                  ref={libraryMenuRef}
-                  className="absolute left-0 top-full z-20 mt-2 min-w-[168px] rounded-lg border border-neutral-700 bg-neutral-900 p-2 shadow-xl"
-                >
-                  <div className="flex flex-col gap-1">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setIsLibraryMenuOpen(false);
-                        if (!isArrangementOpen) {
-                          setArrangementSourcesCollapsed(false);
-                          setArrangementDetailsCollapsed(true);
-                          setArrangementSourceTab("local");
-                          setIsArrangementOpen(true);
-                          return;
-                        }
-                        if (!arrangementSourcesCollapsed && arrangementDetailsCollapsed) {
-                          setIsArrangementOpen(false);
-                          return;
-                        }
-                        if (arrangementSourcesCollapsed && !arrangementDetailsCollapsed) {
-                          setArrangementSourcesCollapsed(false);
-                          setArrangementDetailsCollapsed(false);
-                          setArrangementSourceTab("local");
-                          return;
-                        }
-                        setArrangementSourcesCollapsed(false);
-                        setArrangementDetailsCollapsed(true);
-                        setArrangementSourceTab("local");
-                      }}
-                      className="rounded px-3 py-2 text-left text-sm text-neutral-200 hover:bg-neutral-800/60"
-                    >
-                      Beats
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setIsLibraryMenuOpen(false);
-                        if (!isArrangementOpen) {
-                          blurActiveTextInput();
-                          setArrangementSourcesCollapsed(true);
-                          setArrangementDetailsCollapsed(false);
-                          setArrangementSourceTab("local");
-                          setIsArrangementOpen(true);
-                          window.requestAnimationFrame(() => {
-                            try {
-                              arrangementPlayButtonRef.current?.focus();
-                            } catch (_) {}
-                          });
-                          return;
-                        }
-                        if (arrangementSourcesCollapsed && !arrangementDetailsCollapsed) {
-                          setIsArrangementOpen(false);
-                          return;
-                        }
-                        if (!arrangementSourcesCollapsed && arrangementDetailsCollapsed) {
-                          blurActiveTextInput();
-                          setArrangementSourcesCollapsed(false);
-                          setArrangementDetailsCollapsed(false);
-                          setArrangementSourceTab("local");
-                          window.requestAnimationFrame(() => {
-                            try {
-                              arrangementPlayButtonRef.current?.focus();
-                            } catch (_) {}
-                          });
-                          return;
-                        }
-                        blurActiveTextInput();
-                        setArrangementSourcesCollapsed(true);
-                        setArrangementDetailsCollapsed(false);
-                        setArrangementSourceTab("local");
-                        window.requestAnimationFrame(() => {
-                          try {
-                            arrangementPlayButtonRef.current?.focus();
-                          } catch (_) {}
-                        });
-                      }}
-                      className="rounded px-3 py-2 text-left text-sm text-neutral-200 hover:bg-neutral-800/60"
-                    >
-                      Arrangement
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setIsLibraryMenuOpen(false);
-                        if (isArrangementNotationOpen) {
-                          setIsArrangementNotationOpen(false);
-                          return;
-                        }
-                        setArrangementSourcesCollapsed(true);
-                        setArrangementDetailsCollapsed(false);
-                        setIsArrangementOpen(true);
-                        setIsArrangementNotationOpen(true);
-                      }}
-                      className="rounded px-3 py-2 text-left text-sm text-neutral-200 hover:bg-neutral-800/60"
-                    >
-                      Notation
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
             <button
               ref={fileMenuButtonRef}
               type="button"
               onClick={() => setIsShareActionsDialogOpen((v) => !v)}
-              className={`touch-none select-none px-3 py-1.5 rounded border text-sm ${
+              className={`touch-none select-none inline-flex h-[2.125rem] w-[2.125rem] items-center justify-center rounded border text-sm ${
                 shareCopied
                   ? "bg-neutral-800 border-neutral-600 text-white"
                   : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
@@ -11609,17 +13255,12 @@ useEffect(() => {
             >
               <svg
                 xmlns="http://www.w3.org/2000/svg"
-                viewBox="0 0 16 16"
+                viewBox="0 0 24 24"
                 className="h-4 w-4"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.5"
-                strokeLinecap="round"
-                strokeLinejoin="round"
+                fill="currentColor"
                 aria-hidden="true"
               >
-                <path d="M5 1.75h4.5l3 3V13a1.25 1.25 0 0 1-1.25 1.25h-6.5A1.25 1.25 0 0 1 3.5 13V3A1.25 1.25 0 0 1 4.75 1.75Z" />
-                <path d="M9.5 1.75V5h3.25" />
+                <path d="M18 2A3 3 0 0 0 15 5A3 3 0 0 0 15.054688 5.560547L7.939453 9.710938A3 3 0 0 0 6 9A3 3 0 0 0 3 12A3 3 0 0 0 6 15A3 3 0 0 0 7.935547 14.287109L15.054688 18.439453A3 3 0 0 0 15 19A3 3 0 0 0 18 22A3 3 0 0 0 21 19A3 3 0 0 0 18 16A3 3 0 0 0 16.0625 16.712891L8.945312 12.560547A3 3 0 0 0 9 12A3 3 0 0 0 8.945312 11.439453L16.060547 7.289062A3 3 0 0 0 18 8A3 3 0 0 0 21 5A3 3 0 0 0 18 2Z" />
               </svg>
             </button>
             {hasSupabaseEnabled && (
@@ -11641,14 +13282,15 @@ useEffect(() => {
                   type="button"
                   onClick={authUser ? handleSignOut : openAuthDialog}
                   disabled={authPending}
-                  className={`touch-none select-none px-3 py-1.5 rounded border text-sm ${
+                  className={`touch-none select-none inline-flex h-[2.125rem] w-[2.125rem] items-center justify-center rounded border ${
                     authPending
                       ? "bg-neutral-900 border-neutral-800 text-neutral-500 cursor-not-allowed"
                       : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
                   }`}
-                  title={authUser ? `Sign out ${authUserLabel}` : "Sign in with email"}
+                  title={authPending ? "Authentication pending" : authUser ? `Sign out ${authUserLabel}` : "Sign in with email"}
+                  aria-label={authPending ? "Authentication pending" : authUser ? `Sign out ${authUserLabel}` : "Sign in with email"}
                 >
-                  {authPending ? "…" : authUser ? "Sign out" : "Sign in"}
+                  {authPending ? "…" : <UserIcon />}
                 </button>
               </>
             )}
@@ -11659,7 +13301,9 @@ useEffect(() => {
         <div className="relative flex flex-wrap items-center gap-2">
           <button
             ref={gridMenuButtonRef}
-            onClick={() => setActiveTab((t) => (t === "timing" ? "none" : "timing"))}
+            onClick={() => {
+              setActiveTab((t) => (t === "timing" ? "none" : "timing"));
+            }}
             className={`touch-none select-none px-3 py-1.5 rounded border text-sm capitalize ${
               activeTab === "timing"
                 ? "bg-neutral-800 border-neutral-600 text-white"
@@ -11670,7 +13314,9 @@ useEffect(() => {
           </button>
           <div className="relative">
             <button
-              onClick={() => setActiveTab((t) => (t === "selection" ? "none" : "selection"))}
+              onClick={() => {
+                setActiveTab((t) => (t === "selection" ? "none" : "selection"));
+              }}
               className={`touch-none select-none px-3 py-1.5 rounded border text-sm capitalize ${
                 activeTab === "selection"
                   ? "bg-neutral-800 border-neutral-600 text-white"
@@ -11691,7 +13337,11 @@ useEffect(() => {
                       onClick={() =>
                         setStickingEditModeEnabled((v) => {
                           const next = !v;
-                          if (next) setStickingGuideEnabled(true);
+                          if (next) {
+                            setStickingGuideEnabled(true);
+                          } else {
+                            setNotationStickingSelectionModeEnabled(false);
+                          }
                           return next;
                         })
                       }
@@ -11743,23 +13393,69 @@ useEffect(() => {
                                 setNotationStickingView((v) => (v === "stacked" ? "split-rows" : "stacked"))
                               }
                               className={`w-fit whitespace-nowrap touch-none select-none px-3 py-[5px] rounded border text-sm ${
-                                showNotationSticking
+                                notationStickingView === "split-rows"
                                   ? "bg-neutral-800 border-neutral-700 text-white"
                                   : "bg-neutral-900 border-neutral-800 text-neutral-600"
                               }`}
                               title="Change sticking display"
                             >
-                              {notationStickingView === "stacked" ? "Stacked" : "Split rows"}
+                              Split rows
                             </button>
                           </div>
                         </div>
                       )}
                     </div>
                   </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setNotationStickingSelectionModeEnabled((v) => {
+                          const next = !v;
+                          if (next) {
+                            setStickingGuideEnabled(true);
+                            setShowNotationSticking(true);
+                          }
+                          return next;
+                        })
+                      }
+                      disabled={!stickingEditModeEnabled}
+                      className={`w-fit touch-none select-none px-3 py-[5px] rounded border text-sm ${
+                        !stickingEditModeEnabled
+                          ? "bg-neutral-900 border-neutral-800 text-neutral-600 opacity-50 cursor-not-allowed"
+                          : notationStickingSelectionModeEnabled
+                          ? "bg-neutral-800 border-neutral-700 text-white"
+                          : "bg-neutral-900 border-neutral-800 text-neutral-600"
+                      }`}
+                      title="When enabled, clicking or selecting active hand-hit cells toggles whether their sticking prints in notation"
+                    >
+                      Select sticking for notation
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setBeatAutoUpdateEnabled((v) => !v)}
+                      className={`w-fit touch-none select-none px-3 py-[5px] rounded border text-sm ${
+                        beatAutoUpdateEnabled
+                          ? "bg-neutral-800 border-neutral-700 text-white"
+                          : "bg-neutral-900 border-neutral-800 text-neutral-600"
+                      }`}
+                      title="Automatically update the loaded local beat after beat changes. Notation sticking selection always auto-updates."
+                    >
+                      Auto update
+                    </button>
+                  </div>
 
                   <div className="flex items-center gap-2">
                     <span className="text-sm text-neutral-300">Looping</span>
-                    <div className={`flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800 ${!canLoopSelection ? "opacity-40" : ""}`}>
+                    <div
+                      className={`flex items-stretch overflow-hidden rounded-md border ${
+                        loopRepeats === "off"
+                          ? "border-neutral-800 bg-neutral-900/60"
+                          : "border-neutral-700 bg-neutral-800"
+                      }`}
+                    >
                       <button
                         type="button"
                         onMouseDown={(e) => {
@@ -11789,13 +13485,18 @@ useEffect(() => {
                           window.addEventListener("touchend", stop, { passive: true });
                           window.addEventListener("touchcancel", stop, { passive: true });
                         }}
-                        className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                        className={`px-2 text-base leading-none ${
+                          loopRepeats === "off"
+                            ? "text-neutral-500 hover:bg-neutral-800/50 active:bg-neutral-800"
+                            : "text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                        }`}
                         title="Decrease loop repeats"
                       >
                         –
                       </button>
 
-                      <div
+                      <button
+                        type="button"
                         onClick={() => {
                           setLoopRepeats((prev) => {
                             if (prev === "all") {
@@ -11804,11 +13505,15 @@ useEffect(() => {
                             return "all";
                           });
                         }}
-                        className="min-w-[44px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 cursor-pointer hover:bg-neutral-700/60 border-l border-r border-neutral-700 capitalize"
+                        className={`min-w-[44px] px-3 py-1 flex items-center justify-center text-sm border-l border-r capitalize ${
+                          loopRepeats === "off"
+                            ? "text-neutral-500 bg-neutral-900/60 hover:bg-neutral-800/50 border-neutral-800"
+                            : "text-white bg-neutral-800 hover:bg-neutral-700/50 border-neutral-700"
+                        }`}
                         title="How many times the selection repeats"
                       >
                         {loopRepeats}
-                      </div>
+                      </button>
 
                       <button
                         type="button"
@@ -11839,7 +13544,11 @@ useEffect(() => {
                           window.addEventListener("touchend", stop, { passive: true });
                           window.addEventListener("touchcancel", stop, { passive: true });
                         }}
-                        className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                        className={`px-2 text-base leading-none ${
+                          loopRepeats === "off"
+                            ? "text-neutral-500 hover:bg-neutral-800/50 active:bg-neutral-800"
+                            : "text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                        }`}
                         title="Increase loop repeats"
                       >
                         +
@@ -11888,8 +13597,8 @@ useEffect(() => {
                                     setLoopOverlapMode((prev) => (prev === "all-to-all" ? "active-to-empty" : "all-to-all"))
                                   }
                                   className="min-w-[126px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700 hover:bg-neutral-700/50"
-                                  title="Toggle all overwrites"
-                                  aria-label="Toggle loop overlap all overwrites"
+                                  title={getOverlapModeDescription(loopOverlapMode)}
+                                  aria-label={getOverlapModeDescription(loopOverlapMode)}
                                 >
                                   {MOVE_OVERLAP_MODES.find((m) => m.id === loopOverlapMode)?.label || "Fill in gaps"}
                                 </button>
@@ -11930,8 +13639,8 @@ useEffect(() => {
                                     setMoveOverlapMode((prev) => (prev === "all-to-all" ? "active-to-empty" : "all-to-all"))
                                   }
                                   className="min-w-[126px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700 hover:bg-neutral-700/50"
-                                  title="Toggle all overwrites"
-                                  aria-label="Toggle move overlap all overwrites"
+                                  title={getOverlapModeDescription(moveOverlapMode)}
+                                  aria-label={getOverlapModeDescription(moveOverlapMode)}
                                 >
                                   {MOVE_OVERLAP_MODES.find((m) => m.id === moveOverlapMode)?.label || "All overrides all"}
                                 </button>
@@ -11959,9 +13668,61 @@ useEffect(() => {
               </div>
             )}
           </div>
+          <div className="relative">
+            <button
+              type="button"
+              onClick={(e) => {
+                setActiveTab("none");
+                if (e.shiftKey) {
+                  if (!isArrangementOpen) {
+                    setArrangementSourcesCollapsed(false);
+                    setArrangementDetailsCollapsed(true);
+                    setArrangementSourceTab("local");
+                    setIsArrangementOpen(true);
+                    return;
+                  }
+                  if (!arrangementSourcesCollapsed && arrangementDetailsCollapsed) {
+                    setIsArrangementOpen(false);
+                    return;
+                  }
+                  setArrangementSourcesCollapsed(false);
+                  setArrangementDetailsCollapsed(true);
+                  setArrangementSourceTab("local");
+                  return;
+                }
+                if (!isArrangementOpen) {
+                  setArrangementSourcesCollapsed(false);
+                  setArrangementDetailsCollapsed(false);
+                  setArrangementSourceTab("local");
+                  setIsArrangementOpen(true);
+                  return;
+                }
+                if (!arrangementSourcesCollapsed && !arrangementDetailsCollapsed) {
+                  setIsArrangementOpen(false);
+                  return;
+                }
+                setArrangementSourcesCollapsed(false);
+                setArrangementDetailsCollapsed(false);
+                setArrangementSourceTab("local");
+              }}
+              className={`touch-none select-none px-3 py-1.5 rounded border text-sm ${
+                !arrangementSourcesCollapsed && !arrangementDetailsCollapsed && isArrangementOpen
+                  ? "bg-neutral-800 border-neutral-600 text-white"
+                  : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
+              }`}
+              title="Open library"
+            >
+              Library
+            </button>
+          </div>
           {playabilityWarningsEnabled && playabilityWarningSteps.length > 0 && (
             <span className="text-[11px] text-red-500 whitespace-nowrap">
               {playabilityWarningSteps.length} playability warning{playabilityWarningSteps.length === 1 ? "" : "s"}
+            </span>
+          )}
+          {stickingEditModeEnabled && stickingConflictSteps.length > 0 && (
+            <span className="text-[11px] text-red-500 whitespace-nowrap">
+              {stickingConflictSteps.length} sticking warning{stickingConflictSteps.length === 1 ? "" : "s"}
             </span>
           )}
           {activeTab === "timing" && (
@@ -11983,7 +13744,7 @@ useEffect(() => {
                         }}
                         className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
                       >
-                        +
+                        −
                       </button>
                       <div className="min-w-[60px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700">
                         {resolution === 4 ? "4th" : resolution === 8 ? "8th" : resolution === 16 ? "16th" : "32th"}
@@ -11998,7 +13759,7 @@ useEffect(() => {
                         }}
                         className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
                       >
-                        −
+                        +
                       </button>
                     </div>
                 </div>
@@ -12139,6 +13900,7 @@ useEffect(() => {
                       </button>
                     </div>
                 </div>
+
               </div>
             </div>
           )}
@@ -12155,10 +13917,10 @@ useEffect(() => {
             ? "mt-0"
             : `mt-6 ${
                 layout === "grid-right"
-                  ? "grid grid-cols-1 xl:grid-cols-[auto_1fr] gap-6 pb-20 sm:pb-12 md:pb-16"
+                  ? `grid grid-cols-1 xl:grid-cols-[auto_1fr] gap-6 ${useFixedDesktopFooter ? "pb-20 sm:pb-12 md:pb-16" : "pb-8"}`
                   : layout === "notation-right"
-                    ? "grid grid-cols-1 xl:grid-cols-[1fr_auto] gap-6 pb-20 sm:pb-12 md:pb-16"
-                    : "flex flex-col gap-6 items-start pb-20 sm:pb-12 md:pb-16"
+                    ? `grid grid-cols-1 xl:grid-cols-[1fr_auto] gap-6 ${useFixedDesktopFooter ? "pb-20 sm:pb-12 md:pb-16" : "pb-8"}`
+                    : `flex flex-col gap-6 items-start ${useFixedDesktopFooter ? "pb-20 sm:pb-12 md:pb-16" : "pb-8"}`
               }`
         }`}
       >
@@ -12169,6 +13931,7 @@ useEffect(() => {
               grid={computedGrid}
               stickingAssignmentsByStep={stickingAssignmentsByStep}
               showNotationSticking={showNotationSticking}
+              notationStickingSelection={notationStickingSelection}
               notationStickingView={notationStickingView}
               resolution={resolution}
               bars={bars}
@@ -12185,25 +13948,28 @@ useEffect(() => {
           </div>
         ) : layout === "notation-right" || layout === "notation-top" ? (
           <>
-            <div className="w-full" ref={setNotationExportEl}>
-              <Notation
-                instruments={instruments}
-                grid={computedGrid}
-                stickingAssignmentsByStep={stickingAssignmentsByStep}
-                showNotationSticking={showNotationSticking}
-                notationStickingView={notationStickingView}
-                resolution={resolution}
-                bars={bars}
-                barsPerLine={barsPerLine}
-                stepsPerBar={stepsPerBar}
-                timeSig={timeSig}
-                quarterSubdivisionsByBar={quarterSubdivisionsByBar}
-                barStepOffsets={barStepOffsets}
-                mergeRests={mergeRests}
-                mergeNotes={mergeNotes}
-                dottedNotes={dottedNotes}
-                flatBeams={flatBeams}
-              />
+            <div className="w-full pl-14">
+              <div className="w-full" ref={setNotationExportEl}>
+                <Notation
+                  instruments={instruments}
+                  grid={computedGrid}
+                  stickingAssignmentsByStep={stickingAssignmentsByStep}
+                  showNotationSticking={showNotationSticking}
+                  notationStickingSelection={notationStickingSelection}
+                  notationStickingView={notationStickingView}
+                  resolution={resolution}
+                  bars={bars}
+                  barsPerLine={barsPerLine}
+                  stepsPerBar={stepsPerBar}
+                  timeSig={timeSig}
+                  quarterSubdivisionsByBar={quarterSubdivisionsByBar}
+                  barStepOffsets={barStepOffsets}
+                  mergeRests={mergeRests}
+                  mergeNotes={mergeNotes}
+                  dottedNotes={dottedNotes}
+                  flatBeams={flatBeams}
+                />
+              </div>
             </div>
 
             <div className="w-full overflow-visible">
@@ -12231,16 +13997,21 @@ useEffect(() => {
                 wrappedSelectionCells={wrappedSelectionCells}
                 playhead={playback.playhead}
                 moveSelectionByDelta={moveSelectionByDelta}
-                legacySelectionEnabled={legacySelectionEnabled}
-                moveModeDebugEnabled={moveModeDebugEnabled}
                 playabilityWarningsEnabled={playabilityWarningsEnabled}
                 playabilityWarningStepSet={playabilityWarningStepSet}
+                stickingConflictStepSet={stickingConflictStepSet}
                 stickingGuideEnabled={stickingGuideEnabled}
                 showEditedSticking={showEditedSticking}
+                notationStickingSelection={notationStickingSelection}
                 stickingAssignmentsByStep={stickingAssignmentsByStep}
                 stickingEditModeEnabled={stickingEditModeEnabled}
+                notationStickingSelectionModeEnabled={notationStickingSelectionModeEnabled}
                 stickingOverrides={stickingOverrides}
                 onCycleStickingOverride={cycleStickingOverride}
+                onToggleNotationStickingSelection={toggleNotationStickingSelectionAt}
+                onDisableNotationStickingSelectionMode={() =>
+                  setNotationStickingSelectionModeEnabled(false)
+                }
                 onDisableStickingEditMode={() => setStickingEditModeEnabled(false)}
                 bakeLoopPreview={bakeLoopPreview}
                 hoveredGridCellRef={hoveredGridCellRef}
@@ -12275,16 +14046,21 @@ useEffect(() => {
                 wrappedSelectionCells={wrappedSelectionCells}
                 playhead={playback.playhead}
                 moveSelectionByDelta={moveSelectionByDelta}
-                legacySelectionEnabled={legacySelectionEnabled}
-                moveModeDebugEnabled={moveModeDebugEnabled}
                 playabilityWarningsEnabled={playabilityWarningsEnabled}
                 playabilityWarningStepSet={playabilityWarningStepSet}
+                stickingConflictStepSet={stickingConflictStepSet}
                 stickingGuideEnabled={stickingGuideEnabled}
                 showEditedSticking={showEditedSticking}
+                notationStickingSelection={notationStickingSelection}
                 stickingAssignmentsByStep={stickingAssignmentsByStep}
                 stickingEditModeEnabled={stickingEditModeEnabled}
+                notationStickingSelectionModeEnabled={notationStickingSelectionModeEnabled}
                 stickingOverrides={stickingOverrides}
                 onCycleStickingOverride={cycleStickingOverride}
+                onToggleNotationStickingSelection={toggleNotationStickingSelectionAt}
+                onDisableNotationStickingSelectionMode={() =>
+                  setNotationStickingSelectionModeEnabled(false)
+                }
                 onDisableStickingEditMode={() => setStickingEditModeEnabled(false)}
                 bakeLoopPreview={bakeLoopPreview}
                 hoveredGridCellRef={hoveredGridCellRef}
@@ -12292,25 +14068,28 @@ useEffect(() => {
             </div>
             </div>
 
-            <div className="w-full pr-4 inline-block align-top" ref={setNotationExportEl}>
-              <Notation
-                instruments={instruments}
-                grid={computedGrid}
-                stickingAssignmentsByStep={stickingAssignmentsByStep}
-                showNotationSticking={showNotationSticking}
-                notationStickingView={notationStickingView}
-                resolution={resolution}
-                bars={bars}
-                barsPerLine={barsPerLine}
-                stepsPerBar={stepsPerBar}
-                timeSig={timeSig}
-                quarterSubdivisionsByBar={quarterSubdivisionsByBar}
-                barStepOffsets={barStepOffsets}
-                mergeRests={mergeRests}
-                mergeNotes={mergeNotes}
-                dottedNotes={dottedNotes}
-                flatBeams={flatBeams}
-              />
+            <div className="w-full pr-4 inline-block align-top pl-14">
+              <div className="w-full" ref={setNotationExportEl}>
+                <Notation
+                  instruments={instruments}
+                  grid={computedGrid}
+                  stickingAssignmentsByStep={stickingAssignmentsByStep}
+                  showNotationSticking={showNotationSticking}
+                  notationStickingSelection={notationStickingSelection}
+                  notationStickingView={notationStickingView}
+                  resolution={resolution}
+                  bars={bars}
+                  barsPerLine={barsPerLine}
+                  stepsPerBar={stepsPerBar}
+                  timeSig={timeSig}
+                  quarterSubdivisionsByBar={quarterSubdivisionsByBar}
+                  barStepOffsets={barStepOffsets}
+                  mergeRests={mergeRests}
+                  mergeNotes={mergeNotes}
+                  dottedNotes={dottedNotes}
+                  flatBeams={flatBeams}
+                />
+              </div>
             </div>
           </>
         )}
@@ -12318,32 +14097,8 @@ useEffect(() => {
 
       <footer className={`${isEmbedMode ? "hidden" : "mt-6 pt-1"}`} data-loopui='1'>
         <div className="flex justify-end" />
-        {!isEmbedMode && (
-          <div className="mt-6 flex flex-wrap items-center justify-center gap-2 text-xs text-neutral-500 md:hidden">
-            <a
-              href="/how-to-write-drum-notation.html"
-              className="hover:text-neutral-300 underline underline-offset-2"
-              title="How to write drum notation"
-            >
-              Guide
-            </a>
-            <span className="text-neutral-700">·</span>
-            <a
-              href="/drum-notation-cheat-sheet.html"
-              className="hover:text-neutral-300 underline underline-offset-2"
-              title="Drum notation cheat sheet"
-            >
-              Cheat Sheet
-            </a>
-            <span className="text-neutral-700">·</span>
-            <a
-              href="/drum-groove-notation-examples.html"
-              className="hover:text-neutral-300 underline underline-offset-2"
-              title="Drum groove notation examples"
-            >
-              Examples
-            </a>
-            <span className="text-neutral-700">·</span>
+        {!isEmbedMode && !useFixedDesktopFooter && (
+          <div className="mt-6 flex flex-wrap items-center justify-center gap-2 text-xs text-neutral-500">
             <button
               type="button"
               onClick={() => {
@@ -12377,34 +14132,10 @@ useEffect(() => {
           </div>
         )}
       </footer>
-      {!isEmbedMode &&
+      {useFixedDesktopFooter &&
         createPortal(
-          <div className="fixed bottom-4 left-1/2 z-[83] hidden -translate-x-1/2 md:block">
+          <div className="fixed bottom-4 left-1/2 z-[83] -translate-x-1/2">
             <div className="flex flex-wrap items-center justify-center gap-2 text-xs text-neutral-500">
-              <a
-                href="/how-to-write-drum-notation.html"
-                className="hover:text-neutral-300 underline underline-offset-2"
-                title="How to write drum notation"
-              >
-                Guide
-              </a>
-              <span className="text-neutral-700">·</span>
-              <a
-                href="/drum-notation-cheat-sheet.html"
-                className="hover:text-neutral-300 underline underline-offset-2"
-                title="Drum notation cheat sheet"
-              >
-                Cheat Sheet
-              </a>
-              <span className="text-neutral-700">·</span>
-              <a
-                href="/drum-groove-notation-examples.html"
-                className="hover:text-neutral-300 underline underline-offset-2"
-                title="Drum groove notation examples"
-              >
-                Examples
-              </a>
-              <span className="text-neutral-700">·</span>
               <button
                 type="button"
                 onClick={() => {
@@ -12648,98 +14379,21 @@ useEffect(() => {
           document.body
         )}
 
-      {isBeatLibraryOpen && (
-        <BeatLibraryWindow
-          beatLibraryPanelRef={beatLibraryPanelRef}
-          beatLibraryDragRef={beatLibraryDragRef}
-          beginFloatingPanelDrag={beginFloatingPanelDrag}
-          beginFloatingPanelTouchHold={beginFloatingPanelTouchHold}
-          beatLibraryPos={beatLibraryPos}
-          beatLibraryTab={beatLibraryTab}
-          setBeatLibraryTab={setBeatLibraryTab}
-          libraryFiltersOpen={libraryFiltersOpen}
-          setLibraryFiltersOpen={setLibraryFiltersOpen}
-          setIsBeatLibraryOpen={setIsBeatLibraryOpen}
-          beatNameInputRef={beatNameInputRef}
-          beatSaveButtonRef={beatSaveButtonRef}
-          beatNameDraft={beatNameDraft}
-          setBeatNameDraft={setBeatNameDraft}
-          beatCategoryDraft={beatCategoryDraft}
-          setBeatCategoryDraft={setBeatCategoryDraft}
-          beatStyleDraft={beatStyleDraft}
-          setBeatStyleDraft={setBeatStyleDraft}
-          openPublicSubmitDialog={openPublicSubmitDialog}
-          canUpdateLoadedLocalBeat={canUpdateLoadedLocalBeat}
-          updateCurrentLoadedBeatLocal={updateCurrentLoadedBeatLocal}
-          saveCurrentBeatLocal={saveCurrentBeatLocal}
-          isAdminUser={isAdminUser}
-          beatCategoryOptions={BEAT_CATEGORY_OPTIONS}
-          beatStyleOptions={BEAT_STYLE_OPTIONS}
-          cycleLibrarySort={cycleLibrarySort}
-          getLibrarySortLabel={getLibrarySortLabel}
-          librarySort={librarySort}
-          libraryTimeSigFilter={libraryTimeSigFilter}
-          setLibraryTimeSigFilter={setLibraryTimeSigFilter}
-          allTimeSigCategories={allTimeSigCategories}
-          startLibraryBpmRepeat={startLibraryBpmRepeat}
-          stopLibraryBpmRepeat={stopLibraryBpmRepeat}
-          cycleLibraryBpmFilterMode={cycleLibraryBpmFilterMode}
-          getBpmFilterLabel={getBpmFilterLabel}
-          refreshPublicLibrary={refreshPublicLibrary}
-          publicLibraryError={publicLibraryError}
-          setPublicLibraryError={setPublicLibraryError}
-          beatLibraryContainers={beatLibraryContainers}
-          beatLibraryVisibleContainers={beatLibraryVisibleContainers}
-          selectedBeatLibraryContainer={selectedBeatLibraryContainer}
-          selectedBeatLibraryContainerId={selectedBeatLibraryContainerId}
-          beatLibraryRootCollapsed={beatLibraryRootCollapsed}
-          toggleBeatLibraryRootCollapsedManual={toggleBeatLibraryRootCollapsedManual}
-          toggleBeatLibraryExpandAll={toggleBeatLibraryExpandAll}
-          setSelectedBeatLibraryContainerId={setSelectedBeatLibraryContainerId}
-          editingBeatLibraryContainerId={editingBeatLibraryContainerId}
-          editingBeatLibraryContainerName={editingBeatLibraryContainerName}
-          editingBeatLibraryBeatId={editingBeatLibraryBeatId}
-          editingBeatLibraryBeatName={editingBeatLibraryBeatName}
-          beatLibraryDropTargetId={beatLibraryDropTargetId}
-          setBeatLibraryDropTargetId={setBeatLibraryDropTargetId}
-          setEditingBeatLibraryContainerName={setEditingBeatLibraryContainerName}
-          setEditingBeatLibraryBeatName={setEditingBeatLibraryBeatName}
-          startEditingBeatLibraryContainer={startEditingBeatLibraryContainer}
-          commitEditingBeatLibraryContainer={commitEditingBeatLibraryContainer}
-          cancelEditingBeatLibraryContainer={cancelEditingBeatLibraryContainer}
-          startEditingBeatLibraryBeat={startEditingBeatLibraryBeat}
-          commitEditingBeatLibraryBeat={commitEditingBeatLibraryBeat}
-          cancelEditingBeatLibraryBeat={cancelEditingBeatLibraryBeat}
-          beginBeatLibraryTreeDrag={beginBeatLibraryTreeDrag}
-          clearBeatLibraryTreeDrag={clearBeatLibraryTreeDrag}
-          handleBeatLibraryTreeDrop={handleBeatLibraryTreeDrop}
-          handleBeatLibraryTrashDrop={handleBeatLibraryTrashDrop}
-          handleBeatLibrarySortDragStart={handleBeatLibrarySortDragStart}
-          handleBeatLibrarySortDragOver={handleBeatLibrarySortDragOver}
-          handleBeatLibrarySortDragEnd={handleBeatLibrarySortDragEnd}
-          handleBeatLibrarySortDragCancel={handleBeatLibrarySortDragCancel}
-          toggleBeatLibraryContainerCollapsed={toggleBeatLibraryContainerCollapsed}
-          deleteBeatLibraryContainer={deleteBeatLibraryContainer}
-          createBeatLibraryContainer={createBeatLibraryContainer}
-          allLocalBeats={localBeats}
-          filteredLocalBeats={filteredLocalBeats}
-          filteredPublicBeats={filteredPublicBeats}
-          getBeatBpm={getBeatBpm}
-          loadedLocalBeatId={loadedLocalBeatId}
-          isLoadedLocalBeatNameChanged={isLoadedLocalBeatNameChanged}
-          selectedArrangementSourceBeatKey={selectedArrangementSourceBeatKey}
-          loadBeatIntoEditor={loadBeatIntoEditor}
-          handleDeleteLocalBeatClick={handleDeleteLocalBeatClick}
-          handleDeletePublicBeatClick={handleDeletePublicBeatClick}
-          publicLibraryLoading={publicLibraryLoading}
-        />
-      )}
-
       {isArrangementOpen && (
         <div className="fixed inset-0 z-[88] pointer-events-none">
           <div
             ref={arrangementPanelRef}
-            className={`w-full ${arrangementSourcesCollapsed || arrangementDetailsCollapsed ? "max-w-[36rem]" : "max-w-[68rem]"} max-h-[94vh] overflow-auto rounded-xl border border-neutral-700 bg-neutral-900 p-4 md:p-5 pointer-events-auto shadow-2xl`}
+            className={`w-full ${
+              arrangementDetailsCollapsed && !arrangementSourcesCollapsed
+                ? "max-w-[23rem]"
+                : arrangementSourcesCollapsed || arrangementDetailsCollapsed
+                  ? "max-w-[27rem]"
+                  : "max-w-[50rem]"
+            } max-h-[94vh] overflow-auto pointer-events-auto ${
+              !arrangementSourcesCollapsed && !arrangementDetailsCollapsed
+                ? "rounded-xl border border-neutral-700 bg-neutral-900 p-0 shadow-2xl overflow-hidden"
+                : "bg-transparent p-0 shadow-none"
+            }`}
             style={{
               position: "absolute",
               left: arrangementPos.x,
@@ -12747,93 +14401,310 @@ useEffect(() => {
             }}
             onMouseDown={(e) => beginFloatingPanelDrag(e, arrangementPanelRef, arrangementDragRef)}
           >
-            <div className={`grid grid-cols-1 ${!arrangementSourcesCollapsed && !arrangementDetailsCollapsed ? "lg:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)]" : ""} gap-4`}>
+            <div className={`grid grid-cols-1 ${!arrangementSourcesCollapsed && !arrangementDetailsCollapsed ? "lg:grid-cols-[23rem_27rem]" : ""} gap-0`}>
               {!arrangementSourcesCollapsed && (
               <div
-                ref={libraryFiltersRef}
-                className={`rounded border border-neutral-800 bg-neutral-950/40 p-3 ${
-                  arrangementDetailsCollapsed ? "w-full max-w-[36rem] justify-self-start" : ""
+                className={`${
+                  !arrangementSourcesCollapsed && !arrangementDetailsCollapsed
+                    ? "bg-transparent p-4 shadow-none border-0 rounded-none"
+                    : arrangementDetailsCollapsed || !arrangementDetailsCollapsed
+                    ? "rounded-xl border border-neutral-700 bg-neutral-900 p-4 shadow-2xl"
+                    : "rounded border border-neutral-800 bg-neutral-950/40 p-3"
+                } ${
+                  arrangementDetailsCollapsed
+                    ? arrangementSourcesCollapsed
+                      ? "w-full max-w-[27rem] justify-self-start"
+                      : "w-full max-w-[23rem] justify-self-start"
+                    : ""
                 }`}
               >
                 <div className="flex items-center justify-between gap-2">
-                  <div className="text-sm text-neutral-200">Beats</div>
-                  <button
-                    type="button"
-                    onClick={() => setIsArrangementOpen(false)}
-                    className="px-2.5 py-1 rounded border border-neutral-700 text-sm text-neutral-300 bg-neutral-900/60 hover:bg-neutral-800/60"
-                    title="Close library"
-                    aria-label="Close library"
+                  <div
+                    ref={arrangementSourceTab === "local" ? beatLibraryMoveUpTargetRef : null}
+                    className={`min-w-0 flex items-center gap-2 rounded ${
+                      beatLibraryDropTargetId === "__up__" ? "bg-cyan-900/15 text-cyan-50" : ""
+                    }`}
+                    onDragOver={(e) => {
+                      if (arrangementSourceTab !== "local") return;
+                      if (beatLibraryTreeDragRef.current?.kind !== "container") return;
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setBeatLibraryDropTargetId("__up__");
+                      if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+                    }}
+                    onDragLeave={(e) => {
+                      if (arrangementSourceTab !== "local") return;
+                      if (beatLibraryTreeDragRef.current?.kind !== "container") return;
+                      if (e.currentTarget.contains(e.relatedTarget)) return;
+                      setBeatLibraryDropTargetId((prev) => (prev === "__up__" ? null : prev));
+                    }}
+                    onDrop={(e) => {
+                      if (arrangementSourceTab !== "local") return;
+                      if (beatLibraryTreeDragRef.current?.kind !== "container") return;
+                      e.preventDefault();
+                      e.stopPropagation();
+                      handleBeatLibraryTreeDrop(null);
+                    }}
                   >
-                    ×
-                  </button>
-                </div>
-                {libraryFiltersOpen && (
-                  <div className="mt-3 rounded border border-neutral-800 bg-neutral-900/40 p-2.5">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-xs text-neutral-400">Sort</span>
-                      <button
-                        type="button"
-                        onClick={cycleLibrarySort}
-                        className="px-2 py-0.5 rounded border border-neutral-700 text-xs text-neutral-300 hover:bg-neutral-800/50"
-                      >
-                        {getLibrarySortLabel(librarySort)}
-                      </button>
-                      <span className="text-xs text-neutral-400">Time sig</span>
-                      <select
-                        value={libraryTimeSigFilter}
-                        onChange={(e) => setLibraryTimeSigFilter(e.target.value)}
-                        className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs"
-                      >
-                        <option value="all">All</option>
-                        {allTimeSigCategories.map((ts) => (
-                          <option key={`arr-ts-${ts}`} value={ts}>
-                            {ts}
-                          </option>
-                        ))}
-                      </select>
-                      <span className="text-xs text-neutral-400">BPM</span>
-                      <div className="flex items-stretch overflow-hidden rounded border border-neutral-700 bg-neutral-800">
-                        <button
-                          type="button"
-                          onPointerDown={() => startLibraryBpmRepeat(-1)}
-                          onPointerUp={stopLibraryBpmRepeat}
-                          onPointerCancel={stopLibraryBpmRepeat}
-                          onPointerLeave={stopLibraryBpmRepeat}
-                          className="px-2 text-xs text-neutral-300 hover:bg-neutral-700/60 active:bg-neutral-700"
-                        >
-                          −
-                        </button>
-                        <button
-                          type="button"
-                          onClick={cycleLibraryBpmFilterMode}
-                          className="min-w-[64px] border-l border-r border-neutral-700 px-2 py-1 text-xs text-white hover:bg-neutral-700/60"
-                          title="Cycle BPM filter mode"
-                        >
-                          {getBpmFilterLabel()}
-                        </button>
-                        <button
-                          type="button"
-                          onPointerDown={() => startLibraryBpmRepeat(1)}
-                          onPointerUp={stopLibraryBpmRepeat}
-                          onPointerCancel={stopLibraryBpmRepeat}
-                          onPointerLeave={stopLibraryBpmRepeat}
-                          className="px-2 text-xs text-neutral-300 hover:bg-neutral-700/60 active:bg-neutral-700"
-                        >
-                          +
-                        </button>
-                      </div>
-                      {arrangementSourceTab === "public" && (
-                        <button
-                          type="button"
-                          onClick={refreshPublicLibrary}
-                          className="px-2 py-0.5 rounded border border-neutral-700 text-xs text-neutral-300 hover:bg-neutral-800/50"
-                        >
-                          Refresh
-                        </button>
-                      )}
+                    <div className="text-sm text-neutral-200">
+                      {arrangementSourceTab === "presets" ? "Presets" : "Beats"}
                     </div>
+                    {arrangementSourceTab === "local" && (
+                      <div
+                        className="min-w-0 overflow-hidden text-[11px] text-neutral-500 whitespace-nowrap text-ellipsis"
+                        style={{ direction: "rtl", textAlign: "left" }}
+                      >
+                        <div className="inline-flex min-w-max items-center whitespace-nowrap" style={{ direction: "ltr" }}>
+                        <button
+                          type="button"
+                          onClick={() => selectBeatLibraryContainer("all")}
+                          onDragOver={(e) => {
+                            if (beatLibraryTreeDragRef.current?.kind === "container") return;
+                            e.preventDefault();
+                            setBeatLibraryDropTargetId("all");
+                            if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+                          }}
+                          onDragLeave={() => {
+                            if (beatLibraryTreeDragRef.current?.kind === "container") return;
+                            setBeatLibraryDropTargetId((prev) => (prev === "all" ? null : prev));
+                          }}
+                          onDrop={(e) => {
+                            if (beatLibraryTreeDragRef.current?.kind === "container") return;
+                            e.preventDefault();
+                            e.stopPropagation();
+                            handleBeatLibraryTreeDrop(null);
+                          }}
+                          className={`px-1 hover:text-neutral-300 ${
+                            beatLibraryDropTargetId === "all"
+                              ? "text-cyan-100 border-b border-cyan-400/70"
+                              : selectedBeatLibraryContainerId === "all"
+                                ? "text-neutral-400"
+                                : ""
+                          }`}
+                        >
+                          All beats
+                        </button>
+                        {selectedBeatLibraryContainerPath.map((entry) => (
+                          <React.Fragment key={`beatlib-path-${entry.id}`}>
+                            <span className="px-1 text-neutral-600">/</span>
+                            <button
+                              type="button"
+                              onClick={() => selectBeatLibraryContainer(entry.id)}
+                              onDragOver={(e) => {
+                                e.preventDefault();
+                                setBeatLibraryDropTargetId(String(entry.id));
+                                if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+                              }}
+                              onDragLeave={() =>
+                                setBeatLibraryDropTargetId((prev) =>
+                                  prev === String(entry.id) ? null : prev
+                                )
+                              }
+                              onDrop={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                handleBeatLibraryTreeDrop(entry.id);
+                              }}
+                              className={`rounded px-1 truncate hover:text-neutral-300 ${
+                                beatLibraryDropTargetId === String(entry.id)
+                                  ? "bg-cyan-900/25 text-cyan-50 shadow-[0_0_0_1px_rgba(34,211,238,0.35)]"
+                                  : String(selectedBeatLibraryContainerId) === String(entry.id)
+                                    ? "text-neutral-400"
+                                    : ""
+                              }`}
+                            >
+                              {entry.name}
+                            </button>
+                          </React.Fragment>
+                        ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
-                )}
+                  <div className="ml-auto flex items-center gap-2">
+                    <div className="relative">
+                      <button
+                        ref={libraryFiltersButtonRef}
+                        type="button"
+                        onClick={() => setLibraryFiltersOpen((v) => !v)}
+                        className={`inline-flex h-[1.625rem] items-center justify-center px-1.5 rounded border text-xs leading-none ${
+                          libraryFiltersOpen
+                            ? "border-neutral-700 text-white bg-neutral-800"
+                            : "border-neutral-800 text-neutral-400 bg-neutral-900/60"
+                        }`}
+                        title={libraryFiltersOpen ? "Hide beat filters" : "Show beat filters"}
+                      >
+                        ...
+                      </button>
+                      {libraryFiltersOpen && libraryFiltersMenuStyle
+                        ? createPortal(
+                        <div
+                          ref={libraryFiltersRef}
+                          style={libraryFiltersMenuStyle}
+                          className="min-w-[16rem] rounded-lg border border-neutral-700 bg-neutral-900 p-2.5 shadow-xl"
+                        >
+                          <div className="flex flex-col gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setArrangementSourcesCollapsed(false);
+                                setArrangementDetailsCollapsed(true);
+                                setArrangementSourceTab("local");
+                                setLibraryFiltersOpen(false);
+                              }}
+                              className="inline-flex h-[1.625rem] items-center justify-center rounded border border-neutral-800 bg-neutral-900/60 px-1.5 text-xs text-neutral-400 hover:bg-neutral-800/60"
+                            >
+                              Beats
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setArrangementSourcesCollapsed(true);
+                                setArrangementDetailsCollapsed(false);
+                                setLibraryFiltersOpen(false);
+                              }}
+                              className="inline-flex h-[1.625rem] items-center justify-center rounded border border-neutral-800 bg-neutral-900/60 px-1.5 text-xs text-neutral-400 hover:bg-neutral-800/60"
+                            >
+                              Arrangement
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setArrangementSourcesCollapsed(false);
+                                setArrangementDetailsCollapsed(false);
+                                setLibraryFiltersOpen(false);
+                              }}
+                              className="inline-flex h-[1.625rem] items-center justify-center rounded border border-neutral-800 bg-neutral-900/60 px-1.5 text-xs text-neutral-400 hover:bg-neutral-800/60"
+                            >
+                              Beats + Arrangement
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setArrangementSourcesCollapsed(false);
+                                setArrangementDetailsCollapsed(true);
+                                setArrangementSourceTab("presets");
+                                setLibraryFiltersOpen(false);
+                              }}
+                              className="inline-flex h-[1.625rem] items-center justify-center rounded border border-neutral-800 bg-neutral-900/60 px-1.5 text-xs text-neutral-400 hover:bg-neutral-800/60"
+                            >
+                              Presets
+                            </button>
+                            {arrangementSourceTab !== "presets" ? (
+                              <>
+                            <div className="flex items-center justify-between gap-3">
+                              <span className="text-xs text-neutral-400">Sort</span>
+                              <button
+                                type="button"
+                                onClick={cycleLibrarySort}
+                                className="inline-flex h-[1.625rem] items-center justify-center rounded border border-neutral-800 bg-neutral-900/60 px-1.5 text-xs text-neutral-400 hover:bg-neutral-800/60"
+                              >
+                                {getLibrarySortLabel(librarySort)}
+                              </button>
+                            </div>
+                            <div className="flex items-center justify-between gap-3">
+                              <span className="text-xs text-neutral-400">Time sig</span>
+                              <select
+                                value={libraryTimeSigFilter}
+                                onChange={(e) => setLibraryTimeSigFilter(e.target.value)}
+                                className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs text-white"
+                              >
+                                <option value="all">All</option>
+                                {allTimeSigCategories.map((ts) => (
+                                  <option key={`arr-ts-${ts}`} value={ts}>
+                                    {ts}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                            <div className="flex items-center justify-between gap-3">
+                              <span className="text-xs text-neutral-400">BPM</span>
+                              <div className="flex items-stretch overflow-hidden rounded border border-neutral-700 bg-neutral-800">
+                                <button
+                                  type="button"
+                                  onPointerDown={() => startLibraryBpmRepeat(-1)}
+                                  onPointerUp={stopLibraryBpmRepeat}
+                                  onPointerCancel={stopLibraryBpmRepeat}
+                                  onPointerLeave={stopLibraryBpmRepeat}
+                                  className="px-2 text-xs text-neutral-300 hover:bg-neutral-700/60 active:bg-neutral-700"
+                                >
+                                  −
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={cycleLibraryBpmFilterMode}
+                                  className="min-w-[64px] border-l border-r border-neutral-700 px-2 py-1 text-xs text-white hover:bg-neutral-700/60"
+                                  title="Cycle BPM filter mode"
+                                >
+                                  {getBpmFilterLabel()}
+                                </button>
+                                <button
+                                  type="button"
+                                  onPointerDown={() => startLibraryBpmRepeat(1)}
+                                  onPointerUp={stopLibraryBpmRepeat}
+                                  onPointerCancel={stopLibraryBpmRepeat}
+                                  onPointerLeave={stopLibraryBpmRepeat}
+                                  className="px-2 text-xs text-neutral-300 hover:bg-neutral-700/60 active:bg-neutral-700"
+                                >
+                                  +
+                                </button>
+                              </div>
+                            </div>
+                            {arrangementSourceTab === "public" && (
+                              <div className="flex justify-end">
+                                <button
+                                  type="button"
+                                  onClick={refreshPublicLibrary}
+                                  className="px-2 py-0.5 rounded border border-neutral-700 text-xs text-neutral-300 hover:bg-neutral-800/50"
+                                >
+                                  Refresh
+                                </button>
+                              </div>
+                            )}
+                              </>
+                            ) : null}
+                          </div>
+                        </div>
+                        , document.body)
+                        : null}
+                    </div>
+                    {arrangementSourceTab !== "presets" && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => setArrangementSourceTab("local")}
+                          className={`inline-flex h-[1.625rem] items-center justify-center px-1.5 rounded border text-xs ${
+                            arrangementSourceTab === "local"
+                              ? "border-neutral-700 text-white bg-neutral-800"
+                              : "border-neutral-800 text-neutral-400 bg-neutral-900/60"
+                          }`}
+                        >
+                          Local
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setArrangementSourceTab("public")}
+                          className={`inline-flex h-[1.625rem] items-center justify-center px-1.5 rounded border text-xs ${
+                            arrangementSourceTab === "public"
+                              ? "border-neutral-700 text-white bg-neutral-800"
+                              : "border-neutral-800 text-neutral-400 bg-neutral-900/60"
+                          }`}
+                        >
+                          Public
+                        </button>
+                      </>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setIsArrangementOpen(false)}
+                      className="inline-flex h-[1.625rem] w-[1.625rem] items-center justify-center rounded border border-neutral-800 bg-neutral-900/60 text-xs leading-none text-neutral-400 hover:bg-neutral-800/60"
+                      title="Close library"
+                      aria-label="Close library"
+                    >
+                      ×
+                    </button>
+                  </div>
+                </div>
                 {publicLibraryError && (
                   <div className="mt-3 rounded border border-amber-700/70 bg-amber-950/30 px-2 py-1 text-xs text-amber-100 flex items-center justify-between gap-2">
                     <span>{publicLibraryError}</span>
@@ -12851,140 +14722,118 @@ useEffect(() => {
                 {!arrangementSourcesCollapsed ? (
                   arrangementSourceTab === "local" ? (
                     <div className="mt-3">
-                      <div className="flex max-h-[52vh] flex-col rounded border border-neutral-800 bg-neutral-950/30 p-2">
-                        <div ref={arrangementSourceListRef} className="min-h-0 overflow-auto pr-1">
+                        <div ref={arrangementSourceListRef} className="max-h-[52vh] overflow-auto pr-1">
                           <DndContext
                             sensors={beatLibraryOrderSensors}
+                            collisionDetection={detectBeatLibraryDropCollision}
                             onDragStart={handleBeatLibrarySortDragStart}
                             onDragOver={handleBeatLibrarySortDragOver}
                             onDragEnd={handleBeatLibrarySortDragEnd}
                             onDragCancel={handleBeatLibrarySortDragCancel}
                             modifiers={[restrictBeatLibraryDragToList]}
                           >
-                          <div className="space-y-1">
-                          <BeatLibraryDropTarget id="all">
-                          <button
-                            type="button"
-                            onClick={() => toggleBeatLibraryExpandAll()}
-                            onDragOver={(e) => {
-                              e.preventDefault();
-                              setBeatLibraryDropTargetId("all");
-                              if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
-                            }}
-                            onDragLeave={() => setBeatLibraryDropTargetId((prev) => (prev === "all" ? null : prev))}
-                            onDrop={(e) => {
-                              e.preventDefault();
-                              handleBeatLibraryTreeDrop(null);
-                            }}
-                            className={`flex w-full items-center gap-2 rounded border px-2 py-1 text-left text-sm ${
-                              beatLibraryDropTargetId === "all"
-                                ? "border-cyan-400/80 bg-cyan-900/25 text-cyan-50 shadow-[0_0_0_1px_rgba(34,211,238,0.35)]"
-                                : "border-neutral-800 bg-neutral-900/40 text-neutral-300 hover:bg-neutral-800/60"
-                            }`}
-                          >
-                            <span
-                              className="inline-flex h-5 min-w-5 items-center justify-center rounded text-xs text-neutral-600 hover:bg-neutral-800/60"
-                              onClick={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                if (beatLibraryVisibleContainers.length > 0) {
-                                  toggleBeatLibraryRootCollapsedManual();
-                                }
-                              }}
-                              aria-hidden="true"
-                            >
-                              {beatLibraryVisibleContainers.length > 0 ? (
-                                <TreeTriangle expanded={!beatLibraryRootCollapsed} />
-                              ) : ""}
-                            </span>
-                            <span
-                              className="min-w-0 flex-1 truncate"
-                              onClick={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                toggleBeatLibraryExpandAll();
-                              }}
-                            >
-                              All beats
-                            </span>
-                            <div className="ml-auto flex items-center gap-2">
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.preventDefault();
-                                  e.stopPropagation();
-                                  setArrangementSourceTab("local");
-                                }}
-                                className={`px-2.5 py-1 rounded border text-xs ${
-                                  arrangementSourceTab === "local"
-                                    ? "border-neutral-700 text-white bg-neutral-800"
-                                    : "border-neutral-800 text-neutral-400 bg-neutral-900/60"
-                                }`}
-                              >
-                                Local
-                              </button>
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.preventDefault();
-                                  e.stopPropagation();
-                                  setArrangementSourceTab("public");
-                                }}
-                                className={`px-2.5 py-1 rounded border text-xs ${
-                                  arrangementSourceTab === "public"
-                                    ? "border-neutral-700 text-white bg-neutral-800"
-                                    : "border-neutral-800 text-neutral-400 bg-neutral-900/60"
-                                }`}
-                              >
-                                Public
-                              </button>
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.preventDefault();
-                                  e.stopPropagation();
-                                  setLibraryFiltersOpen((v) => !v);
-                                }}
-                                className={`px-2 py-1 rounded border text-xs leading-none ${
-                                  libraryFiltersOpen
-                                    ? "border-neutral-700 text-white bg-neutral-800"
-                                    : "border-neutral-800 text-neutral-400 bg-neutral-900/60"
-                                }`}
-                                title={libraryFiltersOpen ? "Hide beat filters" : "Show beat filters"}
-                              >
-                                ...
-                              </button>
+                          <div className="space-y-0">
+                            {arrangementSourceTab === "local" && (
+                              <>
+                                <BeatLibraryDropTarget id="__up__" className="absolute h-0 w-0 overflow-hidden opacity-0 pointer-events-none" />
+                                <BeatLibraryDropTarget id="__trash__" className="absolute h-0 w-0 overflow-hidden opacity-0 pointer-events-none" />
+                              </>
+                            )}
+                            <div className={selectedBeatLibraryContainerId !== "all" ? "pt-1" : ""}>
+                              {renderArrangementSourceFolderContents(currentBeatLibraryParentId, 0)}
                             </div>
-                            <span className="rounded border border-neutral-800 px-1.5 py-0.5 text-[11px] text-neutral-500">
-                              {arrangementSourceBeats.length}
-                            </span>
-                            </button>
-                            </BeatLibraryDropTarget>
-                            {!beatLibraryRootCollapsed && renderArrangementSourceFolderBranch(null, 1)}
-                            {!beatLibraryRootCollapsed &&
-                              beatLibraryContainers.length === 0 &&
-                              arrangementSourceBeats.length === 0 && (
+                            {currentBeatLibraryFolders.length === 0 &&
+                              currentBeatLibraryBeats.length === 0 && (
                               <div className="px-2 py-1 text-xs text-neutral-500">
-                                No local beats saved yet. Create a folder or save a beat.
+                                {selectedBeatLibraryContainerId === "all"
+                                  ? "No local beats saved yet. Create a folder or save a beat."
+                                  : "This folder is empty."}
                               </div>
                             )}
                           </div>
+                          <DragOverlay>
+                            <BeatLibraryDragOverlayCard
+                              beat={activeBeatLibraryDragBeat}
+                              beatBpm={activeBeatLibraryDragBeatBpm}
+                            />
+                          </DragOverlay>
                           </DndContext>
                         </div>
-                        <div className="mt-2 space-y-2 border-t border-neutral-800 pt-2">
+                        <div className="mt-3 border-t border-neutral-800 pt-3">
                           <div className="flex items-center gap-2">
                             <button
                               type="button"
                               onClick={() => createBeatLibraryContainer("folder")}
-                              className="flex-1 rounded border border-neutral-800 bg-neutral-900/40 px-2 py-1 text-[11px] text-neutral-300 hover:bg-neutral-800/60"
+                              className="flex h-7 flex-1 items-center justify-center rounded border border-neutral-800 bg-neutral-900/40 px-2 text-sm text-neutral-400 hover:bg-neutral-800/60"
                             >
                               + Folder
                             </button>
-                            <BeatLibraryDropTarget id="__trash__">
                             <button
                               type="button"
-                              onClick={() => {
-                                if (selectedBeatLibraryContainerId !== "all") deleteBeatLibraryContainer(selectedBeatLibraryContainerId);
+                              onClick={saveCurrentBeatLocal}
+                              className="h-7 rounded border border-neutral-800 bg-neutral-900/60 px-2.5 text-sm text-neutral-400 hover:bg-neutral-800/60"
+                              title="Save as new beat"
+                            >
+                              Save as new
+                            </button>
+                            {isAdminUser && (
+                              <div className="relative">
+                                <button
+                                  ref={beatLibraryActionsMenuButtonRef}
+                                  type="button"
+                                  onClick={() => setIsBeatLibraryActionsMenuOpen((v) => !v)}
+                                  className={`h-7 rounded border px-2 text-sm leading-none ${
+                                    isBeatLibraryActionsMenuOpen
+                                      ? "border-neutral-700 text-white bg-neutral-800"
+                                      : "border-neutral-800 text-neutral-400 bg-neutral-900/60 hover:bg-neutral-800/60"
+                                  }`}
+                                  title="More beat library actions"
+                                >
+                                  ...
+                                </button>
+                                {isBeatLibraryActionsMenuOpen && beatLibraryActionsMenuStyle
+                                  ? createPortal(
+                                  <div
+                                    ref={beatLibraryActionsMenuRef}
+                                    style={beatLibraryActionsMenuStyle}
+                                    className="min-w-[11rem] rounded-lg border border-neutral-700 bg-neutral-900 p-2 shadow-xl"
+                                  >
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setIsBeatLibraryActionsMenuOpen(false);
+                                        openPublicSubmitDialog();
+                                      }}
+                                      className="w-full rounded px-3 py-2 text-left text-sm text-white hover:bg-neutral-800/60"
+                                      title="Publish to public beat library"
+                                    >
+                                      Publish public
+                                    </button>
+                                  </div>
+                                  , document.body)
+                                  : null}
+                              </div>
+                            )}
+                            <BeatLibraryDropTarget id="__trash__">
+                            <button
+                              ref={beatLibraryTrashTargetRef}
+                              type="button"
+                              onClick={async () => {
+                                if (selectedLocalBeatForTrash?.id) {
+                                  const beatName = String(selectedLocalBeatForTrash.name || "this beat");
+                                  if (!window.confirm(`Delete "${beatName}"?`)) return;
+                                  await deleteLocalBeatById(selectedLocalBeatForTrash.id);
+                                  return;
+                                }
+                                const currentContainerId = selectedBeatLibraryContainerIdRef.current || "all";
+                                if (currentContainerId !== "all") {
+                                  const folderName =
+                                    beatLibraryContainers.find(
+                                      (entry) => String(entry.id) === String(currentContainerId)
+                                    )?.name || "this folder";
+                                  if (!window.confirm(`Delete "${folderName}"?`)) return;
+                                  deleteBeatLibraryContainer(currentContainerId);
+                                }
                               }}
                               onDragOver={(e) => {
                                 e.preventDefault();
@@ -12998,17 +14847,18 @@ useEffect(() => {
                                 e.preventDefault();
                                 await handleBeatLibraryTrashDrop();
                               }}
-                              disabled={selectedBeatLibraryContainerId === "all"}
-                              className={`rounded border px-2 py-1 text-[11px] ${
+                              className={`inline-flex h-7 items-center justify-center rounded border px-2 text-sm ${
                                 beatLibraryDropTargetId === "__trash__"
                                   ? "border-red-500/80 bg-red-900/25 text-red-100 shadow-[0_0_0_1px_rgba(239,68,68,0.35)]"
                                   : selectedBeatLibraryContainerId !== "all"
                                     ? "border-red-900 text-red-200 hover:bg-red-900/30"
-                                    : "border-neutral-800 text-neutral-500 bg-neutral-900/60 cursor-not-allowed"
+                                    : "border-neutral-800 text-neutral-500 bg-neutral-900/60"
                               }`}
                               title={
-                                selectedBeatLibraryContainerId !== "all"
-                                  ? "Delete selected folder or drop beats/folders here"
+                                selectedLocalBeatForTrash?.id
+                                  ? "Delete selected beat or drop beats/folders here"
+                                  : selectedBeatLibraryContainerId !== "all"
+                                    ? "Delete selected folder or drop beats/folders here"
                                   : "Drop beats/folders here to delete"
                               }
                               >
@@ -13025,124 +14875,149 @@ useEffect(() => {
                               </button>
                               </BeatLibraryDropTarget>
                           </div>
-                          <div className="flex flex-wrap items-end gap-2">
-                            <input
-                              ref={beatNameInputRef}
-                              type="text"
-                              value={beatNameDraft}
-                              onChange={(e) => setBeatNameDraft(e.target.value)}
-                              onFocus={(e) => e.target.select()}
-                              onKeyDown={async (e) => {
-                                if (e.key !== "Enter") return;
-                                e.preventDefault();
-                                if (canUpdateLoadedLocalBeat) updateCurrentLoadedBeatLocal();
-                                else saveCurrentBeatLocal();
-                                try { e.currentTarget.blur(); } catch (_) {}
-                              }}
-                              placeholder="Beat name"
-                              className="min-w-[180px] flex-1 bg-neutral-900 border border-neutral-700 rounded px-2 py-1 text-sm text-white"
-                            />
-                            <button
-                              ref={beatSaveButtonRef}
-                              type="button"
-                              onClick={canUpdateLoadedLocalBeat ? updateCurrentLoadedBeatLocal : saveCurrentBeatLocal}
-                              className={`px-2.5 py-1 rounded border text-sm focus:outline-none focus:border-sky-500/70 focus:bg-sky-900/30 focus:shadow-[0_0_0_1px_rgba(14,165,233,0.35)] ${
-                                canUpdateLoadedLocalBeat
-                                  ? "border-cyan-700 text-cyan-100 bg-cyan-900/20 hover:bg-cyan-800/30"
-                                  : "border-neutral-700 text-white bg-neutral-800 hover:bg-neutral-700/60"
-                              }`}
-                              title={canUpdateLoadedLocalBeat ? "Update loaded local beat" : "Save to local beat library"}
-                            >
-                              {canUpdateLoadedLocalBeat ? "Update" : "Save"}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={saveCurrentBeatLocal}
-                              className="px-2.5 py-1 rounded border text-sm border-neutral-700 text-white bg-neutral-800 hover:bg-neutral-700/60"
-                              title="Save as new beat"
-                            >
-                              Save as new
-                            </button>
-                            <button
-                              type="button"
-                              onClick={openPublicSubmitDialog}
-                              disabled={!isAdminUser}
-                              className={`px-2.5 py-1 rounded border text-sm ${
-                                isAdminUser
-                                  ? "border-neutral-700 text-white bg-neutral-800 hover:bg-neutral-700/60"
-                                  : "border-neutral-800 text-neutral-500 bg-neutral-900/60 cursor-not-allowed"
-                              }`}
-                              title={isAdminUser ? "Publish to public beat library" : "Admin login required"}
-                            >
-                              Publish public
-                            </button>
-                          </div>
                         </div>
+                    </div>
+                  ) : arrangementSourceTab === "presets" ? (
+                    <div className="mt-0.5">
+                      <div ref={arrangementSourceListRef} className="max-h-[52vh] overflow-auto pr-1 dg-scroll-follow-list">
+                        <DndContext
+                          sensors={beatLibraryOrderSensors}
+                          collisionDetection={detectGridSettingsPresetDropCollision}
+                          onDragStart={handleGridSettingsPresetDragStart}
+                          onDragOver={handleGridSettingsPresetDragOver}
+                          onDragEnd={handleGridSettingsPresetDragEnd}
+                          onDragCancel={handleGridSettingsPresetDragCancel}
+                          modifiers={[restrictBeatLibraryDragToList]}
+                        >
+                          <div className="space-y-2.5">
+                            <BeatLibraryDropTarget id="__trash__" className="absolute h-0 w-0 overflow-hidden opacity-0 pointer-events-none" />
+                            <SortableContext
+                              items={gridSettingsPresets.map((preset) => `preset:${String(preset.id)}`)}
+                              strategy={verticalListSortingStrategy}
+                            >
+                              {(() => {
+                                const shouldShowCrossTargetPlaceholder =
+                                  !!activeGridSettingsPresetDragId &&
+                                  !!presetLibraryDropTargetId &&
+                                  !String(presetLibraryDropTargetId).startsWith("preset:") &&
+                                  gridSettingsPresets.some(
+                                    (preset) =>
+                                      String(preset?.id || "") ===
+                                      String(activeGridSettingsPresetDragId || "")
+                                  );
+                                const visiblePresets = shouldShowCrossTargetPlaceholder
+                                  ? gridSettingsPresets.filter(
+                                      (preset) =>
+                                        String(preset?.id || "") !==
+                                        String(activeGridSettingsPresetDragId || "")
+                                    )
+                                  : gridSettingsPresets;
+                                const originalIndex = gridSettingsPresets.findIndex(
+                                  (preset) =>
+                                    String(preset?.id || "") ===
+                                    String(activeGridSettingsPresetDragId || "")
+                                );
+                                const lastOverPresetId = String(
+                                  gridSettingsPresetLastOverIdRef.current || ""
+                                );
+                                const targetIndex = gridSettingsPresets.findIndex(
+                                  (preset) => String(preset?.id || "") === lastOverPresetId
+                                );
+                                const placeholderIndex = shouldShowCrossTargetPlaceholder
+                                  ? Math.max(
+                                      0,
+                                      Math.min(
+                                        visiblePresets.length,
+                                        targetIndex >= 0 ? targetIndex : originalIndex
+                                      )
+                                    )
+                                  : -1;
+                                return (
+                                  <>
+                                    {visiblePresets.map((preset, index) => (
+                                      <React.Fragment key={`grid-preset-node-${preset.id}`}>
+                                        {shouldShowCrossTargetPlaceholder &&
+                                        index === placeholderIndex ? (
+                                          <GridSettingsPresetReservedRowSlot />
+                                        ) : null}
+                                        <SortableGridSettingsPresetRow
+                                          preset={preset}
+                                          isActive={activeGridSettingsPreset?.id === preset.id}
+                                          isEditing={
+                                            String(editingGridSettingsPresetId || "") ===
+                                            String(preset.id)
+                                          }
+                                          editingName={editingGridSettingsPresetName}
+                                          setEditingName={setEditingGridSettingsPresetName}
+                                          commitEditing={commitEditingGridSettingsPreset}
+                                          cancelEditing={cancelEditingGridSettingsPreset}
+                                          startEditing={startEditingGridSettingsPreset}
+                                          pendingPresetRenameExitRef={
+                                            gridSettingsPresetPendingRenameExitRef
+                                          }
+                                          disableTransition={
+                                            !!activeGridSettingsPresetDragId
+                                          }
+                                          onApply={() => {
+                                            setSelectedGridSettingsPresetId(String(preset.id));
+                                            applyGridSettingsPreset(preset);
+                                          }}
+                                        />
+                                      </React.Fragment>
+                                    ))}
+                                    {shouldShowCrossTargetPlaceholder &&
+                                    placeholderIndex === visiblePresets.length ? (
+                                      <GridSettingsPresetReservedRowSlot />
+                                    ) : null}
+                                  </>
+                                );
+                              })()}
+                            </SortableContext>
+                          </div>
+                          <div className="mt-3 border-t border-neutral-800 pt-3">
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={saveCurrentGridSettingsPreset}
+                                className="h-7 rounded border border-neutral-800 bg-neutral-900/60 px-2.5 text-sm text-neutral-400 hover:bg-neutral-800/60"
+                                title="Save current grid settings as a new preset"
+                              >
+                                Save as new
+                              </button>
+                              <BeatLibraryDropTarget id="__trash__">
+                                <button
+                                  ref={beatLibraryTrashTargetRef}
+                                  type="button"
+                                  onClick={deleteSelectedGridSettingsPreset}
+                                  className={`inline-flex h-7 items-center justify-center rounded border px-2 text-sm ${
+                                    presetLibraryDropTargetId === "__trash__"
+                                      ? "border-red-500/80 bg-red-900/25 text-red-100 shadow-[0_0_0_1px_rgba(239,68,68,0.35)]"
+                                      : "border-neutral-800 text-neutral-500 bg-neutral-900/60"
+                                  }`}
+                                  title="Delete selected preset"
+                                >
+                                  <svg
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    viewBox="0 0 16 16"
+                                    className="h-4 w-4"
+                                    fill="currentColor"
+                                    aria-hidden="true"
+                                  >
+                                    <path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0z" />
+                                    <path d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4zM2.5 3h11V2h-11z" />
+                                  </svg>
+                                </button>
+                              </BeatLibraryDropTarget>
+                            </div>
+                          </div>
+                          <DragOverlay>
+                            <GridSettingsPresetDragOverlayCard preset={activeGridSettingsPresetDrag} />
+                          </DragOverlay>
+                        </DndContext>
                       </div>
                     </div>
                   ) : (
-                    <div className="mt-3 max-h-[52vh] overflow-auto space-y-2 pr-1 dg-scroll-follow-list">
-                      <div className="rounded border border-neutral-800 bg-neutral-950/30 p-2">
-                        <button
-                          type="button"
-                          onClick={() => setArrangementSourceTab("local")}
-                          className="flex w-full items-center gap-2 rounded border border-neutral-800 bg-neutral-900/40 px-2 py-1 text-left text-sm text-neutral-300"
-                        >
-                          <span className="inline-flex h-5 min-w-5 items-center justify-center rounded text-xs text-neutral-700" />
-                          <span className="min-w-0 flex-1 truncate">All beats</span>
-                          <div className="ml-auto flex items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                setArrangementSourceTab("local");
-                              }}
-                              className={`px-2.5 py-1 rounded border text-xs ${
-                                arrangementSourceTab === "local"
-                                  ? "border-neutral-700 text-white bg-neutral-800"
-                                  : "border-neutral-800 text-neutral-400 bg-neutral-900/60"
-                              }`}
-                            >
-                              Local
-                            </button>
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                setArrangementSourceTab("public");
-                              }}
-                              className={`px-2.5 py-1 rounded border text-xs ${
-                                arrangementSourceTab === "public"
-                                  ? "border-neutral-700 text-white bg-neutral-800"
-                                  : "border-neutral-800 text-neutral-400 bg-neutral-900/60"
-                              }`}
-                            >
-                              Public
-                            </button>
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                setLibraryFiltersOpen((v) => !v);
-                              }}
-                              className={`px-2 py-1 rounded border text-xs leading-none ${
-                                libraryFiltersOpen
-                                  ? "border-neutral-700 text-white bg-neutral-800"
-                                  : "border-neutral-800 text-neutral-400 bg-neutral-900/60"
-                              }`}
-                              title={libraryFiltersOpen ? "Hide beat filters" : "Show beat filters"}
-                            >
-                              ...
-                            </button>
-                          </div>
-                          <span className="rounded border border-neutral-800 px-1.5 py-0.5 text-[11px] text-neutral-500">
-                            {arrangementSourceBeats.length}
-                          </span>
-                        </button>
-                      </div>
+                    <div className="mt-3 max-h-[52vh] overflow-auto space-y-2.5 pr-1 dg-scroll-follow-list">
                       {arrangementSourceBeats.map((beat) => {
                         const beatBpm = getBeatBpm(beat);
                         const sourceLabel = "public";
@@ -13178,7 +15053,7 @@ useEffect(() => {
                             }}
                             className={`rounded border px-2.5 py-2 cursor-pointer outline-none focus:outline-none focus-visible:outline-none ${
                               isSelectedArrangementSourceBeat
-                                ? "border-sky-500/70 bg-sky-900/30 shadow-[0_0_0_1px_rgba(14,165,233,0.35)]"
+                                ? "border-sky-500/70 bg-sky-900/20 shadow-[0_0_0_1px_rgba(14,165,233,0.35)]"
                                 : "border-neutral-800 bg-neutral-900/40 hover:bg-neutral-800/60"
                             }`}
                           >
@@ -13237,13 +15112,23 @@ useEffect(() => {
 
               {!arrangementDetailsCollapsed && (
               <div
-                className={`rounded border p-3 ${
-                  arrangementDropActive
-                    ? "border-cyan-500/80 bg-cyan-950/20 shadow-[0_0_0_1px_rgba(6,182,212,0.35)]"
-                    : "border-neutral-800 bg-neutral-950/40"
+                className={`${
+                  !arrangementSourcesCollapsed && !arrangementDetailsCollapsed
+                    ? arrangementDropActive
+                      ? "rounded-none border-0 bg-cyan-950/10 p-4 shadow-none"
+                      : "rounded-none border-0 bg-transparent p-4 shadow-none"
+                    : arrangementSourcesCollapsed || !arrangementSourcesCollapsed
+                    ? arrangementDropActive
+                      ? "rounded-xl border border-cyan-500/80 bg-neutral-900 p-4 shadow-2xl shadow-[0_0_0_1px_rgba(6,182,212,0.35)]"
+                      : "rounded-xl border border-neutral-700 bg-neutral-900 p-4 shadow-2xl"
+                    : arrangementDropActive
+                      ? "rounded border border-cyan-500/80 bg-cyan-950/20 p-3 shadow-[0_0_0_1px_rgba(6,182,212,0.35)]"
+                      : "rounded border border-neutral-800 bg-neutral-950/40 p-3"
                 } ${
-                  arrangementSourcesCollapsed ? "w-full max-w-[36rem] justify-self-start" : ""
-                }`}
+                  arrangementSourcesCollapsed ? "w-full max-w-[27rem] justify-self-start" : ""
+                } ${
+                  !arrangementSourcesCollapsed ? "relative" : ""
+                } flex h-full flex-col`}
                 onDragOver={(e) => {
                   if (!arrangementDragBeatRef.current?.beatId) return;
                   e.preventDefault();
@@ -13267,31 +15152,12 @@ useEffect(() => {
                   dropDraggedBeatIntoArrangement();
                 }}
               >
+                {!arrangementSourcesCollapsed && !arrangementDetailsCollapsed ? (
+                  <div className="pointer-events-none absolute left-0 top-4 bottom-4 w-px bg-neutral-800" />
+                ) : null}
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
                     <div className="text-sm text-neutral-200">Arrangement</div>
-                    <button
-                      type="button"
-                      onClick={() => setArrangementLibraryTab("local")}
-                      className={`px-2.5 py-1 rounded border text-xs ${
-                        arrangementLibraryTab === "local"
-                          ? "border-neutral-700 text-white bg-neutral-800"
-                          : "border-neutral-800 text-neutral-400 bg-neutral-900/60"
-                      }`}
-                    >
-                      Local
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setArrangementLibraryTab("public")}
-                      className={`px-2.5 py-1 rounded border text-xs ${
-                        arrangementLibraryTab === "public"
-                          ? "border-neutral-700 text-white bg-neutral-800"
-                          : "border-neutral-800 text-neutral-400 bg-neutral-900/60"
-                      }`}
-                    >
-                      Public
-                    </button>
                     <button
                       ref={arrangementPlayButtonRef}
                       type="button"
@@ -13310,256 +15176,198 @@ useEffect(() => {
                     >
                       {arrangementPlaybackEnabled && playback.isPlaying
                         ? "Stop"
-                        : (normalizedArrangementBarLoopSelection || normalizedArrangementLoopSelection)
-                          ? "Play loop selection"
-                          : "Play"}
+                        : "Play"}
                     </button>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {arrangementSourcesCollapsed && (
-                      <button
-                        type="button"
-                        onClick={() => setIsArrangementOpen(false)}
-                        className="px-2.5 py-1 rounded border border-neutral-700 text-sm text-neutral-300 bg-neutral-900/60 hover:bg-neutral-800/60"
-                        title="Close library"
-                        aria-label="Close library"
-                      >
-                        ×
-                      </button>
-                    )}
-                  </div>
-                </div>
-                <div className="mt-2 space-y-1.5">
-                  {arrangementLibraryTab === "local" && (
-                  <div className="flex items-center gap-2">
-                    {savedArrangements.length > 0 && (
-                      <select
-                        value={loadedArrangementId || ""}
-                        onChange={(e) => {
-                          const nextId = e.target.value || "";
-                          const nextEntry = savedArrangements.find((entry) => entry.id === nextId) || null;
-                          if (!nextEntry) {
-                            setLoadedArrangementId(null);
-                            setArrangementSaveAsOpen(true);
-                            return;
-                          }
-                          loadSavedArrangement(nextEntry);
-                        }}
-                        className="min-w-0 flex-1 bg-neutral-900 border border-neutral-700 rounded px-2 py-1 text-xs text-white"
-                      >
-                        {sortedSavedArrangements.map((entry) => (
-                          <option key={`arr-save-opt-${entry.id}`} value={entry.id}>
-                            {entry.name}
-                          </option>
-                        ))}
-                      </select>
-                    )}
-                      <button
-                        type="button"
-                        onClick={createNewArrangement}
-                        className="px-2 py-1 rounded border border-neutral-700 text-[11px] text-neutral-200 hover:bg-neutral-800/60"
-                        title="Create a new empty arrangement"
-                      >
-                        New
-                      </button>
-                      <button
-                        ref={arrangementTitleMenuButtonRef}
-                        type="button"
-                        onClick={() => setArrangementTitleMenuOpen((v) => !v)}
-                        className={`px-2 py-1 rounded border text-[11px] ${
-                          arrangementTitleMenuOpen
-                            ? "border-neutral-600 text-white bg-neutral-800"
-                            : "border-neutral-700 text-neutral-200 hover:bg-neutral-800/60"
-                        }`}
-                        title="Edit score title and author"
-                      >
-                        Title
-                      </button>
-                      {arrangementTitleMenuOpen
-                        ? createPortal(
-                            <div
-                              ref={arrangementTitleMenuRef}
-                              className="fixed z-[140] w-72 rounded border border-neutral-700 bg-neutral-900 p-2 shadow-2xl"
-                              style={{
-                                top: `${arrangementTitleMenuPosition.top}px`,
-                                left: `${arrangementTitleMenuPosition.left}px`,
-                              }}
-                              onClick={(e) => e.stopPropagation()}
-                              onMouseDown={(e) => e.stopPropagation()}
-                            >
-                              <label className="flex flex-col gap-1 text-[11px] text-neutral-400">
-                                <span>Title line 1</span>
-                                <input
-                                  type="text"
-                                  value={arrangementTitleLine1Draft}
-                                  onChange={(e) => setArrangementTitleLine1Draft(e.target.value)}
-                                  placeholder="Main title"
-                                  autoFocus
-                                  className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs text-white"
-                                />
-                              </label>
-                              <label className="mt-2 flex flex-col gap-1 text-[11px] text-neutral-400">
-                                <span>Title line 2</span>
-                                <input
-                                  type="text"
-                                  value={arrangementTitleLine2Draft}
-                                  onChange={(e) => setArrangementTitleLine2Draft(e.target.value)}
-                                  placeholder="Subtitle"
-                                  className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs text-white"
-                                />
-                              </label>
-                              <label className="mt-2 flex flex-col gap-1 text-[11px] text-neutral-400">
-                                <span>Author</span>
-                                <input
-                                  type="text"
-                                  value={arrangementComposerDraft}
-                                  onChange={(e) => setArrangementComposerDraft(e.target.value)}
-                                  placeholder="Author / composer"
-                                  className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs text-white"
-                                />
-                              </label>
-                            </div>,
-                            document.body
-                          )
-                        : null}
-                      <button
-                        type="button"
-                        onClick={() => saveArrangementSnapshot({ mode: "update" })}
-                        disabled={
-                          !selectedSavedArrangementEntry ||
-                          !arrangementHasPendingUpdate
-                        }
-                        className={`px-2 py-1 rounded border text-[11px] ${
-                          selectedSavedArrangementEntry &&
-                          arrangementHasPendingUpdate
-                            ? "border-neutral-700 text-neutral-200 hover:bg-neutral-800/60"
-                            : "border-neutral-800 text-neutral-500 bg-neutral-900/60 cursor-not-allowed"
-                        }`}
-                        title="Update selected arrangement"
-                      >
-                        Update
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setArrangementSaveAsOpen((v) => !v)}
-                        className={`px-2 py-1 rounded border text-[11px] ${
-                          arrangementSaveAsOpen
-                            ? "border-neutral-600 text-white bg-neutral-800"
-                            : "border-neutral-700 text-neutral-200 hover:bg-neutral-800/60"
-                        }`}
-                        title="Save as new arrangement"
-                      >
-                        Save as
-                      </button>
+                    {!isArrangementNotationOpen && (
                       <button
                         type="button"
                         onClick={() => {
-                          if (!selectedSavedArrangementEntry) return;
-                          requestDeleteSavedArrangement(selectedSavedArrangementEntry);
+                          setArrangementSourcesCollapsed(true);
+                          setArrangementDetailsCollapsed(false);
+                          setIsArrangementOpen(true);
+                          setIsArrangementNotationOpen(true);
                         }}
-                        disabled={!selectedSavedArrangementEntry}
-                        className={`px-2 py-1 rounded border text-[11px] ${
-                          selectedSavedArrangementEntry
-                            ? "border-red-900 text-red-200 hover:bg-red-900/30"
-                            : "border-neutral-800 text-neutral-500 bg-neutral-900/60 cursor-not-allowed"
-                        }`}
-                        aria-label="Delete arrangement"
-                        title="Delete arrangement"
+                        className="px-2 py-1 rounded border border-neutral-800 text-xs text-neutral-400 bg-neutral-900/60 hover:bg-neutral-800/60"
+                        title="Arrangement sheet"
                       >
-                        ×
+                        Open sheet
                       </button>
+                    )}
                   </div>
-                  )}
-                </div>
-                {arrangementLibraryTab === "local" && arrangementSaveAsOpen && (
-                  <div className="mt-3 flex flex-wrap items-center gap-2">
-                      <div className="min-w-[180px] flex-1 rounded border border-neutral-800 bg-neutral-950/40 px-2 py-1 text-sm text-neutral-300">
-                        {arrangementDisplayName || `Arrangement ${savedArrangements.length + 1}`}
-                      </div>
+                  <div className="flex items-center gap-2">
                     <button
                       type="button"
-                      onClick={() => saveArrangementSnapshot({ mode: "saveAs" })}
-                      className="px-2.5 py-1 rounded border border-neutral-700 text-sm text-white bg-neutral-800 hover:bg-neutral-700/60"
-                      title="Save as new arrangement"
-                    >
-                      Save
-                    </button>
-                    <div className="w-full text-[11px] text-neutral-500">
-                      Arrangement name is generated from Title line 1 and Title line 2.
-                    </div>
-                  </div>
-                )}
-                {arrangementLibraryTab === "public" && (
-                <div className="mt-3 rounded border border-neutral-800 bg-neutral-950/30 p-2.5">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="text-xs text-neutral-400">Public arrangements</div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={refreshPublicArrangementLibrary}
-                        className="px-2 py-0.5 rounded border border-neutral-700 text-xs text-neutral-300 hover:bg-neutral-800/50"
-                      >
-                        Refresh
-                      </button>
-                      {isAdminUser && (
-                        <button
-                          type="button"
-                          onClick={publishCurrentArrangementPublic}
-                          className="px-2 py-0.5 rounded border border-neutral-700 text-xs text-white bg-neutral-800 hover:bg-neutral-700/60"
-                          title="Publish current arrangement as a public default"
-                        >
-                          {selectedPublicArrangementEntry ? "Update public" : "Publish public"}
-                        </button>
-                      )}
-                      {isAdminUser && selectedPublicArrangementEntry && (
-                        <button
-                          type="button"
-                          onClick={() => deletePublicArrangement(selectedPublicArrangementEntry.id)}
-                          className="px-2 py-0.5 rounded border border-red-900 text-xs text-red-200 hover:bg-red-900/30"
-                          title="Delete selected public arrangement"
-                        >
-                          Delete
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                  <div className="mt-2 flex items-center gap-2">
-                    <select
-                      value={selectedPublicArrangementId}
-                      onChange={(e) => setSelectedPublicArrangementId(e.target.value)}
-                      className="min-w-0 flex-1 bg-neutral-900 border border-neutral-700 rounded px-2 py-1 text-xs text-white"
-                    >
-                      <option value="">Select public arrangement</option>
-                      {publicArrangements.map((entry) => (
-                        <option key={`public-arr-opt-${entry.id}`} value={entry.id}>
-                          {entry.name}
-                        </option>
-                      ))}
-                    </select>
-                    <button
-                      type="button"
-                      onClick={() => loadPublishedArrangement(selectedPublicArrangementEntry)}
-                      disabled={!selectedPublicArrangementEntry}
-                      className={`px-2 py-1 rounded border text-xs ${
-                        selectedPublicArrangementEntry
-                          ? "border-neutral-700 text-white bg-neutral-800 hover:bg-neutral-700/60"
-                          : "border-neutral-800 text-neutral-500 bg-neutral-900/60 cursor-not-allowed"
+                      onClick={() => setArrangementLibraryTab("local")}
+                      className={`inline-flex h-[1.625rem] items-center justify-center rounded border px-1.5 text-xs leading-none ${
+                        arrangementLibraryTab === "local"
+                          ? "border-neutral-700 text-white bg-neutral-800"
+                          : "border-neutral-800 text-neutral-400 bg-neutral-900/60"
                       }`}
                     >
-                      Load
+                      Local
                     </button>
+                    <button
+                      type="button"
+                      onClick={() => setArrangementLibraryTab("public")}
+                      className={`inline-flex h-[1.625rem] items-center justify-center rounded border px-1.5 text-xs leading-none ${
+                        arrangementLibraryTab === "public"
+                          ? "border-neutral-700 text-white bg-neutral-800"
+                          : "border-neutral-800 text-neutral-400 bg-neutral-900/60"
+                      }`}
+                    >
+                      Public
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIsArrangementOpen(false)}
+                      className="inline-flex h-[1.625rem] w-[1.625rem] items-center justify-center rounded border border-neutral-800 bg-neutral-900/60 text-xs leading-none text-neutral-400 hover:bg-neutral-800/60"
+                      title="Close library"
+                      aria-label="Close library"
+                    >
+                      ×
+                    </button>
+                  </div>
+                </div>
+                {arrangementLibraryTab === "public" && (
+                <>
+                <div className="mt-3 max-h-[52vh] overflow-auto pr-1">
+                  <div className="space-y-2">
+                    {publicArrangements.map((entry) => {
+                      const sectionCount = Array.isArray(entry?.items) ? entry.items.length : 0;
+                      const isSelected = String(selectedPublicArrangementId || "") === String(entry.id || "");
+                      return (
+                        <div
+                          key={`public-arr-${entry.id}`}
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => setSelectedPublicArrangementId(String(entry.id || ""))}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              setSelectedPublicArrangementId(String(entry.id || ""));
+                            }
+                          }}
+                          className={`rounded border px-2.5 py-2 cursor-pointer outline-none focus:outline-none focus-visible:outline-none ${
+                            isSelected
+                              ? "border-sky-500/70 bg-sky-900/20 shadow-[0_0_0_1px_rgba(14,165,233,0.35)]"
+                              : "border-neutral-800 bg-neutral-900/40 hover:bg-neutral-800/60"
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="min-w-0">
+                              <div className="text-sm text-white truncate">
+                                {entry.name || "Untitled Arrangement"}
+                              </div>
+                              <div className="text-xs text-neutral-400 truncate">
+                                {`${sectionCount} ${sectionCount === 1 ? "section" : "sections"}` +
+                                  (entry.composer ? ` · ${entry.composer}` : "")}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                   {publicArrangementLibraryLoading ? (
                     <div className="mt-2 text-[11px] text-neutral-500">Loading public arrangements…</div>
                   ) : null}
+                  {publicArrangements.length === 0 && !publicArrangementLibraryLoading ? (
+                    <div className="text-xs text-neutral-500">No public arrangements available.</div>
+                  ) : null}
                 </div>
+                <div className="mt-auto pt-3">
+                  <div className="border-t border-neutral-800 pt-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex min-w-0 flex-1 items-center gap-2">
+                        <select
+                          value={selectedPublicArrangementId}
+                          onChange={(e) => setSelectedPublicArrangementId(e.target.value)}
+                          className="min-w-0 flex-1 h-7 bg-neutral-900/40 border border-neutral-800 rounded px-2 text-sm text-neutral-400"
+                        >
+                          <option value="">Select public arrangement</option>
+                          {publicArrangements.map((entry) => (
+                            <option key={`public-arr-opt-${entry.id}`} value={entry.id}>
+                              {entry.name}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          onClick={() => loadPublishedArrangement(selectedPublicArrangementEntry)}
+                          disabled={!selectedPublicArrangementEntry}
+                          className={`h-7 rounded border px-2.5 text-sm ${
+                            selectedPublicArrangementEntry
+                              ? "border-neutral-800 text-neutral-400 bg-neutral-900/60 hover:bg-neutral-800/60"
+                              : "border-neutral-800 text-neutral-500 bg-neutral-900/60 cursor-not-allowed"
+                          }`}
+                            >
+                              Load
+                            </button>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={refreshPublicArrangementLibrary}
+                          className="h-7 rounded border border-neutral-800 bg-neutral-900/60 px-2.5 text-sm text-neutral-400 hover:bg-neutral-800/60"
+                        >
+                          Refresh
+                        </button>
+                        {isAdminUser && (
+                          <button
+                            type="button"
+                            onClick={publishCurrentArrangementPublic}
+                            className="h-7 rounded border border-neutral-800 bg-neutral-900/60 px-2.5 text-sm text-neutral-400 hover:bg-neutral-800/60"
+                            title="Publish current arrangement as a public default"
+                          >
+                            {selectedPublicArrangementEntry ? "Update public" : "Publish public"}
+                          </button>
+                        )}
+                        {isAdminUser && selectedPublicArrangementEntry && (
+                          <button
+                            type="button"
+                            onClick={() => deletePublicArrangement(selectedPublicArrangementEntry.id)}
+                            className="h-7 rounded border border-neutral-800 bg-neutral-900/60 px-2.5 text-sm text-neutral-500 hover:bg-neutral-800/60"
+                            title="Delete selected public arrangement"
+                          >
+                            Delete
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                </>
                 )}
                 {arrangementLibraryTab === "local" && (
                 <div ref={arrangementListRef} className="mt-3 max-h-[52vh] overflow-auto pr-1">
                   <DndContext
                     sensors={arrangementOrderSensors}
-                    collisionDetection={closestCenter}
+                    collisionDetection={detectArrangementOrderDropCollision}
+                    onDragStart={(event) => {
+                      arrangementSortLastOverIdRef.current = String(event?.active?.id || "");
+                      arrangementSortDragOverTrashRef.current = false;
+                      setActiveArrangementSortRowId(String(event?.active?.id || ""));
+                      setArrangementOrderDropTargetId(null);
+                      setArrangementOrderTrashHover(false);
+                    }}
+                    onDragOver={(event) => {
+                      setArrangementOrderTrashHover(arrangementSortDragOverTrashRef.current);
+                      setArrangementOrderDropTargetId(
+                        arrangementSortDragOverTrashRef.current
+                          ? "__trash__"
+                          : event?.over
+                            ? String(event.over.id || "")
+                            : null
+                      );
+                    }}
                     onDragEnd={onArrangementOrderDragEnd}
+                    onDragCancel={() => {
+                      arrangementSortLastOverIdRef.current = "";
+                      arrangementSortDragOverTrashRef.current = false;
+                      setActiveArrangementSortRowId(null);
+                      setArrangementOrderDropTargetId(null);
+                      setArrangementOrderTrashHover(false);
+                    }}
                     modifiers={[restrictArrangementDragToList]}
                   >
                     <SortableContext
@@ -13567,6 +15375,7 @@ useEffect(() => {
                       strategy={verticalListSortingStrategy}
                     >
                       <div className="space-y-2">
+                        <BeatLibraryDropTarget id="__trash__" className="absolute h-0 w-0 overflow-hidden opacity-0 pointer-events-none" />
                         {arrangementRows.map((row, idx) => (
                           <SortableArrangementRow
                             key={`arr-row-${row.id}`}
@@ -13582,8 +15391,6 @@ useEffect(() => {
                             )}
                             onSelect={(e) => handleArrangementRowSelect(idx, !!e?.shiftKey)}
                             onTouchSelect={handleArrangementRowTouchSelect}
-                            onPlay={() => startArrangementPlayback(idx)}
-                            onLoad={() => loadBeatIntoEditor(row.source, row.beat)}
                             dropPosition={
                               arrangementDropTarget?.rowId === row.id ? arrangementDropTarget.position : null
                             }
@@ -13609,31 +15416,8 @@ useEffect(() => {
                             }}
                             onRepeatDown={() => arrangementNudgeRepeats(row.id, -1)}
                             onRepeatUp={() => arrangementNudgeRepeats(row.id, 1)}
-                            onRemove={() => arrangementRemoveRow(row.id)}
-                            onToggleNotationBeatName={() =>
-                              arrangementUpdateRowNotationOptions(row.id, {
-                                showNotationBeatName: !row.showNotationBeatName,
-                              })
-                            }
-                            onSetNotationDynamicSpacing={(value) =>
-                              arrangementUpdateRowNotationOptions(row.id, {
-                                notationDynamicSpacing: value,
-                              })
-                            }
-                            onSetNotationSpacingPreset={(value) =>
-                              arrangementUpdateRowNotationOptions(row.id, {
-                                notationSpacingPreset: value,
-                              })
-                            }
-                            onSetNotationCustomText={(text) =>
-                              arrangementUpdateRowNotationOptions(row.id, {
-                                notationCustomText: text,
-                              })
-                            }
-                            onSetNotationBarsPerRowOverride={(value) =>
-                              arrangementUpdateRowNotationOptions(row.id, {
-                                notationBarsPerRowOverride: value,
-                              })
+                            disableTransition={
+                              !!activeArrangementSortRowId && arrangementOrderDropTargetId === "__trash__"
                             }
                           />
                         ))}
@@ -13648,6 +15432,7 @@ useEffect(() => {
                 </div>
                 )}
                 {arrangementLibraryTab === "local" && (
+                <>
                 <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-neutral-500">
                   {normalizedArrangementBarLoopSelection ? (
                     <span className="text-neutral-500">
@@ -13665,6 +15450,165 @@ useEffect(() => {
                     ).padStart(2, "0")}`}
                   </span>
                 </div>
+                <div className="mt-auto pt-3">
+                  <div className="border-t border-neutral-800 pt-3">
+                  <div className="flex items-center gap-2">
+                    <select
+                      ref={arrangementPickerSelectRef}
+                      value={arrangementPickerId || arrangementPickerEntry?.id || "__default__"}
+                      onPointerDown={() => {
+                        setArrangementSelection(null);
+                        setArrangementSelectionAnchor(null);
+                        setArrangementBarSelection(null);
+                        setArrangementBarSelectionAnchor(null);
+                      }}
+                      onChange={(e) => {
+                        const nextId = e.target.value || "";
+                        if (nextId === "__default__") {
+                          selectArrangementPickerId(null);
+                          return;
+                        }
+                        selectArrangementPickerId(nextId || null);
+                        const nextEntry = savedArrangements.find((entry) => entry.id === nextId) || null;
+                        if (!nextEntry) {
+                          return;
+                        }
+                        loadSavedArrangement(nextEntry);
+                      }}
+                      className="min-w-0 flex-1 h-7 bg-neutral-900/40 border border-neutral-800 rounded px-2 text-sm text-neutral-400"
+                    >
+                      {sortedSavedArrangements.length === 0 ? (
+                        <option value="__default__">{arrangementDisplayName || "Arrangement"}</option>
+                      ) : (
+                        sortedSavedArrangements.map((entry) => (
+                          <option key={`arr-save-opt-${entry.id}`} value={entry.id}>
+                            {entry.name}
+                          </option>
+                        ))
+                      )}
+                    </select>
+                    <button
+                      ref={arrangementTitleMenuButtonRef}
+                      type="button"
+                      onClick={() => setArrangementTitleMenuOpen((v) => !v)}
+                      className={`inline-flex h-7 min-w-7 items-center justify-center rounded border ${
+                        arrangementTitleMenuOpen
+                          ? "border-neutral-600 text-white bg-neutral-800"
+                          : "border-neutral-800 text-neutral-400 bg-neutral-900/60 hover:bg-neutral-800/60"
+                      }`}
+                      title="Edit score title and author"
+                      aria-label="Edit score title and author"
+                    >
+                      <PencilIcon />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={createNewArrangement}
+                      className="h-7 rounded border border-neutral-800 bg-neutral-900/60 px-2.5 text-sm text-neutral-400 hover:bg-neutral-800/60"
+                      title="Create a new empty arrangement"
+                    >
+                      New
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => saveArrangementSnapshot({ mode: "saveAs" })}
+                      className="h-7 rounded border border-neutral-800 bg-neutral-900/60 px-2.5 text-sm text-neutral-400 hover:bg-neutral-800/60"
+                      title="Save as new arrangement"
+                    >
+                      Save as new
+                    </button>
+                    <BeatLibraryDropTarget id="__trash__">
+                      <button
+                        ref={arrangementTrashTargetRef}
+                        type="button"
+                        onClick={() => {
+                          if (normalizedArrangementSelection) {
+                            arrangementRemoveSelectedRows();
+                            return;
+                          }
+                          const selectedId =
+                            arrangementPickerIdRef.current ||
+                            (arrangementPickerSelectRef.current instanceof HTMLSelectElement
+                              ? arrangementPickerSelectRef.current.value || ""
+                              : "") ||
+                            arrangementPickerEntry?.id ||
+                            "";
+                          const targetEntry =
+                            savedArrangements.find((entry) => String(entry.id) === String(selectedId)) || null;
+                          if (!targetEntry) return;
+                          requestDeleteSavedArrangement(targetEntry);
+                        }}
+                        disabled={!arrangementPickerEntry && !normalizedArrangementSelection}
+                        className={`inline-flex h-7 min-w-7 items-center justify-center rounded border px-2 text-sm ${
+                          activeArrangementSortRowId && arrangementOrderTrashHover
+                            ? "border-red-500/80 bg-red-900/25 text-red-100 shadow-[0_0_0_1px_rgba(239,68,68,0.35)]"
+                            : arrangementPickerEntry || normalizedArrangementSelection
+                              ? "border-neutral-800 text-neutral-500 bg-neutral-900/60 hover:bg-neutral-800/60"
+                              : "border-neutral-800 text-neutral-500 bg-neutral-900/60 cursor-not-allowed"
+                        }`}
+                        aria-label="Delete arrangement"
+                        title={
+                          activeArrangementSortRowId
+                            ? "Drop sections here to delete"
+                            : normalizedArrangementSelection
+                              ? "Delete selected section"
+                              : "Delete arrangement"
+                        }
+                      >
+                        <TrashIcon />
+                      </button>
+                    </BeatLibraryDropTarget>
+                    {arrangementTitleMenuOpen
+                      ? createPortal(
+                          <div
+                            ref={arrangementTitleMenuRef}
+                            className="fixed z-[140] w-72 rounded border border-neutral-700 bg-neutral-900 p-2 shadow-2xl"
+                            style={{
+                              top: `${arrangementTitleMenuPosition.top}px`,
+                              left: `${arrangementTitleMenuPosition.left}px`,
+                            }}
+                            onClick={(e) => e.stopPropagation()}
+                            onMouseDown={(e) => e.stopPropagation()}
+                          >
+                            <label className="flex flex-col gap-1 text-[11px] text-neutral-400">
+                              <span>Title line 1</span>
+                              <input
+                                type="text"
+                                value={arrangementTitleLine1Draft}
+                                onChange={(e) => setArrangementTitleLine1Draft(e.target.value)}
+                                placeholder="Main title"
+                                autoFocus
+                                className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs text-white"
+                              />
+                            </label>
+                            <label className="mt-2 flex flex-col gap-1 text-[11px] text-neutral-400">
+                              <span>Title line 2</span>
+                              <input
+                                type="text"
+                                value={arrangementTitleLine2Draft}
+                                onChange={(e) => setArrangementTitleLine2Draft(e.target.value)}
+                                placeholder="Subtitle"
+                                className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs text-white"
+                              />
+                            </label>
+                            <label className="mt-2 flex flex-col gap-1 text-[11px] text-neutral-400">
+                              <span>Author</span>
+                              <input
+                                type="text"
+                                value={arrangementComposerDraft}
+                                onChange={(e) => setArrangementComposerDraft(e.target.value)}
+                                placeholder="Author / composer"
+                                className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs text-white"
+                              />
+                            </label>
+                          </div>,
+                          document.body
+                        )
+                      : null}
+                  </div>
+                  </div>
+                </div>
+                </>
                 )}
               </div>
               )}
@@ -13677,17 +15621,20 @@ useEffect(() => {
         <div className="fixed inset-0 z-[87] pointer-events-none">
           <div
             ref={arrangementNotationPanelRef}
-            className="w-full max-w-[65rem] max-h-[88vh] overflow-auto rounded-xl border border-neutral-700 bg-neutral-900 px-4 pb-4 pt-0 md:px-5 md:pb-5 md:pt-0 pointer-events-auto shadow-2xl"
+            className="max-h-[88vh] overflow-auto rounded-xl border border-neutral-700 bg-neutral-900 pt-0 pointer-events-auto shadow-2xl"
             style={{
               position: "absolute",
               left: arrangementNotationPos.x,
               top: arrangementNotationPos.y,
+              width: `${arrangementNotationPanelWidth}px`,
+              maxWidth: "calc(100vw - 16px)",
+              paddingBottom: "0px",
             }}
             onMouseDown={(e) =>
               beginFloatingPanelDrag(e, arrangementNotationPanelRef, arrangementNotationDragRef)
             }
           >
-            <div className="sticky top-0 z-10 -mx-4 mb-3 border-b border-neutral-800 bg-neutral-900 px-4 pt-2 pb-1.5 md:-mx-5 md:px-5 md:pt-3">
+            <div className="sticky top-0 z-10 mb-3 border-b border-neutral-800 bg-neutral-900 px-3 pt-2 pb-1.5 md:pt-3">
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-3">
                   <div
@@ -13727,62 +15674,8 @@ useEffect(() => {
                   >
                     {arrangementPlaybackEnabled && playback.isPlaying
                       ? "Stop"
-                      : (normalizedArrangementBarLoopSelection || normalizedArrangementLoopSelection)
-                        ? "Play loop selection"
-                        : "Play"}
+                      : "Play"}
                   </button>
-                  <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
-                    <button
-                      type="button"
-                      onClick={() => setArrangementNotationViewMode("sections")}
-                      className={`px-3 py-1 text-xs ${
-                        arrangementNotationViewMode === "sections"
-                          ? "bg-neutral-700 text-white"
-                          : "text-neutral-300 hover:bg-neutral-700/60"
-                      }`}
-                    >
-                      Sections
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setArrangementNotationViewMode("sheet")}
-                      className={`px-3 py-1 text-xs border-l border-neutral-700 ${
-                        arrangementNotationViewMode === "sheet"
-                          ? "bg-neutral-700 text-white"
-                          : "text-neutral-300 hover:bg-neutral-700/60"
-                      }`}
-                    >
-                      Sheet
-                    </button>
-                  </div>
-                  {arrangementNotationViewMode === "sheet" ? (
-                    <div className="flex items-center gap-2">
-                      <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
-                        <button
-                          type="button"
-                          onClick={() => setArrangementNotationPageMode("continuous")}
-                          className={`px-3 py-1 text-xs ${
-                            arrangementNotationPageMode === "continuous"
-                              ? "bg-neutral-700 text-white"
-                              : "text-neutral-300 hover:bg-neutral-700/60"
-                          }`}
-                        >
-                          Continuous
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setArrangementNotationPageMode("pages")}
-                          className={`px-3 py-1 text-xs border-l border-neutral-700 ${
-                            arrangementNotationPageMode === "pages"
-                              ? "bg-neutral-700 text-white"
-                              : "text-neutral-300 hover:bg-neutral-700/60"
-                          }`}
-                        >
-                          Pages
-                        </button>
-                      </div>
-                    </div>
-                  ) : null}
                 </div>
                 <div className="flex items-center gap-2">
                   <button
@@ -13876,109 +15769,107 @@ useEffect(() => {
                             <span>Render visible pages only</span>
                             <span>{arrangementNotationVirtualize ? "On" : "Off"}</span>
                           </button>
-                        </div>,
-                        document.body
-                      )
-                    : null}
-                  <button
-                    ref={arrangementGlobalSettingsMenuButtonRef}
-                    type="button"
-                    onClick={() => setArrangementGlobalSettingsMenuOpen((v) => !v)}
-                    className={`px-3 py-1 rounded border text-xs ${
-                      arrangementGlobalSettingsMenuOpen
-                        ? "border-neutral-600 text-white bg-neutral-800"
-                        : "border-neutral-700 text-white bg-neutral-800 hover:bg-neutral-700/60"
-                    }`}
-                    title="Open arrangement notation global settings"
-                  >
-                    Global Settings
-                  </button>
-                  {arrangementGlobalSettingsMenuOpen
-                    ? createPortal(
-                        <div
-                          ref={arrangementGlobalSettingsMenuRef}
-                          className="fixed z-[140] w-64 rounded border border-neutral-700 bg-neutral-900 p-2 shadow-2xl"
-                          style={{
-                            top: `${arrangementGlobalSettingsMenuPosition.top}px`,
-                            left: `${arrangementGlobalSettingsMenuPosition.left}px`,
-                          }}
-                          onClick={(e) => e.stopPropagation()}
-                          onMouseDown={(e) => e.stopPropagation()}
-                        >
-                          <div className="flex items-center justify-between rounded px-2 py-2">
-                            <span className="text-xs text-neutral-400">Bars/row</span>
-                            <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  const next =
-                                    arrangementNotationBarsPerRow === 4
-                                      ? 3
-                                      : arrangementNotationBarsPerRow === 3
-                                      ? 2
-                                      : arrangementNotationBarsPerRow === 2
-                                        ? 1
-                                        : 4;
-                                  setArrangementNotationBarsPerRow(next);
-                                }}
-                                className="px-2 text-xs text-neutral-300 hover:bg-neutral-700/60"
-                                aria-label="Previous bars per row"
-                              >
-                                −
-                              </button>
-                              <div className="min-w-[62px] border-l border-r border-neutral-700 px-2 py-1 text-center text-xs text-white">
-                                {arrangementNotationBarsPerRow}
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  const next =
-                                    arrangementNotationBarsPerRow === 1
-                                      ? 2
-                                      : arrangementNotationBarsPerRow === 2
+                          <div className="mt-2 border-t border-neutral-800 pt-2">
+                            <div className="flex items-center justify-between rounded px-2 py-2">
+                              <span className="text-xs text-neutral-400">Bars/row</span>
+                              <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const next =
+                                      arrangementNotationBarsPerRow === 4
                                         ? 3
                                         : arrangementNotationBarsPerRow === 3
-                                          ? 4
-                                          : 1;
-                                  setArrangementNotationBarsPerRow(next);
-                                }}
-                                className="px-2 text-xs text-neutral-300 hover:bg-neutral-700/60"
-                                aria-label="Next bars per row"
-                              >
-                                +
-                              </button>
+                                        ? 2
+                                        : arrangementNotationBarsPerRow === 2
+                                          ? 1
+                                          : 4;
+                                    setArrangementNotationBarsPerRow(next);
+                                  }}
+                                  className="px-2 text-xs text-neutral-300 hover:bg-neutral-700/60"
+                                  aria-label="Previous bars per row"
+                                >
+                                  −
+                                </button>
+                                <div className="min-w-[62px] border-l border-r border-neutral-700 px-2 py-1 text-center text-xs text-white">
+                                  {arrangementNotationBarsPerRow}
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const next =
+                                      arrangementNotationBarsPerRow === 1
+                                        ? 2
+                                        : arrangementNotationBarsPerRow === 2
+                                          ? 3
+                                          : arrangementNotationBarsPerRow === 3
+                                            ? 4
+                                            : 1;
+                                    setArrangementNotationBarsPerRow(next);
+                                  }}
+                                  className="px-2 text-xs text-neutral-300 hover:bg-neutral-700/60"
+                                  aria-label="Next bars per row"
+                                >
+                                  +
+                                </button>
+                              </div>
                             </div>
+                            <button
+                              type="button"
+                              onClick={() => setArrangementNotationDynamicSpacing((v) => !v)}
+                              className={`mt-1 flex w-full items-center justify-between rounded px-2 py-2 text-xs ${
+                                arrangementNotationDynamicSpacing
+                                  ? "bg-neutral-800 text-white"
+                                  : "text-neutral-300 hover:bg-neutral-800/60"
+                              }`}
+                              title="Use content-based bar widths for arrangement notation by default"
+                            >
+                              <span>Dyn. spacing</span>
+                              <span>{arrangementNotationDynamicSpacing ? "On" : "Off"}</span>
+                            </button>
+                            <div className="mt-1 flex items-center justify-between rounded px-2 py-2">
+                              <span className="text-xs text-neutral-400">Scale</span>
+                              <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
+                                <button
+                                  type="button"
+                                  onClick={() => stepArrangementNotationPreviewScale(-1)}
+                                  className="px-2 text-xs text-neutral-300 hover:bg-neutral-700/60"
+                                  aria-label="Decrease arrangement notation preview scale"
+                                >
+                                  −
+                                </button>
+                                <div className="min-w-[64px] border-l border-r border-neutral-700 px-2 py-1 text-center text-xs text-white">
+                                  {`${Math.round(arrangementNotationPreviewScale * 100)}%`}
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => stepArrangementNotationPreviewScale(1)}
+                                  className="px-2 text-xs text-neutral-300 hover:bg-neutral-700/60"
+                                  aria-label="Increase arrangement notation preview scale"
+                                >
+                                  +
+                                </button>
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setIsArrangementPrintDialogOpen(true)}
+                              disabled={arrangementNotationPages.length < 1}
+                              className={`mt-1 flex w-full items-center justify-between rounded px-2 py-2 text-xs ${
+                                arrangementNotationPages.length > 0
+                                  ? "text-neutral-300 hover:bg-neutral-800/60"
+                                  : "text-neutral-500 cursor-not-allowed"
+                              }`}
+                              title="Download arrangement sheet as A4 PDF"
+                            >
+                              <span>PDF export</span>
+                              <span>{arrangementNotationPages.length > 0 ? "Open" : "Off"}</span>
+                            </button>
                           </div>
-                          <button
-                            type="button"
-                            onClick={() => setArrangementNotationDynamicSpacing((v) => !v)}
-                            className={`mt-1 flex w-full items-center justify-between rounded px-2 py-2 text-xs ${
-                              arrangementNotationDynamicSpacing
-                                ? "bg-neutral-800 text-white"
-                                : "text-neutral-300 hover:bg-neutral-800/60"
-                            }`}
-                            title="Use content-based bar widths for arrangement notation by default"
-                          >
-                            <span>Dyn. spacing</span>
-                            <span>{arrangementNotationDynamicSpacing ? "On" : "Off"}</span>
-                          </button>
                         </div>,
                         document.body
                       )
                     : null}
-                  <button
-                    type="button"
-                    onClick={() => setIsArrangementPrintDialogOpen(true)}
-                    disabled={arrangementNotationPages.length < 1}
-                    className={`px-3 py-1 rounded border text-sm ${
-                      arrangementNotationPages.length > 0
-                        ? "border-neutral-700 text-white bg-neutral-800 hover:bg-neutral-700/60"
-                        : "border-neutral-800 text-neutral-500 bg-neutral-900/60 cursor-not-allowed"
-                    }`}
-                    title="Download arrangement sheet as A4 PDF"
-                  >
-                    PDF
-                  </button>
                   <button
                     type="button"
                     onClick={() => setIsArrangementNotationOpen(false)}
@@ -13993,290 +15884,87 @@ useEffect(() => {
             </div>
 
             <div
-              className={
-                arrangementNotationViewMode === "sheet" && arrangementNotationPageMode === "pages"
-                  ? "w-full max-w-none overflow-visible p-0"
-                  : `w-full max-w-none aspect-[210/297] rounded overflow-visible p-3 ${
-                      arrangementNotationTheme === "light"
-                        ? "border border-neutral-300 bg-white"
-                        : "border border-neutral-800 bg-neutral-950/40"
-                    }`
-              }
+              className="w-full overflow-visible"
+              style={{
+                marginTop: `${arrangementNotationTopGap}px`,
+              }}
             >
-              {!(arrangementNotationViewMode === "sheet" && arrangementNotationPageMode === "pages") && (
-                <div className="mb-4 grid grid-cols-[12rem_minmax(0,1fr)_12rem] items-start gap-4">
-                  <div />
-                  <div className="min-w-0 text-center" style={{ fontFamily: '"Liberation Serif", serif' }}>
-                    <div className={`text-[2.85rem] font-normal leading-tight ${
-                      arrangementNotationTheme === "light" ? "text-neutral-900" : "text-neutral-100"
-                    }`}>
-                      {arrangementTitleLine1Draft.trim() || arrangementDisplayName || "Arrangement"}
-                    </div>
-                    {arrangementTitleLine2Draft.trim() ? (
-                      <div className={`mt-1 text-[2.85rem] font-normal leading-tight ${
-                        arrangementNotationTheme === "light" ? "text-neutral-900" : "text-neutral-200"
-                      }`}>
-                        {arrangementTitleLine2Draft.trim()}
-                      </div>
-                    ) : null}
+              <div
+                className="mx-auto overflow-visible"
+                style={{
+                  width: `${794 * arrangementNotationPreviewScale}px`,
+                  height: arrangementNotationPreviewScaledHeight > 0
+                    ? `${arrangementNotationPreviewScaledHeight}px`
+                    : undefined,
+                }}
+              >
+                <div
+                  ref={arrangementNotationPreviewInnerRef}
+                  className="max-w-none overflow-visible p-0"
+                  style={{
+                    width: "794px",
+                    transform: `scale(${arrangementNotationPreviewScale})`,
+                    transformOrigin: "top left",
+                  }}
+                >
+              <div ref={arrangementNotationVisiblePagesRef} className="space-y-6">
+                {arrangementNotationPages.map((page, pageIdx) =>
+                  renderArrangementNotationPage(page, pageIdx, {
+                    dark: arrangementNotationTheme !== "light",
+                    exportMode: false,
+                    includePageNumber: false,
+                    pageRef: (node) => {
+                      arrangementNotationPageRefs.current[pageIdx] = node;
+                    },
+                    shouldRenderNotation:
+                      !arrangementNotationVirtualize || arrangementVisiblePageSet.has(pageIdx),
+                  })
+                )}
+                {arrangementNotationPages.length < 1 && (
+                  <div className="text-xs text-neutral-500">
+                    No arrangement notation to render.
                   </div>
-                  <div
-                    className={`pt-1 text-right text-sm ${
-                      arrangementNotationTheme === "light" ? "text-neutral-700" : "text-neutral-300"
-                    }`}
-                    style={{ fontFamily: '"Liberation Serif", serif' }}
-                  >
-                    {arrangementComposerDraft.trim() || ""}
-                  </div>
-                </div>
-              )}
-              {arrangementNotationViewMode === "sections" ? (
-                <div className="space-y-4">
-                  {arrangementNotationSections.map((section) => (
-                    <div
-                      key={`arr-notation-${section.id}`}
-                      className="w-full"
-                      data-arr-notation-row-target="1"
-                      data-arr-notation-start={section.startBarOffset || 0}
-                      data-arr-notation-end={(section.startBarOffset || 0) + section.sectionBars}
-                    >
-                      <div className={`mb-2 text-xs ${
-                        arrangementNotationTheme === "light" ? "text-neutral-700" : "text-neutral-300"
-                      }`}>
-                        {`${section.index + 1}. ${section.name} · ${section.sectionBars} ${section.sectionBars === 1 ? "bar" : "bars"} (${section.repeats}x ${section.beatBars} ${section.beatBars === 1 ? "bar" : "bars"}) · ${section.beatTimeSig}` +
-                          (Number.isFinite(section.beatBpm) ? ` · ${section.beatBpm} BPM` : "")}
-                      </div>
-                      <div className="flex justify-center">
-                        <Notation
-                          instruments={section.notation.instruments}
-                          grid={section.notation.grid}
-                          stickingAssignmentsByStep={section.stickingAssignments || []}
-                          showNotationSticking={showNotationSticking}
-                          notationStickingView={notationStickingView}
-                          resolution={section.notation.resolution}
-                          bars={section.notation.bars}
-                          barsPerLine={section.barsPerLine || 4}
-                          barsPerRow={section.barsPerRow || null}
-                          stepsPerBar={Math.max(
-                            1,
-                            Number(
-                              (section.notation.barStepOffsets?.[1] ?? 0) -
-                                (section.notation.barStepOffsets?.[0] ?? 0)
-                            ) || section.notation.resolution
-                          )}
-                          timeSig={section.notation.timeSig}
-                          quarterSubdivisionsByBar={section.notation.quarterSubdivisionsByBar}
-                          barStepOffsets={section.notation.barStepOffsets}
-                          mergeRests={mergeRests}
-                          mergeNotes={mergeNotes}
-                          dottedNotes={dottedNotes}
-                          flatBeams={flatBeams}
-                          justifySystems={true}
-                          targetContentWidth={770}
-                          sectionMarkers={section.sectionMarkers || []}
-                tempoMarkers={section.tempoMarkers || []}
-                          dynamicSpacingByBar={
-                            section.notationDynamicSpacing ? Array.from({ length: section.notation.bars }, () => true) : null
-                          }
-                          spacingPresetByBar={Array.from({ length: section.notation.bars }, () => section.notationSpacingPreset || "normal")}
-                          showSystemBarNumbers={true}
-                          barNumberOffset={section.startBarOffset || 0}
-                          enableMeasureRepeats={true}
-                          theme={arrangementNotationTheme}
-                          selectedBarIndices={
-                            normalizedArrangementBarSelection
-                              ? Array.from({ length: Math.max(1, Number(section.sectionBars) || 0) }, (_, idx) => idx)
-                                  .filter((idx) => {
-                                    const globalBar = (section.startBarOffset || 0) + idx;
-                                    return (
-                                      globalBar >= normalizedArrangementBarSelection.start &&
-                                      globalBar <= normalizedArrangementBarSelection.end
-                                    );
-                                  })
-                              : []
-                          }
-                          onBarClick={(localBarIndex, event) =>
-                            (event?.pointerType && event.pointerType !== "mouse")
-                              ? handleArrangementNotationBarTouchSelect(
-                                  (section.startBarOffset || 0) + localBarIndex,
-                                  event.pointerId
-                                )
-                                : handleArrangementNotationBarSelect(
-                                    (section.startBarOffset || 0) + localBarIndex,
-                                    !!event?.shiftKey
-                                  )
-                          }
-                          onBarMenuOpen={(localBarIndex, event) =>
-                            openArrangementNotationRowMenuAtBar(
-                              (section.startBarOffset || 0) + localBarIndex,
-                              event.clientX,
-                              event.clientY
-                            )
-                          }
-                          activeBarIndices={
-                            activeArrangementGlobalBarIndex >= section.startBarOffset &&
-                            activeArrangementGlobalBarIndex < section.startBarOffset + section.sectionBars
-                              ? [activeArrangementGlobalBarIndex - section.startBarOffset]
-                              : []
-                          }
-                        />
-                      </div>
-                    </div>
-                  ))}
-                  {arrangementNotationSections.length < 1 && (
-                    <div className="text-xs text-neutral-500">
-                      No arrangement sections with notation yet.
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <>
-                  {arrangementNotationPageMode === "continuous" ? (
-                    <div className="space-y-3">
-                      {arrangementNotationBlocks.map((chunk, chunkIdx) => (
-                        <div
-                          key={`arr-sheet-${chunkIdx}`}
-                          className="w-full flex justify-center"
-                          data-arr-notation-row-target="1"
-                          data-arr-notation-start={chunk.startBarOffset || 0}
-                          data-arr-notation-end={(chunk.startBarOffset || 0) + chunk.bars}
-                        >
-                          <Notation
-                            instruments={chunk.instruments}
-                            grid={chunk.grid}
-                            stickingAssignmentsByStep={chunk.stickingAssignments || []}
-                            showNotationSticking={showNotationSticking}
-                            notationStickingView={notationStickingView}
-                            resolution={chunk.resolution}
-                            bars={chunk.bars}
-                            barsPerLine={chunk.barsPerLine || 4}
-                            barsPerRow={chunk.barsPerRow || null}
-                            stepsPerBar={Math.max(
-                              1,
-                              Number((chunk.barStepOffsets?.[1] ?? 0) - (chunk.barStepOffsets?.[0] ?? 0)) || chunk.resolution
-                            )}
-                            timeSig={chunk.timeSig}
-                            quarterSubdivisionsByBar={chunk.quarterSubdivisionsByBar}
-                            barStepOffsets={chunk.barStepOffsets}
-                            mergeRests={mergeRests}
-                            mergeNotes={mergeNotes}
-                            dottedNotes={dottedNotes}
-                            flatBeams={flatBeams}
-                            justifySystems={true}
-                            targetContentWidth={770}
-                            sectionMarkers={chunk.sectionMarkers || []}
-                            tempoMarkers={chunk.tempoMarkers || []}
-                            dynamicSpacingByBar={chunk.dynamicSpacingByBar || null}
-                            spacingPresetByBar={chunk.spacingPresetByBar || null}
-                            showSystemBarNumbers={true}
-                            barNumberOffset={chunk.startBarOffset || 0}
-                            enableMeasureRepeats={true}
-                            theme={arrangementNotationTheme}
-                            selectedBarIndices={
-                              normalizedArrangementBarSelection
-                                ? Array.from({ length: Math.max(1, Number(chunk.bars) || 0) }, (_, idx) => idx)
-                                    .filter((idx) => {
-                                      const globalBar = (chunk.startBarOffset || 0) + idx;
-                                      return (
-                                        globalBar >= normalizedArrangementBarSelection.start &&
-                                        globalBar <= normalizedArrangementBarSelection.end
-                                      );
-                                    })
-                                : []
-                            }
-                            onBarClick={(localBarIndex, event) =>
-                              (event?.pointerType && event.pointerType !== "mouse")
-                                ? handleArrangementNotationBarTouchSelect(
-                                    (chunk.startBarOffset || 0) + localBarIndex,
-                                    event.pointerId
-                                  )
-                                  : handleArrangementNotationBarSelect(
-                                      (chunk.startBarOffset || 0) + localBarIndex,
-                                      !!event?.shiftKey
-                                    )
-                            }
-                            onBarMenuOpen={(localBarIndex, event) =>
-                              openArrangementNotationRowMenuAtBar(
-                                (chunk.startBarOffset || 0) + localBarIndex,
-                                event.clientX,
-                                event.clientY
-                              )
-                            }
-                            activeBarIndices={
-                              activeArrangementGlobalBarIndex >= chunk.startBarOffset &&
-                              activeArrangementGlobalBarIndex < chunk.startBarOffset + chunk.bars
-                                ? [activeArrangementGlobalBarIndex - chunk.startBarOffset]
-                                : []
-                            }
-                          />
-                        </div>
-                      ))}
-                      {arrangementNotationBlocks.length < 1 && (
-                        <div className="text-xs text-neutral-500">
-                          No arrangement notation to render.
-                        </div>
-                      )}
-                    </div>
-                  ) : (
-                    <div ref={arrangementNotationVisiblePagesRef} className="space-y-6">
-                      {arrangementNotationPages.map((page, pageIdx) =>
-                        renderArrangementNotationPage(page, pageIdx, {
-                          dark: arrangementNotationTheme !== "light",
-                          exportMode: false,
-                          includePageNumber: false,
-                          pageRef: (node) => {
-                            arrangementNotationPageRefs.current[pageIdx] = node;
-                          },
-                          shouldRenderNotation:
-                            !arrangementNotationVirtualize || arrangementVisiblePageSet.has(pageIdx),
+                )}
+              </div>
+              {arrangementNotationRowMenuState && arrangementRows[arrangementNotationRowMenuState.rowIndex]
+                ? createPortal(
+                    <ArrangementRowNotationMenu
+                      row={arrangementRows[arrangementNotationRowMenuState.rowIndex]}
+                      position={arrangementNotationRowMenuState.position}
+                      globalNotationBarsPerRow={arrangementNotationBarsPerRow}
+                      globalNotationDynamicSpacing={arrangementNotationDynamicSpacing}
+                      onClose={() => setArrangementNotationRowMenuState(null)}
+                      onToggleNotationBeatName={() =>
+                        arrangementUpdateRowNotationOptions(arrangementRows[arrangementNotationRowMenuState.rowIndex].id, {
+                          showNotationBeatName: !arrangementRows[arrangementNotationRowMenuState.rowIndex].showNotationBeatName,
                         })
-                      )}
-                      {arrangementNotationPages.length < 1 && (
-                        <div className="text-xs text-neutral-500">
-                          No arrangement notation to render.
-                        </div>
-                      )}
-                    </div>
-                  )}
-                  {arrangementNotationRowMenuState && arrangementRows[arrangementNotationRowMenuState.rowIndex]
-                    ? createPortal(
-                        <ArrangementRowNotationMenu
-                          row={arrangementRows[arrangementNotationRowMenuState.rowIndex]}
-                          position={arrangementNotationRowMenuState.position}
-                          globalNotationBarsPerRow={arrangementNotationBarsPerRow}
-                          globalNotationDynamicSpacing={arrangementNotationDynamicSpacing}
-                          onClose={() => setArrangementNotationRowMenuState(null)}
-                          onToggleNotationBeatName={() =>
-                            arrangementUpdateRowNotationOptions(arrangementRows[arrangementNotationRowMenuState.rowIndex].id, {
-                              showNotationBeatName: !arrangementRows[arrangementNotationRowMenuState.rowIndex].showNotationBeatName,
-                            })
-                          }
-                          onSetNotationDynamicSpacing={(value) =>
-                            arrangementUpdateRowNotationOptions(arrangementRows[arrangementNotationRowMenuState.rowIndex].id, {
-                              notationDynamicSpacing: value,
-                            })
-                          }
-                          onSetNotationSpacingPreset={(value) =>
-                            arrangementUpdateRowNotationOptions(arrangementRows[arrangementNotationRowMenuState.rowIndex].id, {
-                              notationSpacingPreset: value,
-                            })
-                          }
-                          onSetNotationCustomText={(text) =>
-                            arrangementUpdateRowNotationOptions(arrangementRows[arrangementNotationRowMenuState.rowIndex].id, {
-                              notationCustomText: text,
-                            })
-                          }
-                          onSetNotationBarsPerRowOverride={(value) =>
-                            arrangementUpdateRowNotationOptions(arrangementRows[arrangementNotationRowMenuState.rowIndex].id, {
-                              notationBarsPerRowOverride: value,
-                            })
-                          }
-                        />,
-                        document.body
-                      )
-                    : null}
-                </>
-              )}
+                      }
+                      onSetNotationDynamicSpacing={(value) =>
+                        arrangementUpdateRowNotationOptions(arrangementRows[arrangementNotationRowMenuState.rowIndex].id, {
+                          notationDynamicSpacing: value,
+                        })
+                      }
+                      onSetNotationSpacingPreset={(value) =>
+                        arrangementUpdateRowNotationOptions(arrangementRows[arrangementNotationRowMenuState.rowIndex].id, {
+                          notationSpacingPreset: value,
+                        })
+                      }
+                      onSetNotationCustomText={(text) =>
+                        arrangementUpdateRowNotationOptions(arrangementRows[arrangementNotationRowMenuState.rowIndex].id, {
+                          notationCustomText: text,
+                        })
+                      }
+                      onSetNotationBarsPerRowOverride={(value) =>
+                        arrangementUpdateRowNotationOptions(arrangementRows[arrangementNotationRowMenuState.rowIndex].id, {
+                          notationBarsPerRowOverride: value,
+                        })
+                      }
+                    />,
+                    document.body
+                  )
+                : null}
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -14702,6 +16390,17 @@ useEffect(() => {
                   type="button"
                   onClick={() => {
                     setIsShareActionsDialogOpen(false);
+                    setIsNotationPngDialogOpen(true);
+                  }}
+                  className="rounded border border-neutral-700 px-3 py-2 text-left text-sm text-neutral-200 hover:bg-neutral-800/60"
+                  title="Export beat notation as transparent PNG"
+                >
+                  PNG
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsShareActionsDialogOpen(false);
                     setMidiExportMode("beat");
                     setIsMidiDialogOpen(true);
                   }}
@@ -14878,6 +16577,64 @@ useEffect(() => {
                 className="px-3 py-1.5 rounded border border-neutral-700 text-sm text-white bg-neutral-800 hover:bg-neutral-700/60"
               >
                 Print
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isNotationPngDialogOpen && (
+        <div
+          className="fixed inset-0 z-[90] bg-black/60 p-4 flex items-center justify-center"
+          onMouseDown={() => setIsNotationPngDialogOpen(false)}
+        >
+          <div
+            className="w-full max-w-sm rounded-xl border border-neutral-700 bg-neutral-900 p-4 md:p-5"
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-base font-semibold">Export PNG</h3>
+            <p className="mt-2 text-sm text-neutral-400">
+              Exports notation only on a transparent background. Title, composer, watermark, and QR are omitted.
+            </p>
+            <div className="mt-4 flex items-center gap-2">
+              <span className="text-sm text-neutral-300">Notation color</span>
+              <button
+                type="button"
+                onClick={() => setNotationPngColor("black")}
+                className={`px-3 py-1.5 rounded border text-sm ${
+                  notationPngColor === "black"
+                    ? "border-neutral-700 text-white bg-neutral-800"
+                    : "border-neutral-800 text-neutral-500 bg-neutral-900/60 hover:bg-neutral-800/40"
+                }`}
+              >
+                Black
+              </button>
+              <button
+                type="button"
+                onClick={() => setNotationPngColor("white")}
+                className={`px-3 py-1.5 rounded border text-sm ${
+                  notationPngColor === "white"
+                    ? "border-neutral-700 text-white bg-neutral-800"
+                    : "border-neutral-800 text-neutral-500 bg-neutral-900/60 hover:bg-neutral-800/40"
+                }`}
+              >
+                White
+              </button>
+            </div>
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setIsNotationPngDialogOpen(false)}
+                className="px-3 py-1.5 rounded border border-neutral-700 text-sm text-neutral-300 hover:bg-neutral-800/60"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleBeatPngExport}
+                className="px-3 py-1.5 rounded border border-neutral-700 text-sm text-white bg-neutral-800 hover:bg-neutral-700/60"
+              >
+                Export
               </button>
             </div>
           </div>
@@ -15623,7 +17380,7 @@ useEffect(() => {
           >
             <h3 className="text-base font-semibold">Delete Arrangement</h3>
             <p className="mt-2 text-sm text-neutral-300">
-              {`"${pendingArrangementDeleteEntry.name || "Untitled Arrangement"}" contains beats. Delete it anyway?`}
+              {`Delete "${pendingArrangementDeleteEntry.name || "Untitled Arrangement"}"?`}
             </p>
             <div className="mt-4 flex items-center justify-end gap-2">
               <button
@@ -15893,7 +17650,7 @@ useEffect(() => {
                 ×
               </button>
             </div>
-            <div className="mt-4 grid grid-cols-[8.5rem_minmax(0,1fr)] gap-0 rounded border border-neutral-700 overflow-hidden">
+            <div className="mt-4 grid min-h-[24rem] grid-cols-[8.5rem_minmax(0,1fr)] gap-0 rounded border border-neutral-700 overflow-hidden">
               <aside className="bg-neutral-950/40">
                 <div className="flex flex-col">
                   {[
@@ -15901,7 +17658,6 @@ useEffect(() => {
                     { id: "timing", label: "Drum Grid" },
                     { id: "notation", label: "Notation" },
                     { id: "editor", label: "Editing" },
-                    { id: "library", label: "Library" },
                     { id: "playback", label: "Playback" },
                     { id: "appearance", label: "Appearance" },
                   ].map((cat) => (
@@ -15920,7 +17676,7 @@ useEffect(() => {
                   ))}
                 </div>
               </aside>
-              <section className="bg-neutral-900 p-3">
+              <section className="h-full bg-neutral-900 p-3">
                 {preferencesCategory === "defaults" ? (
                   <>
                     <div className="flex items-center justify-between gap-2">
@@ -15994,60 +17750,6 @@ useEffect(() => {
                   </>
                 ) : preferencesCategory === "playback" ? (
                   <>
-                    <div className="flex items-center gap-2">
-                      <div className="text-sm font-normal text-neutral-200">Playback speed</div>
-                    </div>
-                    <div className="mt-2 flex flex-wrap items-center gap-2">
-                      {[
-                        { value: 0.5, label: "x0.5" },
-                        { value: 1, label: "x1" },
-                        { value: 1.5, label: "x1.5" },
-                        { value: 2, label: "x2" },
-                      ].map((preset) => (
-                        <button
-                          key={`playback-rate-${preset.value}`}
-                          type="button"
-                          onClick={() => setPlaybackRate(clampPlaybackRate(preset.value))}
-                          className={`px-2 py-1 rounded border text-xs ${
-                            Math.abs(playbackRate - preset.value) < 0.001
-                              ? "border-neutral-700 text-white bg-neutral-800"
-                              : "border-neutral-800 text-neutral-400 bg-neutral-900/60 hover:bg-neutral-800/40"
-                          }`}
-                        >
-                          {preset.label}
-                        </button>
-                      ))}
-                      <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
-                        <button
-                          type="button"
-                          onClick={() => setPlaybackRate((prev) => clampPlaybackRate(prev - 0.05))}
-                          className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                          aria-label="Decrease playback speed"
-                        >
-                          −
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setPlaybackRate((prev) => (Math.abs(prev - 1) < 0.001 ? prev : 1))}
-                          className="min-w-[72px] px-2 py-1 text-center text-sm text-white border-l border-r border-neutral-700 bg-neutral-800 tabular-nums hover:bg-neutral-700/40"
-                          title="Reset playback speed to x1"
-                        >
-                          {playbackRateLabel}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setPlaybackRate((prev) => clampPlaybackRate(prev + 0.05))}
-                          className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                          aria-label="Increase playback speed"
-                        >
-                          +
-                        </button>
-                      </div>
-                      <div className="text-[11px] text-neutral-500 tabular-nums">
-                        Current: {Math.round(effectivePlaybackBpm)} BPM
-                      </div>
-                    </div>
-                    <div className="my-3 border-t border-neutral-800" />
                     <div className="flex items-center gap-2">
                       <div className="text-sm font-normal text-neutral-200">Arrangement timing</div>
                     </div>
@@ -16126,7 +17828,7 @@ useEffect(() => {
                     </div>
                     <div className="mt-2 flex flex-wrap items-center gap-3">
                       <span className="text-sm text-neutral-300">Selection hold</span>
-                      <div className="flex min-w-[220px] items-center gap-3 rounded-md border border-neutral-700 bg-neutral-800 px-3 py-2">
+                      <div className="flex min-w-[180px] items-center gap-2 px-0 py-0">
                         <input
                           type="range"
                           min={130}
@@ -16138,9 +17840,10 @@ useEffect(() => {
                               Math.max(130, Math.min(800, Math.round(Number(e.target.value) || 130)))
                             )
                           }
-                          className="w-40 accent-neutral-300"
+                          className="w-28 accent-neutral-700 opacity-80"
+                          style={{ accentColor: "#3f3f46" }}
                         />
-                        <span className="min-w-[56px] text-right text-sm text-white tabular-nums">
+                        <span className="min-w-[48px] text-right text-xs text-neutral-500 tabular-nums">
                           {`${gridSelectionHoldDelayMs}ms`}
                         </span>
                       </div>
@@ -16279,13 +17982,13 @@ useEffect(() => {
                           setNotationStickingView((v) => (v === "stacked" ? "split-rows" : "stacked"))
                         }
                         className={`touch-none select-none px-3 py-[5px] rounded border text-sm ${
-                          showNotationSticking
+                          notationStickingView === "split-rows"
                             ? "bg-neutral-800 border-neutral-700 text-white"
                             : "bg-neutral-900 border-neutral-800 text-neutral-600"
                         }`}
                         title="Change sticking display"
                       >
-                        {notationStickingView === "stacked" ? "Stacked" : "Split rows"}
+                        Split rows
                       </button>
                     </div>
                     <div className="my-3 border-t border-neutral-800" />
@@ -16348,32 +18051,6 @@ useEffect(() => {
                 ) : preferencesCategory === "editor" ? (
                   <>
                     <div className="flex items-center justify-between gap-2">
-                      <div className="text-sm font-normal text-neutral-200">Selection Mode</div>
-                    </div>
-                    <div className="mt-2 flex flex-wrap items-center gap-2">
-                      <label className="inline-flex items-center gap-2 text-xs text-neutral-300 select-none">
-                        <input
-                          type="checkbox"
-                          checked={legacySelectionEnabled}
-                          onChange={(e) => setLegacySelectionEnabled(e.target.checked)}
-                          className="h-3.5 w-3.5 rounded border-neutral-700 bg-neutral-800"
-                        />
-                        Legacy selection
-                      </label>
-                      <button
-                        type="button"
-                        onClick={() => setMoveModeDebugEnabled((v) => !v)}
-                        className={`px-2 py-1 rounded border text-xs ${
-                          moveModeDebugEnabled
-                            ? "border-amber-500/70 text-amber-200 bg-amber-500/10"
-                            : "border-neutral-700 text-neutral-400 hover:bg-neutral-800/50"
-                        }`}
-                      >
-                        Move mode debug
-                      </button>
-                    </div>
-                    <div className="my-3 border-t border-neutral-800" />
-                    <div className="flex items-center justify-between gap-2">
                       <div className="text-sm font-normal text-neutral-200">Move Mode</div>
                     </div>
                     <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -16408,59 +18085,7 @@ useEffect(() => {
                     </div>
                   </>
                 ) : preferencesCategory === "library" ? (
-                  <>
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="text-sm font-normal text-neutral-200">MIDI import</div>
-                    </div>
-                    <div className="mt-2 space-y-3">
-                      {[
-                        {
-                          label: "Snare",
-                          familyKey: "snare",
-                          value: midiImportSnareGhostMax,
-                          setValue: setMidiImportSnareGhostMax,
-                        },
-                        {
-                          label: "Toms",
-                          familyKey: "toms",
-                          value: midiImportTomGhostMax,
-                          setValue: setMidiImportTomGhostMax,
-                        },
-                        {
-                          label: "Hi-hat",
-                          familyKey: "hihat",
-                          value: midiImportHihatGhostMax,
-                          setValue: setMidiImportHihatGhostMax,
-                        },
-                      ].map((item) => (
-                        <label key={`midi-threshold-${item.label}`} className="flex flex-col gap-1">
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="text-sm text-neutral-300">{item.label}</span>
-                            <span className="text-xs text-neutral-500 tabular-nums">
-                              {(() => {
-                                const range = pendingMidiImportVelocityRanges?.[item.familyKey];
-                                const rangeText = range
-                                  ? ` · MIDI ${Math.round(range.min)}-${Math.round(range.max)}`
-                                  : "";
-                                return `Ghost <= ${item.value} · Normal > ${item.value}${rangeText}`;
-                              })()}
-                            </span>
-                          </div>
-                          <input
-                            type="range"
-                            min={1}
-                            max={126}
-                            step={1}
-                            value={item.value}
-                            onChange={(e) =>
-                              item.setValue(Math.max(1, Math.min(126, Number(e.target.value) || 70)))
-                            }
-                            className="w-full accent-neutral-300"
-                          />
-                        </label>
-                      ))}
-                    </div>
-                  </>
+                  <></>
                 ) : preferencesCategory === "appearance" ? (
                   <>
                     <div className="flex items-center justify-between gap-2">
@@ -16692,58 +18317,28 @@ function SortableKitOrderRow({
 function SortableArrangementRow({
   row,
   index,
-  globalNotationBarsPerRow,
-  globalNotationDynamicSpacing,
   isPlaying,
   isSelected,
   onSelect,
-  onPlay,
-  onLoad,
   dropPosition,
   onExternalDragOver,
   onExternalDrop,
   onRepeatDown,
   onRepeatUp,
-  onRemove,
-  onToggleNotationBeatName,
-  onSetNotationDynamicSpacing,
-  onSetNotationSpacingPreset,
-  onSetNotationCustomText,
-  onSetNotationBarsPerRowOverride,
   onTouchSelect,
+  disableTransition = false,
 }) {
-  const [isMenuOpen, setIsMenuOpen] = React.useState(false);
-  const [menuPosition, setMenuPosition] = React.useState({ top: 0, left: 0 });
   const rootRef = React.useRef(null);
-  const menuButtonRef = React.useRef(null);
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: row.id,
   });
   const verticalTransform = transform ? { ...transform, x: 0 } : null;
   const style = {
     transform: CSS.Transform.toString(verticalTransform),
-    transition,
+    transition: disableTransition ? undefined : transition,
   };
-  React.useEffect(() => {
-    if (!isMenuOpen) return undefined;
-    const updateMenuPosition = () => {
-      const button = menuButtonRef.current;
-      if (!(button instanceof HTMLElement)) return;
-      const rect = button.getBoundingClientRect();
-      const menuWidth = 224;
-      const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
-      const left = Math.max(8, Math.min(rect.right - menuWidth, viewportWidth - menuWidth - 8));
-      const top = Math.max(8, rect.top - 4);
-      setMenuPosition({ top, left });
-    };
-    updateMenuPosition();
-    window.addEventListener("resize", updateMenuPosition);
-    window.addEventListener("scroll", updateMenuPosition, true);
-    return () => {
-      window.removeEventListener("resize", updateMenuPosition);
-      window.removeEventListener("scroll", updateMenuPosition, true);
-    };
-  }, [isMenuOpen]);
+  const sortablePointerDown = listeners?.onPointerDown;
+  const sortableKeyDown = listeners?.onKeyDown;
   return (
     <div
       ref={(node) => {
@@ -16752,12 +18347,19 @@ function SortableArrangementRow({
       }}
       data-arrangement-row-index={index}
       style={style}
+      {...attributes}
       onClick={(e) => onSelect?.(e)}
       onPointerDown={(e) => {
-        if (e.pointerType === "mouse") return;
+        if (e.pointerType === "mouse") {
+          sortablePointerDown?.(e);
+          return;
+        }
         e.preventDefault();
         e.stopPropagation();
         onTouchSelect?.(index, e.pointerId);
+      }}
+      onKeyDown={(e) => {
+        sortableKeyDown?.(e);
       }}
       onDragOver={onExternalDragOver}
       onDrop={onExternalDrop}
@@ -16769,7 +18371,7 @@ function SortableArrangementRow({
             : isDragging
               ? "border-cyan-700/70 bg-cyan-950/20"
               : "border-neutral-800 bg-neutral-900/40"
-      }`}
+      } cursor-grab active:cursor-grabbing`}
     >
       {dropPosition === "before" ? (
         <div className="-mt-1.5 mb-1.5 h-0.5 rounded bg-cyan-400/90" />
@@ -16785,120 +18387,35 @@ function SortableArrangementRow({
           </div>
         </div>
         <div className="flex items-center gap-1">
-          <div className="relative">
-            <button
-              ref={menuButtonRef}
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                setIsMenuOpen((v) => !v);
-              }}
-              className="px-2 py-1 rounded border border-neutral-700 text-xs text-neutral-300 hover:bg-neutral-700/60"
-              title="Row options"
-              aria-label="Row options"
-            >
-              ...
-            </button>
-            {isMenuOpen
-              ? createPortal(
-                  <ArrangementRowNotationMenu
-                    row={row}
-                    position={menuPosition}
-                    globalNotationBarsPerRow={globalNotationBarsPerRow}
-                    globalNotationDynamicSpacing={globalNotationDynamicSpacing}
-                    onClose={() => setIsMenuOpen(false)}
-                    onToggleNotationBeatName={onToggleNotationBeatName}
-                    onSetNotationDynamicSpacing={onSetNotationDynamicSpacing}
-                    onSetNotationSpacingPreset={onSetNotationSpacingPreset}
-                    onSetNotationCustomText={onSetNotationCustomText}
-                    onSetNotationBarsPerRowOverride={onSetNotationBarsPerRowOverride}
-                  />,
-                  document.body
-                )
-              : null}
-          </div>
-          <button
-            type="button"
-            {...attributes}
-            {...listeners}
-            onClick={(e) => e.stopPropagation()}
-            className="px-2 py-1 rounded border border-neutral-700 text-xs text-neutral-300 hover:bg-neutral-700/60 cursor-grab active:cursor-grabbing"
-            title="Drag to reorder"
-            aria-label="Drag to reorder"
-          >
-            ⋮⋮
-          </button>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onPlay?.();
-            }}
-            disabled={!row.beat?.payload}
-            className={`px-2 py-1 rounded border text-xs ${
-              row.beat?.payload
-                ? "border-neutral-700 text-neutral-100 hover:bg-neutral-700/60"
-                : "border-neutral-800 text-neutral-500 cursor-not-allowed"
-            }`}
-            title="Play section in editor"
-          >
-            Play
-          </button>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onLoad?.();
-            }}
-            disabled={!row.beat?.payload}
-            className={`px-2 py-1 rounded border text-xs ${
-              row.beat?.payload
-                ? "border-neutral-700 text-neutral-100 hover:bg-neutral-700/60"
-                : "border-neutral-800 text-neutral-500 cursor-not-allowed"
-            }`}
-            title="Load beat in editor"
-          >
-            Load
-          </button>
-          <div className="flex items-stretch overflow-hidden rounded border border-neutral-700 bg-neutral-800">
+          <div className="flex items-stretch overflow-hidden rounded border border-neutral-800 bg-neutral-900/60">
             <button
               type="button"
+              onPointerDown={(e) => e.stopPropagation()}
               onClick={(e) => {
                 e.stopPropagation();
                 onRepeatDown?.();
               }}
-              className="px-2 text-xs text-neutral-300 hover:bg-neutral-700/60"
+              className="px-2 text-xs text-neutral-400 hover:bg-neutral-800/60"
               aria-label="Decrease repeats"
             >
               −
             </button>
-            <div className="min-w-[44px] border-l border-r border-neutral-700 px-2 py-1 text-center text-xs text-white">
+            <div className="min-w-[44px] border-l border-r border-neutral-800 bg-neutral-900/60 px-2 py-1 text-center text-xs text-neutral-400">
               x{row.repeats}
             </div>
             <button
               type="button"
+              onPointerDown={(e) => e.stopPropagation()}
               onClick={(e) => {
                 e.stopPropagation();
                 onRepeatUp?.();
               }}
-              className="px-2 text-xs text-neutral-300 hover:bg-neutral-700/60"
+              className="px-2 text-xs text-neutral-400 hover:bg-neutral-800/60"
               aria-label="Increase repeats"
             >
               +
             </button>
           </div>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onRemove?.();
-            }}
-            className="px-2 py-1 rounded border border-red-900 text-xs text-red-200 hover:bg-red-900/30"
-            aria-label="Remove section"
-            title="Remove section"
-          >
-            ×
-          </button>
         </div>
       </div>
       {dropPosition === "after" ? (
@@ -17149,7 +18666,7 @@ function Grid({
   grid, columns, bars, stepsPerBar, resolution, timeSig, quarterSubdivisionsByBar, normalizedTupletOverridesByBar, barStepOffsets, cycleTupletAt, gridBarsPerLine,
   cycleVelocity, toggleGhost, selection, setSelection, loopRule,
     loopRepeats,
-  setLoopRule, wrappedSelectionCells, playhead, moveSelectionByDelta, legacySelectionEnabled, moveModeDebugEnabled, playabilityWarningsEnabled, playabilityWarningStepSet, stickingGuideEnabled, showEditedSticking, stickingAssignmentsByStep, stickingEditModeEnabled, stickingOverrides, onCycleStickingOverride, onDisableStickingEditMode, bakeLoopPreview, hoveredGridCellRef
+  setLoopRule, wrappedSelectionCells, playhead, moveSelectionByDelta, playabilityWarningsEnabled, playabilityWarningStepSet, stickingConflictStepSet, stickingGuideEnabled, showEditedSticking, notationStickingSelection, stickingAssignmentsByStep, stickingEditModeEnabled, notationStickingSelectionModeEnabled, stickingOverrides, onCycleStickingOverride, onToggleNotationStickingSelection, onDisableNotationStickingSelectionMode, onDisableStickingEditMode, bakeLoopPreview, hoveredGridCellRef
 }) {
   const notifySelectionFinalized = React.useCallback(() => {
     try {
@@ -17223,59 +18740,6 @@ function Grid({
     };
   }, []);
 
-  useEffect(() => {
-    const onMouseMove = (e) => {
-      const md = mouseDragRef.current;
-      if (md.phase === "idle") return;
-      if ((e.buttons & 1) !== 1) return;
-
-      if (md.phase === "pending") {
-        const dx = e.clientX - md.startX;
-        const dy = e.clientY - md.startY;
-        if (dx * dx + dy * dy < 36) return; // < 6px: treat as click, not selection drag
-        if (!legacySelectionEnabled) return;
-        md.phase = "selecting";
-        setDrag({ row: md.anchorRow, col: md.anchorCol });
-      }
-      if (md.phase !== "selecting") return;
-
-      const el = document.elementFromPoint(e.clientX, e.clientY);
-      const cell = el?.closest?.("[data-gridcell='1']");
-      if (!cell) {
-        return;
-      }
-      const r1 = Number(cell.getAttribute("data-row"));
-      const c1 = Number(cell.getAttribute("data-col"));
-      if (Number.isNaN(r1) || Number.isNaN(c1)) return;
-      setSelection({
-        rowStart: Math.min(md.anchorRow, r1),
-        rowEnd: Math.max(md.anchorRow, r1),
-        start: Math.min(md.anchorCol, c1),
-        endExclusive: Math.max(md.anchorCol, c1) + 1,
-      });
-    };
-
-    const onMouseUp = () => {
-      const md = mouseDragRef.current;
-      if (md.phase !== "selecting") {
-        md.phase = "idle";
-        return;
-      }
-      md.phase = "idle";
-      md.suppressClickUntil = Date.now() + 220;
-      skipNextGlobalMouseUpFinalizeRef.current = true;
-      notifySelectionFinalized();
-      setDrag(null);
-    };
-
-    window.addEventListener("mousemove", onMouseMove);
-    window.addEventListener("mouseup", onMouseUp);
-    return () => {
-      window.removeEventListener("mousemove", onMouseMove);
-      window.removeEventListener("mouseup", onMouseUp);
-    };
-  }, [notifySelectionFinalized, legacySelectionEnabled, moveModeDebugEnabled]);
-
   // Desktop long-press interactions: ghost / move / selection.
   useEffect(() => {
     const onMove = (e) => {
@@ -17317,27 +18781,19 @@ function Grid({
         }
         longPress.current.did = false;
         if (press.current.startWasSelected || press.current.startVal !== CELL.OFF) {
-          if (legacySelectionEnabled) {
-            if (!press.current.startWasSelected) {
-              setSelection({ rowStart: r0, rowEnd: r0, start: c0, endExclusive: c0 + 1 });
-            }
-            press.current.mode = "selectArmed";
-          } else {
-            if (!press.current.startWasSelected) {
-              setSelection({ rowStart: r0, rowEnd: r0, start: c0, endExclusive: c0 + 1 });
-            }
-            press.current.mode = "move";
-            if (moveModeDebugEnabled) setShowMoveDebugCue(true);
-            press.current.moveLastRow = r0;
-            press.current.moveLastCol = c0;
-            const movedNow = stepMoveFromPointerDeltaRef.current?.(r1, c1);
-            if (!movedNow) {
-              window.requestAnimationFrame(() => {
-                if (!press.current.active || press.current.pointerId !== "mouse") return;
-                if (press.current.mode !== "move") return;
-                stepMoveFromPointerDeltaRef.current?.(r1, c1);
-              });
-            }
+          if (!press.current.startWasSelected) {
+            setSelection({ rowStart: r0, rowEnd: r0, start: c0, endExclusive: c0 + 1 });
+          }
+          press.current.mode = "move";
+          press.current.moveLastRow = r0;
+          press.current.moveLastCol = c0;
+          const movedNow = stepMoveFromPointerDeltaRef.current?.(r1, c1);
+          if (!movedNow) {
+            window.requestAnimationFrame(() => {
+              if (!press.current.active || press.current.pointerId !== "mouse") return;
+              if (press.current.mode !== "move") return;
+              stepMoveFromPointerDeltaRef.current?.(r1, c1);
+            });
           }
         } else {
           press.current.mode = "selectArmed";
@@ -17346,7 +18802,7 @@ function Grid({
         if (press.current.ghostToggled && press.current.instId) {
           try { toggleGhost(press.current.instId, c0, press.current.startVal); } catch (_) {}
         }
-        if (legacySelectionEnabled || !press.current.startWasSelected) {
+        if (!press.current.startWasSelected) {
           press.current.mode = "select";
           mouseDragRef.current.phase = "selecting";
           mouseDragRef.current.anchorRow = r0;
@@ -17365,7 +18821,6 @@ function Grid({
             setSelection({ rowStart: r0, rowEnd: r0, start: c0, endExclusive: c0 + 1 });
           }
           press.current.mode = "move";
-          if (moveModeDebugEnabled) setShowMoveDebugCue(true);
           press.current.moveLastRow = r0;
           press.current.moveLastCol = c0;
           stepMoveFromPointerDeltaRef.current?.(r1, c1);
@@ -17376,7 +18831,6 @@ function Grid({
         const heldMs = Date.now() - (press.current.startTime || 0);
         const holdDelayMs = readGridSelectionHoldDelayMs();
         const shouldLongPressSelect =
-          !legacySelectionEnabled &&
           press.current.mode === "moveArmed" &&
           !press.current.startWasSelected &&
           heldMs >= holdDelayMs;
@@ -17401,7 +18855,6 @@ function Grid({
             setSelection({ rowStart: r0, rowEnd: r0, start: c0, endExclusive: c0 + 1 });
           }
           press.current.mode = "move";
-          if (moveModeDebugEnabled) setShowMoveDebugCue(true);
         }
         const movedNow = stepMoveFromPointerDeltaRef.current?.(r1, c1);
         if (!movedNow) {
@@ -17414,7 +18867,7 @@ function Grid({
       } else if (press.current.mode === "selectArmed") {
         const heldMs = Date.now() - (press.current.startTime || 0);
         const holdDelayMs = readGridSelectionHoldDelayMs();
-        if (legacySelectionEnabled || heldMs >= holdDelayMs) {
+        if (heldMs >= holdDelayMs) {
           press.current.mode = "select";
           mouseDragRef.current.phase = "selecting";
           mouseDragRef.current.anchorRow = r0;
@@ -17465,7 +18918,6 @@ function Grid({
       press.current.startX = 0;
       press.current.startY = 0;
       press.current.startTime = 0;
-      setShowMoveDebugCue(false);
     };
 
     window.addEventListener("mousemove", onMove);
@@ -17474,7 +18926,7 @@ function Grid({
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
     };
-  }, [notifySelectionFinalized, legacySelectionEnabled, maybeClearSingleCellSelectionAfterMove]);
+  }, [notifySelectionFinalized, maybeClearSingleCellSelectionAfterMove]);
   const press = React.useRef({
     active: false,
     pointerId: null,
@@ -17491,7 +18943,6 @@ function Grid({
     ghostToggled: false,
     didSelect: false,
   });
-  const [showMoveDebugCue, setShowMoveDebugCue] = useState(false);
   const [drag, setDrag] = useState(null); // { row, col }
   const stepMetaByBar = React.useMemo(
     () => quarterSubdivisionsByBar.map((subs) => buildStepMeta(subs)),
@@ -17624,10 +19075,7 @@ function Grid({
 
 
   return (
-    <div
-      className={`relative flex flex-col gap-6 ${showMoveDebugCue ? "outline outline-2 outline-amber-500/80 rounded-sm" : ""}`}
-      data-gridsurface="1"
-    >
+    <div className="relative flex flex-col gap-6" data-gridsurface="1">
       {Array.from({ length: Math.ceil(bars / Math.max(1, Math.min(bars, Number(gridBarsPerLine) || 1))) }).map((_, lineIdx) => {
         const perLine = Math.max(1, Math.min(bars, Number(gridBarsPerLine) || 1));
         const barStart = lineIdx * perLine;
@@ -17713,18 +19161,23 @@ function Grid({
                   const isUnplayableStep = !!playabilityWarningStepSet?.has(t.stepIndex);
                   const hasPlayabilityWarning =
                     !!playabilityWarningsEnabled && isUnplayableStep;
+                  const hasStickingConflictWarning =
+                    !!stickingEditModeEnabled && !!stickingConflictStepSet?.has(t.stepIndex);
                   const stickingOverrideKey = `${inst.id}:${t.stepIndex}`;
                   const hasManualStickingOverride =
                     !FOOT_INSTRUMENTS.has(inst.id) &&
                     (stickingOverrides?.[stickingOverrideKey] === "L" ||
                       stickingOverrides?.[stickingOverrideKey] === "R");
                   const stickingHand =
-                    stickingGuideEnabled &&
+                    (stickingEditModeEnabled || notationStickingSelectionModeEnabled) &&
                     !isUnplayableStep &&
                     !FOOT_INSTRUMENTS.has(inst.id) &&
                     val !== CELL.OFF
                       ? stickingAssignmentsByStep?.[t.stepIndex]?.[inst.id] || ""
                       : "";
+                  const hasCustomNotationSticking =
+                    val !== CELL.OFF &&
+                    notationStickingSelection?.[`${inst.id}:${t.stepIndex}`] === true;
                   return (
                     <div
                       key={`${inst.id}-${t.stepIndex}`}
@@ -17802,20 +19255,10 @@ function Grid({
                         // If loop preview is active and user starts on the current selection,
                         // exit looping so long-press / drag can enter move interaction.
                         if (loopRule) {
-                          if (!legacySelectionEnabled) {
-                            if (isCellInSelection(r, c)) {
-                              // Keep loop active on simple press/click.
-                              // Move mode will take over only after actual drag movement.
-                            } else {
-                              suppressNextCellClickToggleRef.current = true;
-                              bakeLoopPreview?.();
-                              return;
-                            }
-                          } else if (isCellInSelection(r, c)) {
-                            setLoopRule(null);
-                            skipNextWrappedSelectionClearRef.current = true;
+                          if (isCellInSelection(r, c)) {
+                            // Keep loop active on simple press/click.
+                            // Move mode will take over only after actual drag movement.
                           } else {
-                            // In legacy mode, clicking outside source should bake the loop.
                             bakeLoopPreview?.();
                             return;
                           }
@@ -17838,16 +19281,16 @@ function Grid({
                         press.current.startWasSelected = isCellInSelection(r, c);
                         press.current.instId = inst.id;
 
-                        // Movement takes priority when starting from current selection.
-                        if (press.current.startWasSelected) {
-                          press.current.mode = legacySelectionEnabled ? "selectArmed" : "moveArmed";
+                        // In notation-sticking selection mode, selection gestures should stay in selection flow.
+                        if (notationStickingSelectionModeEnabled) {
+                          press.current.mode = "selectArmed";
+                        } else if (press.current.startWasSelected) {
+                          press.current.mode = "moveArmed";
                         } else if (val !== CELL.OFF && GHOST_ENABLED.has(inst.id)) {
                           // Ghost long-press on active cells (ghost-enabled instruments)
                           press.current.mode = "ghostArmed";
                         } else if (val !== CELL.OFF) {
-                          // Single active cell can be moved with long-press + drag (modern mode).
-                          // Legacy mode keeps selection-first behavior.
-                          press.current.mode = legacySelectionEnabled ? "selectArmed" : "moveArmed";
+                          press.current.mode = "moveArmed";
                         }
 
                         if (longPress.current.timer) window.clearTimeout(longPress.current.timer);
@@ -17903,7 +19346,6 @@ function Grid({
                                   setSelection({ rowStart: r0, rowEnd: r0, start: c0, endExclusive: c0 + 1 });
                                 }
                                 press.current.mode = "move";
-                                if (moveModeDebugEnabled) setShowMoveDebugCue(true);
                                 press.current.moveLastRow = r0;
                                 press.current.moveLastCol = c0;
                                 stepMoveFromPointerDelta(r1, c1);
@@ -17918,7 +19360,7 @@ function Grid({
                               if (press.current.ghostToggled && press.current.instId) {
                                 try { toggleGhost(press.current.instId, c0, press.current.startVal); } catch (_) {}
                               }
-                              if (legacySelectionEnabled || !press.current.startWasSelected) {
+                              if (!press.current.startWasSelected) {
                                 press.current.mode = "select";
                                 setDrag({ row: r0, col: c0 });
                                 press.current.didSelect = true;
@@ -17933,7 +19375,6 @@ function Grid({
                                   setSelection({ rowStart: r0, rowEnd: r0, start: c0, endExclusive: c0 + 1 });
                                 }
                                 press.current.mode = "move";
-                                if (moveModeDebugEnabled) setShowMoveDebugCue(true);
                                 press.current.moveLastRow = r0;
                                 press.current.moveLastCol = c0;
                                 stepMoveFromPointerDelta(r1, c1);
@@ -17943,7 +19384,6 @@ function Grid({
                                 setSelection({ rowStart: r0, rowEnd: r0, start: c0, endExclusive: c0 + 1 });
                               }
                               press.current.mode = "move";
-                              if (moveModeDebugEnabled) setShowMoveDebugCue(true);
                               press.current.moveLastRow = r0;
                               press.current.moveLastCol = c0;
                               stepMoveFromPointerDelta(r1, c1);
@@ -17951,7 +19391,7 @@ function Grid({
                               stepMoveFromPointerDelta(r1, c1);
                             } else if (press.current.mode === "selectArmed") {
                               const heldMs = Date.now() - (press.current.startTime || 0);
-                              if (legacySelectionEnabled || heldMs >= 130) {
+                              if (heldMs >= 130) {
                                 press.current.mode = "select";
                                 setDrag({ row: r0, col: c0 });
                                 press.current.didSelect = true;
@@ -18000,7 +19440,6 @@ function Grid({
                         maybeClearSingleCellSelectionAfterMove();
                         press.current.active = false;
                         press.current.pointerId = null;
-                        setShowMoveDebugCue(false);
                         setDrag(null);
                         notifySelectionFinalized();
                       }}
@@ -18012,7 +19451,6 @@ function Grid({
                         maybeClearSingleCellSelectionAfterMove();
                         press.current.active = false;
                         press.current.pointerId = null;
-                        setShowMoveDebugCue(false);
                         setDrag(null);
                         notifySelectionFinalized();
                       }}
@@ -18042,7 +19480,19 @@ function Grid({
                         const clickRow = instruments.findIndex((x) => x.id === inst.id);
                         const clickCol = t.stepIndex;
                         const clickedInSelection = isCellInSelection(clickRow, clickCol);
-                        if (!legacySelectionEnabled && selection) {
+                        if (notationStickingSelectionModeEnabled) {
+                          if (!FOOT_INSTRUMENTS.has(inst.id) && val !== CELL.OFF) {
+                            onToggleNotationStickingSelection?.(inst.id, t.stepIndex);
+                            return;
+                          }
+                          setLoopRule(null);
+                          setSelection(null);
+                          onDisableNotationStickingSelectionMode?.();
+                          onDisableStickingEditMode?.();
+                          cycleVelocity(inst.id, t.stepIndex);
+                          return;
+                        }
+                        if (selection) {
                           if (skipNextWrappedSelectionClearRef.current) {
                             skipNextWrappedSelectionClearRef.current = false;
                             if (clickedInSelection) return;
@@ -18052,7 +19502,11 @@ function Grid({
                             setSelection(null);
                             return;
                           }
-                          if (!loopRule && !(stickingEditModeEnabled && clickedInSelection)) return;
+                          if (
+                            !loopRule &&
+                            !(stickingEditModeEnabled && clickedInSelection) &&
+                            !(notationStickingSelectionModeEnabled && clickedInSelection)
+                          ) return;
                         }
                         if (wrappedSelectionCells && wrappedSelectionCells.length > 0) {
                           setLoopRule(null);
@@ -18077,20 +19531,10 @@ function Grid({
                         const r = instruments.findIndex((x) => x.id === inst.id);
                         const c = t.stepIndex;
                         if (loopRule) {
-                          if (!legacySelectionEnabled) {
-                            if (isCellInSelection(r, c)) {
-                              // Keep loop active on simple press/click.
-                              // Move mode will take over only after actual drag movement.
-                            } else {
-                              suppressNextCellClickToggleRef.current = true;
-                              bakeLoopPreview?.();
-                              return;
-                            }
-                          } else if (isCellInSelection(r, c)) {
-                            setLoopRule(null);
-                            skipNextWrappedSelectionClearRef.current = true;
+                          if (isCellInSelection(r, c)) {
+                            // Keep loop active on simple press/click.
+                            // Move mode will take over only after actual drag movement.
                           } else {
-                            // In legacy mode, clicking outside source should bake the loop.
                             suppressNextCellClickToggleRef.current = true;
                             bakeLoopPreview?.();
                             return;
@@ -18133,22 +19577,16 @@ function Grid({
                         // 2) ghost toggle on active ghost-capable cell
                         // 3) move single active cell
                         // 4) selection (legacy immediate-drag or long-press-drag)
-                        if (press.current.startWasSelected) {
-                          press.current.mode = legacySelectionEnabled ? "selectArmed" : "moveArmed";
+                        if (notationStickingSelectionModeEnabled) {
+                          press.current.mode = "selectArmed";
+                        } else if (press.current.startWasSelected) {
+                          press.current.mode = "moveArmed";
                         } else if (ghostAllowed && (val === CELL.ON || val === CELL.GHOST || val === CELL.ACCENT)) {
                           press.current.mode = "ghostArmed";
                         } else if (val !== CELL.OFF) {
-                          press.current.mode = legacySelectionEnabled ? "selectArmed" : "moveArmed";
+                          press.current.mode = "moveArmed";
                         } else {
                           press.current.mode = "selectArmed";
-                        }
-
-                        if (legacySelectionEnabled && press.current.mode === "selectArmed") {
-                          mouseDragRef.current.phase = "pending";
-                          mouseDragRef.current.startX = e.clientX;
-                          mouseDragRef.current.startY = e.clientY;
-                          mouseDragRef.current.anchorRow = r;
-                          mouseDragRef.current.anchorCol = c;
                         }
 
                         if (longPress.current.timer) window.clearTimeout(longPress.current.timer);
@@ -18178,8 +19616,11 @@ function Grid({
                         if (role === "source") return "border-cyan-300 ring-2 ring-cyan-300/40";
                         if (role === "generated") return "border-neutral-600 opacity-70";
                         if (role === "selected") return "border-cyan-300 ring-2 ring-cyan-300/30";
+                        if (notationStickingSelectionModeEnabled && hasCustomNotationSticking) {
+                          return "border-amber-300 ring-2 ring-amber-300/35";
+                        }
                         return "border-neutral-800";
-                      })()} ${hasPlayabilityWarning ? "shadow-[inset_0_0_0_1px_rgba(239,68,68,0.35)]" : ""} relative overflow-hidden`}
+                      })()} ${(hasPlayabilityWarning || hasStickingConflictWarning) ? "shadow-[inset_0_0_0_1px_rgba(239,68,68,0.35)]" : ""} relative overflow-hidden`}
                     >
                       <span
                         className={`pointer-events-none absolute inset-0 ${quarterBandClass} ${
@@ -18189,7 +19630,7 @@ function Grid({
                       />
                       {stickingHand && (
                         <span
-                          className={`pointer-events-none absolute bottom-[1px] right-[2px] text-[9px] leading-none font-semibold ${
+                          className={`pointer-events-none absolute inset-0 flex items-center justify-center text-[22px] leading-none font-bold ${
                             showEditedSticking && hasManualStickingOverride ? "text-amber-300" : "text-neutral-100/90"
                           }`}
                           aria-hidden="true"
@@ -18205,9 +19646,6 @@ function Grid({
           </div>
         );
       })}
-      {showMoveDebugCue && (
-        <div className="text-[10px] uppercase tracking-wide text-amber-300">Move mode (debug)</div>
-      )}
     </div>
   );
 }
@@ -18217,6 +19655,7 @@ function Notation({
   grid,
   stickingAssignmentsByStep,
   showNotationSticking,
+  notationStickingSelection = null,
   notationStickingView,
   resolution,
   bars,
@@ -18224,6 +19663,7 @@ function Notation({
   barsPerRow = null,
   stepsPerBar,
   timeSig,
+  timeSigByBar = null,
   quarterSubdivisionsByBar,
   barStepOffsets,
   mergeRests,
@@ -18270,8 +19710,12 @@ function Notation({
         }
         return `${inst.id}:${slice.join("")}`;
       });
+      const barTs =
+        Array.isArray(timeSigByBar) && timeSigByBar[barIndex]
+          ? timeSigByBar[barIndex]
+          : timeSig;
       return JSON.stringify({
-        timeSig: `${timeSig?.n || 4}/${timeSig?.d || 4}`,
+        timeSig: `${barTs?.n || 4}/${barTs?.d || 4}`,
         resolution: Number(resolution) || 0,
         quarterSubs,
         instStates,
@@ -18633,7 +20077,13 @@ function Notation({
       if (!showNotationSticking) return [];
       const map = stickingAssignmentsByStep?.[stepIdx];
       if (!map || typeof map !== "object") return [];
-      const hands = Object.values(map).filter((h) => h === "L" || h === "R");
+      const entries = Object.entries(map).filter(([instId, hand]) => {
+        if (hand !== "L" && hand !== "R") return false;
+        if (!notationStickingSelection) return true;
+        return notationStickingSelection[`${instId}:${stepIdx}`] === true;
+      });
+      if (!entries.length) return [];
+      const hands = entries.map(([, hand]) => hand);
       if (!hands.length) return [];
       const hasR = hands.includes("R");
       const hasL = hands.includes("L");
@@ -18744,14 +20194,45 @@ function Notation({
     const quarterCount = Math.max(1, Number(timeSig?.n) || 1);
     const baseSubdivPerQuarter = Math.max(1, Math.round(resolution / Math.max(1, Number(timeSig?.d) || 4)));
     const beatValue = Math.max(1, Number(timeSig?.d) || 4);
+    const resolvedTimeSigByBar =
+      Array.isArray(timeSigByBar) && timeSigByBar.length === bars
+        ? timeSigByBar.map((ts) => ({
+            n: Math.max(1, Number(ts?.n) || 4),
+            d: Math.max(1, Number(ts?.d) || 4),
+          }))
+        : Array.from({ length: bars }, () => ({
+            n: Math.max(1, Number(timeSig?.n) || 4),
+            d: Math.max(1, Number(timeSig?.d) || 4),
+          }));
+    const hasVariableTimeSig = resolvedTimeSigByBar.some(
+      (ts, idx) =>
+        idx > 0 &&
+        (Number(ts?.n) !== Number(resolvedTimeSigByBar[idx - 1]?.n) ||
+          Number(ts?.d) !== Number(resolvedTimeSigByBar[idx - 1]?.d))
+    );
     const resolvedQuarterSubsByBar =
       Array.isArray(quarterSubdivisionsByBar) && quarterSubdivisionsByBar.length === bars
-        ? quarterSubdivisionsByBar.map((row) =>
-            Array.from({ length: quarterCount }, (_, i) => Math.max(1, Number(row?.[i]) || baseSubdivPerQuarter))
-          )
-        : Array.from({ length: bars }, () =>
-            Array.from({ length: quarterCount }, () => baseSubdivPerQuarter)
-          );
+        ? quarterSubdivisionsByBar.map((row, barIndex) => {
+            const barTimeSig = resolvedTimeSigByBar[barIndex] || timeSig || { n: 4, d: 4 };
+            const barQuarterCount = Math.max(1, Number(barTimeSig?.n) || 1);
+            const barBaseSubdivPerQuarter = Math.max(
+              1,
+              Math.round(resolution / Math.max(1, Number(barTimeSig?.d) || 4))
+            );
+            return Array.from(
+              { length: barQuarterCount },
+              (_, i) => Math.max(1, Number(row?.[i]) || barBaseSubdivPerQuarter)
+            );
+          })
+        : Array.from({ length: bars }, (_, barIndex) => {
+            const barTimeSig = resolvedTimeSigByBar[barIndex] || timeSig || { n: 4, d: 4 };
+            const barQuarterCount = Math.max(1, Number(barTimeSig?.n) || 1);
+            const barBaseSubdivPerQuarter = Math.max(
+              1,
+              Math.round(resolution / Math.max(1, Number(barTimeSig?.d) || 4))
+            );
+            return Array.from({ length: barQuarterCount }, () => barBaseSubdivPerQuarter);
+          });
 
     const resolvedStepOffsets =
       Array.isArray(barStepOffsets) && barStepOffsets.length === bars + 1
@@ -18764,7 +20245,7 @@ function Notation({
             }
             return out;
           })();
-    const hasTuplets = resolvedQuarterSubsByBar.some((row) =>
+    const hasTuplets = hasVariableTimeSig || resolvedQuarterSubsByBar.some((row) =>
       row.some((n) => Math.max(1, Number(n) || 1) !== baseSubdivPerQuarter)
     );
 
@@ -18866,6 +20347,12 @@ function Notation({
       const tupletsByBar = Array.from({ length: bars }, () => []);
 
       for (let b = 0; b < bars; b++) {
+        const barTimeSig = resolvedTimeSigByBar[b] || timeSig || { n: 4, d: 4 };
+        const prevBarTimeSig = b > 0 ? (resolvedTimeSigByBar[b - 1] || timeSig || { n: 4, d: 4 }) : null;
+        const showBarTimeSig =
+          b === 0 ||
+          Number(prevBarTimeSig?.n) !== Number(barTimeSig?.n) ||
+          Number(prevBarTimeSig?.d) !== Number(barTimeSig?.d);
         const row = barRowIndices[b] ?? 0;
         const col = barCols[b] ?? 0;
         const rowStartBar = rowStartBars[row] ?? 0;
@@ -18879,8 +20366,8 @@ function Notation({
         if (col > 0) stave.setBegBarType(Barline.type.NONE);
         if (col === 0) {
           stave.addClef("percussion");
-          if (b === 0) stave.addTimeSignature(`${timeSig.n}/${timeSig.d}`);
         }
+        if (showBarTimeSig) stave.addTimeSignature(`${barTimeSig.n}/${barTimeSig.d}`);
         stave.setContext(ctx).draw();
         staves.push(stave);
 
@@ -18902,7 +20389,11 @@ function Notation({
         for (let q = 0; q < barSubs.length; q++) {
           const subdiv = Math.max(1, Number(barSubs[q]) || 1);
           const tupletQuarter = subdiv !== baseSubdivPerQuarter;
-          const quarterDisplayBase = tupletQuarter ? tupletDisplayBase(subdiv) : baseSubdivPerQuarter;
+          const barBaseSubdivPerQuarter = Math.max(
+            1,
+            Math.round(resolution / Math.max(1, Number(barTimeSig?.d) || 4))
+          );
+          const quarterDisplayBase = tupletQuarter ? tupletDisplayBase(subdiv) : barBaseSubdivPerQuarter;
           const quarterNotes = [];
           const quarterBeamBucket = [];
           const stepData = [];
@@ -18925,7 +20416,7 @@ function Notation({
             stepData.push({ keys, ghostKeyIndices, circledXLargeKeyIndices, accentKeyIndices, stickingSpec, globalIdx });
           }
 
-          const mergeBaseStepsPerQuarter = isPowerOfTwo(subdiv) ? subdiv : baseSubdivPerQuarter;
+          const mergeBaseStepsPerQuarter = isPowerOfTwo(subdiv) ? subdiv : barBaseSubdivPerQuarter;
           const canUseMergedQuarterLogic = isPowerOfTwo(subdiv) && (mergeNotes || mergeRests);
           if (canUseMergedQuarterLogic) {
             let sub = 0;
@@ -19133,7 +20624,7 @@ function Notation({
           localStep += subdiv;
         }
 
-        const voice = new Voice({ num_beats: timeSig.n, beat_value: timeSig.d });
+        const voice = new Voice({ num_beats: barTimeSig.n, beat_value: barTimeSig.d });
         voice.setStrict(false);
         voice.addTickables(notes);
         voices.push(voice);
@@ -19143,7 +20634,7 @@ function Notation({
           beamBuckets.forEach((bucket) => {
             if (!bucket.length) return;
             const beams = Beam.generateBeams(bucket, {
-              groups: [new Fraction(1, timeSig.d)],
+              groups: [new Fraction(1, Math.max(1, Number(barTimeSig?.d) || 4))],
               stem_direction: 1,
               beam_rests: bucket.some((note) => note?.__dgBeamRest === true),
               flat_beams: !!flatBeams,
@@ -19319,8 +20810,37 @@ function Notation({
     const voices = [];
     const beamsByBar = Array.from({ length: bars }, () => []);
     const beamBucketsByBar = Array.from({ length: bars }, () => []);
+    const createRepeatVoiceForBar = (repeatInfo, barTimeSig) => {
+      const tickables = [];
+      if (repeatInfo?.type && repeatInfo.type !== "follower") {
+        if (repeatInfo.type === "2") {
+          tickables.push(new Flow.GhostNote("q"));
+          tickables.push(new Flow.GhostNote("q"));
+        } else {
+          tickables.push(new Flow.RepeatNote(repeatInfo.type));
+          for (let i = 0; i < (repeatInfo.followers || 0); i++) {
+            tickables.push(new Flow.GhostNote("q"));
+          }
+        }
+      } else {
+        tickables.push(new Flow.GhostNote("q"));
+      }
+      const voice = new Voice({
+        num_beats: Math.max(1, Number(barTimeSig?.n) || 4),
+        beat_value: Math.max(1, Number(barTimeSig?.d) || 4),
+      });
+      voice.setStrict(false);
+      voice.addTickables(tickables);
+      return voice;
+    };
 
     for (let b = 0; b < bars; b++) {
+      const barTimeSig = resolvedTimeSigByBar[b] || timeSig || { n: 4, d: 4 };
+      const prevBarTimeSig = b > 0 ? (resolvedTimeSigByBar[b - 1] || timeSig || { n: 4, d: 4 }) : null;
+      const showBarTimeSig =
+        b === 0 ||
+        Number(prevBarTimeSig?.n) !== Number(barTimeSig?.n) ||
+        Number(prevBarTimeSig?.d) !== Number(barTimeSig?.d);
       const row = barRowIndices[b] ?? 0;
       const col = barCols[b] ?? 0;
       const rowStartBar = rowStartBars[row] ?? 0;
@@ -19337,15 +20857,15 @@ function Notation({
 
       if (col === 0) {
         stave.addClef("percussion");
-        if (b === 0) stave.addTimeSignature(`${timeSig.n}/${timeSig.d}`);
       }
+      if (showBarTimeSig) stave.addTimeSignature(`${barTimeSig.n}/${barTimeSig.d}`);
 
       stave.setContext(ctx).draw();
       staves.push(stave);
 
       const repeatInfo = repeatPlan[b];
       if (repeatInfo) {
-        voices.push(createRepeatVoice(repeatInfo));
+        voices.push(createRepeatVoiceForBar(repeatInfo, barTimeSig));
         beamsByBar[b] = [];
         beamBucketsByBar[b] = [];
         continue;
@@ -19909,7 +21429,7 @@ for (let i = 0; i < notes.length; i++) {
         };
       });
     }
-  }, [instruments, grid, stickingAssignmentsByStep, showNotationSticking, notationStickingView, resolution, bars, barsPerLine, barsPerRow, stepsPerBar, timeSig, quarterSubdivisionsByBar, barStepOffsets, mergeRests, mergeNotes, dottedNotes, flatBeams, justifySystems, targetContentWidth, sectionMarkers, tempoMarkers, dynamicSpacingByBar, showSystemBarNumbers, barNumberOffset, enableMeasureRepeats, spacingPresetByBar, theme]);
+  }, [instruments, grid, stickingAssignmentsByStep, showNotationSticking, notationStickingSelection, notationStickingView, resolution, bars, barsPerLine, barsPerRow, stepsPerBar, timeSig, timeSigByBar, quarterSubdivisionsByBar, barStepOffsets, mergeRests, mergeNotes, dottedNotes, flatBeams, justifySystems, targetContentWidth, sectionMarkers, tempoMarkers, dynamicSpacingByBar, showSystemBarNumbers, barNumberOffset, enableMeasureRepeats, spacingPresetByBar, theme]);
 
   useEffect(() => {
     const svg = highlightSvgRef.current;
@@ -19967,13 +21487,7 @@ for (let i = 0; i < notes.length; i++) {
       }
       if (typeof onBarClick === "function") {
         const hit = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-        let holdTimer = null;
-        const clearHoldTimer = () => {
-          if (holdTimer) {
-            window.clearTimeout(holdTimer);
-            holdTimer = null;
-          }
-        };
+        let pointerDownHandledClick = false;
         hit.setAttribute("x", String(rectSpec.x));
         hit.setAttribute("y", String(rectSpec.y));
         hit.setAttribute("width", String(rectSpec.width));
@@ -19985,31 +21499,26 @@ for (let i = 0; i < notes.length; i++) {
         hit.style.pointerEvents = "all";
         hit.style.touchAction = "none";
         hit.addEventListener("pointerdown", (event) => {
-          clearHoldTimer();
-          if (typeof onBarMenuOpen === "function") {
-            if (event.pointerType !== "mouse" || event.button === 0) {
-              holdTimer = window.setTimeout(() => {
-                holdTimer = null;
-                onBarMenuOpen(barIndex, event);
-              }, 380);
-            }
-          }
-          if (event.pointerType === "mouse") return;
+          pointerDownHandledClick = false;
+          if (event.pointerType === "mouse" && event.button !== 0) return;
+          pointerDownHandledClick = true;
           event.preventDefault();
           onBarClick(barIndex, event);
         });
-        hit.addEventListener("pointermove", clearHoldTimer);
-        hit.addEventListener("pointerup", clearHoldTimer);
-        hit.addEventListener("pointercancel", clearHoldTimer);
-        hit.addEventListener("pointerleave", clearHoldTimer);
         hit.addEventListener("contextmenu", (event) => {
           if (typeof onBarMenuOpen !== "function") return;
           event.preventDefault();
           event.stopPropagation();
-          clearHoldTimer();
           onBarMenuOpen(barIndex, event);
         });
-        hit.addEventListener("click", (event) => onBarClick(barIndex, event));
+        hit.addEventListener("click", (event) => {
+          if (pointerDownHandledClick) {
+            pointerDownHandledClick = false;
+            event.preventDefault();
+            return;
+          }
+          onBarClick(barIndex, event);
+        });
         svg.appendChild(hit);
       }
     });
