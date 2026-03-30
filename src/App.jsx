@@ -2924,11 +2924,17 @@ export default function App() {
     pointerId: null,
     mode: null,
     barIndex: null,
+    startX: null,
+    startY: null,
+    moved: false,
   });
   const clearArrangementNotationSelection = React.useCallback(() => {
     arrangementTouchSelectionRef.current.pointerId = null;
     arrangementTouchSelectionRef.current.mode = null;
     arrangementTouchSelectionRef.current.barIndex = null;
+    arrangementTouchSelectionRef.current.startX = null;
+    arrangementTouchSelectionRef.current.startY = null;
+    arrangementTouchSelectionRef.current.moved = false;
     setArrangementSelection(null);
     setArrangementSelectionAnchor(null);
     setArrangementBarSelection(null);
@@ -9394,7 +9400,7 @@ useEffect(() => {
     if (!Number.isFinite(touch.pointerId)) touch.pointerId = pointerId;
     touch.mode = "row";
   }, [arrangementSelectionAnchor, handleArrangementRowSelect]);
-  const handleArrangementNotationBarTouchSelect = React.useCallback((barIndex, pointerId) => {
+  const handleArrangementNotationBarTouchSelect = React.useCallback((barIndex, pointerId, clientX = null, clientY = null) => {
     if (!Number.isFinite(barIndex) || barIndex < 0) return;
     const touch = arrangementTouchSelectionRef.current;
     if (!Number.isFinite(pointerId)) return;
@@ -9402,6 +9408,9 @@ useEffect(() => {
       touch.pointerId = pointerId;
       touch.mode = "bar-arm";
       touch.barIndex = barIndex;
+      touch.startX = Number.isFinite(clientX) ? clientX : null;
+      touch.startY = Number.isFinite(clientY) ? clientY : null;
+      touch.moved = false;
       return;
     }
     if (touch.pointerId === pointerId) return;
@@ -9422,6 +9431,9 @@ useEffect(() => {
     touch.pointerId = null;
     touch.mode = null;
     touch.barIndex = null;
+    touch.startX = null;
+    touch.startY = null;
+    touch.moved = false;
   }, [findArrangementRowIndexForBar]);
   const openArrangementNotationRowMenuAtBar = React.useCallback((barIndex, clientX, clientY) => {
     if (!Number.isFinite(barIndex) || barIndex < 0) return false;
@@ -9440,22 +9452,44 @@ useEffect(() => {
     return true;
   }, [findArrangementRowIndexForBar, normalizedArrangementSelection]);
   useEffect(() => {
+    const trackTouchSelectionMove = (event) => {
+      if (event.pointerType === "mouse") return;
+      const touch = arrangementTouchSelectionRef.current;
+      if (touch.pointerId !== event.pointerId) return;
+      if (touch.mode !== "bar-arm") return;
+      if (!Number.isFinite(touch.startX) || !Number.isFinite(touch.startY)) return;
+      const dx = Math.abs((Number(event.clientX) || 0) - touch.startX);
+      const dy = Math.abs((Number(event.clientY) || 0) - touch.startY);
+      if (dx > 8 || dy > 8) touch.moved = true;
+    };
     const resetTouchSelection = (event) => {
       if (event.pointerType === "mouse") return;
       const touch = arrangementTouchSelectionRef.current;
       if (touch.pointerId === event.pointerId) {
+        if (
+          touch.mode === "bar-arm" &&
+          Number.isFinite(touch.barIndex) &&
+          !touch.moved
+        ) {
+          handleArrangementNotationBarSelect(touch.barIndex, false);
+        }
         touch.pointerId = null;
         touch.mode = null;
         touch.barIndex = null;
+        touch.startX = null;
+        touch.startY = null;
+        touch.moved = false;
       }
     };
+    window.addEventListener("pointermove", trackTouchSelectionMove, { passive: true });
     window.addEventListener("pointerup", resetTouchSelection);
     window.addEventListener("pointercancel", resetTouchSelection);
     return () => {
+      window.removeEventListener("pointermove", trackTouchSelectionMove);
       window.removeEventListener("pointerup", resetTouchSelection);
       window.removeEventListener("pointercancel", resetTouchSelection);
     };
-  }, []);
+  }, [handleArrangementNotationBarSelect]);
   const selectedSavedArrangementEntry = React.useMemo(() => {
     if (!savedArrangements.length || !loadedArrangementId) return null;
     return savedArrangements.find((entry) => entry.id === loadedArrangementId) || null;
@@ -12645,7 +12679,9 @@ useEffect(() => {
                           (event?.pointerType && event.pointerType !== "mouse")
                             ? handleArrangementNotationBarTouchSelect(
                                 (segment.startBarOffset || 0) + localBarIndex,
-                                event.pointerId
+                                event.pointerId,
+                                event.clientX,
+                                event.clientY
                               )
                             : handleArrangementNotationBarSelect(
                                 (segment.startBarOffset || 0) + localBarIndex,
