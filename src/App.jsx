@@ -2928,6 +2928,7 @@ export default function App() {
     startY: null,
     moved: false,
   });
+  const arrangementActiveTouchPointersRef = React.useRef(new Set());
   const clearArrangementNotationSelection = React.useCallback(() => {
     arrangementTouchSelectionRef.current.pointerId = null;
     arrangementTouchSelectionRef.current.mode = null;
@@ -2935,6 +2936,7 @@ export default function App() {
     arrangementTouchSelectionRef.current.startX = null;
     arrangementTouchSelectionRef.current.startY = null;
     arrangementTouchSelectionRef.current.moved = false;
+    arrangementActiveTouchPointersRef.current.clear();
     setArrangementSelection(null);
     setArrangementSelectionAnchor(null);
     setArrangementBarSelection(null);
@@ -9414,6 +9416,18 @@ useEffect(() => {
     if (!Number.isFinite(barIndex) || barIndex < 0) return;
     const touch = arrangementTouchSelectionRef.current;
     if (!Number.isFinite(pointerId)) return;
+    arrangementActiveTouchPointersRef.current.add(pointerId);
+    if (
+      Number.isFinite(touch.pointerId) &&
+      !arrangementActiveTouchPointersRef.current.has(touch.pointerId)
+    ) {
+      touch.pointerId = null;
+      touch.mode = null;
+      touch.barIndex = null;
+      touch.startX = null;
+      touch.startY = null;
+      touch.moved = false;
+    }
     if (!Number.isFinite(touch.pointerId)) {
       touch.pointerId = pointerId;
       touch.mode = "bar-arm";
@@ -9474,6 +9488,7 @@ useEffect(() => {
     };
     const resetTouchSelection = (event) => {
       if (event.pointerType === "mouse") return;
+      arrangementActiveTouchPointersRef.current.delete(event.pointerId);
       const touch = arrangementTouchSelectionRef.current;
       if (touch.pointerId === event.pointerId) {
         if (
