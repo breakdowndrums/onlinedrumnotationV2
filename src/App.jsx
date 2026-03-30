@@ -2558,6 +2558,7 @@ export default function App() {
     width: window.innerWidth || document.documentElement.clientWidth || 0,
     height: window.innerHeight || document.documentElement.clientHeight || 0,
   }));
+  const isMobileFloatingPanels = viewportSize.width > 0 && viewportSize.width < 768;
   const useFixedDesktopFooter =
     !isEmbedMode && viewportSize.width >= 768 && viewportSize.height >= 820;
   const requestedExample = React.useMemo(() => {
@@ -2816,48 +2817,91 @@ export default function App() {
   });
   const [arrangementNotationPreviewScale, setArrangementNotationPreviewScale] = useState(() => {
     try {
-      const raw = Number(window.localStorage.getItem(ARRANGEMENT_NOTATION_PREVIEW_SCALE_STORAGE_KEY));
-      if (!Number.isFinite(raw)) return 0.6;
-      return Math.max(0.6, Math.min(1, Math.round(raw * 100) / 100));
+      const raw = window.localStorage.getItem(ARRANGEMENT_NOTATION_PREVIEW_SCALE_STORAGE_KEY);
+      if (raw === "auto") return "auto";
+      const numeric = Number(raw);
+      if (!Number.isFinite(numeric)) return 0.6;
+      return Math.max(0.35, Math.min(1, Math.round(numeric * 100) / 100));
     } catch (_) {
       return 0.6;
     }
   });
   const [arrangementNotationPreviewScaledHeight, setArrangementNotationPreviewScaledHeight] = useState(0);
+  const arrangementNotationManualPreviewScale =
+    typeof arrangementNotationPreviewScale === "number" && Number.isFinite(arrangementNotationPreviewScale)
+      ? arrangementNotationPreviewScale
+      : 0.6;
   const arrangementNotationPanelWidth = React.useMemo(
     () => {
-      if (arrangementNotationPreviewScale === 0.6) return 545;
-      if (arrangementNotationPreviewScale === 0.65) return 605;
-      if (arrangementNotationPreviewScale === 0.7) return 651;
-      if (arrangementNotationPreviewScale === 0.75) return 696;
-      if (arrangementNotationPreviewScale === 0.8) return 741;
-      if (arrangementNotationPreviewScale === 0.85) return 787;
-      if (arrangementNotationPreviewScale === 0.9) return 832;
-      if (arrangementNotationPreviewScale === 0.95) return 877;
-      if (arrangementNotationPreviewScale === 1) return 923;
+      if (arrangementNotationManualPreviewScale === 0.35) return 420;
+      if (arrangementNotationManualPreviewScale === 0.4) return 445;
+      if (arrangementNotationManualPreviewScale === 0.45) return 470;
+      if (arrangementNotationManualPreviewScale === 0.5) return 495;
+      if (arrangementNotationManualPreviewScale === 0.55) return 520;
+      if (arrangementNotationManualPreviewScale === 0.6) return 545;
+      if (arrangementNotationManualPreviewScale === 0.65) return 605;
+      if (arrangementNotationManualPreviewScale === 0.7) return 651;
+      if (arrangementNotationManualPreviewScale === 0.75) return 696;
+      if (arrangementNotationManualPreviewScale === 0.8) return 741;
+      if (arrangementNotationManualPreviewScale === 0.85) return 787;
+      if (arrangementNotationManualPreviewScale === 0.9) return 832;
+      if (arrangementNotationManualPreviewScale === 0.95) return 877;
+      if (arrangementNotationManualPreviewScale === 1) return 923;
       return Math.max(
         520,
         Math.round(
-          794 * arrangementNotationPreviewScale +
+          794 * arrangementNotationManualPreviewScale +
             96 +
-            100 * (arrangementNotationPreviewScale - 0.7)
+            100 * (arrangementNotationManualPreviewScale - 0.7)
         )
       );
     },
-    [arrangementNotationPreviewScale]
+    [arrangementNotationManualPreviewScale]
   );
+  const arrangementNotationEffectivePreviewScale = React.useMemo(() => {
+    const viewportWidth = Number(viewportSize.width) || 0;
+    const availableWidth = Math.max(280, viewportWidth - 24);
+    const fitScale = Math.max(0.35, Math.min(1, availableWidth / 794));
+    if (arrangementNotationPreviewScale === "auto") return fitScale;
+    if (!isMobileFloatingPanels) return arrangementNotationManualPreviewScale;
+    return Math.min(arrangementNotationManualPreviewScale, fitScale);
+  }, [arrangementNotationPreviewScale, arrangementNotationManualPreviewScale, isMobileFloatingPanels, viewportSize.width]);
+  const arrangementNotationRenderedPageWidth = React.useMemo(
+    () => Math.ceil(794 * arrangementNotationEffectivePreviewScale),
+    [arrangementNotationEffectivePreviewScale]
+  );
+  const arrangementNotationShellWidth = React.useMemo(() => {
+    const viewportWidth = Number(viewportSize.width) || 0;
+    const preferredWidth = Math.max(
+      arrangementNotationPanelWidth,
+      arrangementNotationRenderedPageWidth + 12
+    );
+    if (viewportWidth > 0) {
+      return Math.min(Math.max(320, viewportWidth - 8), preferredWidth);
+    }
+    return preferredWidth;
+  }, [arrangementNotationPanelWidth, arrangementNotationRenderedPageWidth, viewportSize.width]);
   const arrangementNotationTopGap = React.useMemo(() => {
-    if (arrangementNotationPreviewScale === 0.6) return -6;
-    if (arrangementNotationPreviewScale === 0.65) return -5;
-    if (arrangementNotationPreviewScale === 0.7) return -4;
-    if (arrangementNotationPreviewScale === 0.75) return -4;
-    if (arrangementNotationPreviewScale === 0.8) return -4;
-    if (arrangementNotationPreviewScale === 0.85) return -3;
-    if (arrangementNotationPreviewScale === 0.9) return -2;
-    if (arrangementNotationPreviewScale === 0.95) return -2;
-    if (arrangementNotationPreviewScale === 1) return -1;
+    const scale =
+      arrangementNotationPreviewScale === "auto"
+        ? Math.round(arrangementNotationEffectivePreviewScale * 100) / 100
+        : arrangementNotationManualPreviewScale;
+    if (scale === 0.35) return -11;
+    if (scale === 0.4) return -10;
+    if (scale === 0.45) return -9;
+    if (scale === 0.5) return -8;
+    if (scale === 0.55) return -7;
+    if (scale === 0.6) return -6;
+    if (scale === 0.65) return -5;
+    if (scale === 0.7) return -4;
+    if (scale === 0.75) return -4;
+    if (scale === 0.8) return -4;
+    if (scale === 0.85) return -3;
+    if (scale === 0.9) return -2;
+    if (scale === 0.95) return -2;
+    if (scale === 1) return -1;
     return 0;
-  }, [arrangementNotationPreviewScale]);
+  }, [arrangementNotationPreviewScale, arrangementNotationManualPreviewScale, arrangementNotationEffectivePreviewScale]);
   const [arrangementPdfQrEnabled, setArrangementPdfQrEnabled] = useState(false);
   const [arrangementPdfWatermarkEnabled, setArrangementPdfWatermarkEnabled] = useState(true);
   useEffect(() => {
@@ -2961,7 +3005,7 @@ export default function App() {
   const [arrangementNotationMoreMenuOpen, setArrangementNotationMoreMenuOpen] = useState(false);
   const arrangementGlobalSettingsMenuOpen = arrangementNotationMoreMenuOpen;
   const setArrangementGlobalSettingsMenuOpen = setArrangementNotationMoreMenuOpen;
-  const [arrangementNotationMoreMenuPosition, setArrangementNotationMoreMenuPosition] = useState({ top: 0, left: 0 });
+  const [arrangementNotationMoreMenuPosition, setArrangementNotationMoreMenuPosition] = useState({ top: 0, left: 0, width: 256 });
   const [arrangementNotationRowMenuState, setArrangementNotationRowMenuState] = useState(null);
   const [pendingArrangementDeleteEntry, setPendingArrangementDeleteEntry] = useState(null);
   const [fileMenuPosition, setFileMenuPosition] = useState({ top: 0, left: 0 });
@@ -3964,7 +4008,9 @@ export default function App() {
     try {
       window.localStorage.setItem(
         ARRANGEMENT_NOTATION_PREVIEW_SCALE_STORAGE_KEY,
-        String(arrangementNotationPreviewScale)
+        arrangementNotationPreviewScale === "auto"
+          ? "auto"
+          : String(arrangementNotationPreviewScale)
       );
     } catch (_) {}
   }, [arrangementNotationPreviewScale]);
@@ -4035,12 +4081,20 @@ export default function App() {
     const updateMenuPosition = () => {
       const button = arrangementNotationMoreMenuButtonRef.current;
       if (!(button instanceof HTMLElement)) return;
+      const menu = arrangementNotationMoreMenuRef.current;
       const rect = button.getBoundingClientRect();
-      const menuWidth = 224;
       const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
-      const left = Math.max(8, Math.min(rect.left, viewportWidth - menuWidth - 8));
-      const top = Math.max(8, rect.bottom + 8);
-      setArrangementNotationMoreMenuPosition({ top, left });
+      const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+      const menuWidth = Math.max(180, Math.min(256, viewportWidth - 16));
+      const menuHeight = menu instanceof HTMLElement ? menu.offsetHeight : 360;
+      const left = Math.max(8, Math.min(rect.right - menuWidth, viewportWidth - menuWidth - 8));
+      const preferredTop = rect.bottom + 8;
+      const maxTop = Math.max(8, viewportHeight - menuHeight - 8);
+      const top =
+        preferredTop <= maxTop
+          ? preferredTop
+          : Math.max(8, Math.min(rect.top - menuHeight - 8, maxTop));
+      setArrangementNotationMoreMenuPosition({ top, left, width: menuWidth });
     };
     const handlePointerDown = (event) => {
       const target = event.target;
@@ -4659,7 +4713,7 @@ useEffect(() => {
   useEffect(() => {
     if (!isArrangementNotationOpen) return;
     const margin = 8;
-    const panelWidth = arrangementNotationPanelWidth;
+    const panelWidth = arrangementNotationShellWidth;
     const panelHeight = arrangementNotationPanelRef.current?.offsetHeight || 760;
     const maxX = Math.max(margin, window.innerWidth - panelWidth - margin);
     const maxY = Math.max(margin, window.innerHeight - panelHeight - margin);
@@ -4674,14 +4728,14 @@ useEffect(() => {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [isArrangementNotationOpen, arrangementNotationPanelWidth]);
+  }, [isArrangementNotationOpen, arrangementNotationShellWidth]);
   useEffect(() => {
     if (!isArrangementNotationOpen) return;
     const node = arrangementNotationPreviewInnerRef.current;
     if (!(node instanceof HTMLElement)) return;
     let raf = 0;
     const measure = () => {
-      const nextHeight = Math.ceil(node.scrollHeight * arrangementNotationPreviewScale);
+      const nextHeight = Math.ceil(node.scrollHeight * arrangementNotationEffectivePreviewScale);
       setArrangementNotationPreviewScaledHeight((prev) =>
         Math.abs(prev - nextHeight) < 1 ? prev : nextHeight
       );
@@ -4701,7 +4755,7 @@ useEffect(() => {
     };
   }, [
     isArrangementNotationOpen,
-    arrangementNotationPreviewScale,
+    arrangementNotationEffectivePreviewScale,
     arrangementNotationViewMode,
     arrangementNotationPageMode,
     arrangementNotationBarsPerRow,
@@ -10798,11 +10852,19 @@ useEffect(() => {
   );
   const stepArrangementNotationPreviewScale = React.useCallback((delta) => {
     setArrangementNotationPreviewScale((prev) => {
-      const steps = [0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1];
+      const steps = ["auto", 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1];
+      if (prev === "auto") {
+        const nextIdx = Math.max(0, Math.min(steps.length - 1, delta > 0 ? 1 : 0));
+        return steps[nextIdx];
+      }
       const currentIdx = steps.reduce(
         (bestIdx, step, idx) =>
-          Math.abs(step - prev) < Math.abs(steps[bestIdx] - prev) ? idx : bestIdx,
-        0
+          typeof step === "number" &&
+          typeof steps[bestIdx] === "number" &&
+          Math.abs(step - prev) < Math.abs(steps[bestIdx] - prev)
+            ? idx
+            : bestIdx,
+        1
       );
       const nextIdx = Math.max(0, Math.min(steps.length - 1, currentIdx + delta));
       return steps[nextIdx];
@@ -13851,13 +13913,30 @@ useEffect(() => {
             )}
           </div>
           <div className="relative">
-            <button
-              type="button"
-              onClick={(e) => {
-                setActiveTab("none");
-                if (e.shiftKey) {
-                  if (!isArrangementOpen) {
-                    setArrangementSourcesCollapsed(false);
+	            <button
+	              type="button"
+	              onClick={(e) => {
+	                setActiveTab("none");
+	                if (isMobileFloatingPanels) {
+	                  if (!isArrangementOpen) {
+	                    setArrangementSourcesCollapsed(false);
+	                    setArrangementDetailsCollapsed(true);
+	                    setArrangementSourceTab("local");
+	                    setIsArrangementOpen(true);
+	                    return;
+	                  }
+	                  if (!arrangementSourcesCollapsed && arrangementDetailsCollapsed) {
+	                    setIsArrangementOpen(false);
+	                    return;
+	                  }
+	                  setArrangementSourcesCollapsed(false);
+	                  setArrangementDetailsCollapsed(true);
+	                  setArrangementSourceTab("local");
+	                  return;
+	                }
+	                if (e.shiftKey) {
+	                  if (!isArrangementOpen) {
+	                    setArrangementSourcesCollapsed(false);
                     setArrangementDetailsCollapsed(true);
                     setArrangementSourceTab("local");
                     setIsArrangementOpen(true);
@@ -14566,11 +14645,13 @@ useEffect(() => {
           <div
             ref={arrangementPanelRef}
             className={`${
-              arrangementDetailsCollapsed && !arrangementSourcesCollapsed
-                ? "w-full max-w-[23rem]"
-                : arrangementSourcesCollapsed || arrangementDetailsCollapsed
-                  ? "w-full max-w-[27rem]"
-                  : "w-[50rem] max-w-none min-w-[50rem]"
+              isMobileFloatingPanels
+                ? "w-[calc(100vw-16px)] max-w-none"
+                : arrangementDetailsCollapsed && !arrangementSourcesCollapsed
+                  ? "w-full max-w-[23rem]"
+                  : arrangementSourcesCollapsed || arrangementDetailsCollapsed
+                    ? "w-full max-w-[27rem]"
+                    : "w-[50rem] max-w-none min-w-[50rem]"
             } max-h-[94vh] overflow-auto pointer-events-auto ${
               !arrangementSourcesCollapsed && !arrangementDetailsCollapsed
                 ? "rounded-xl border border-neutral-700 bg-neutral-900 p-0 shadow-2xl overflow-hidden"
@@ -14578,10 +14659,14 @@ useEffect(() => {
             }`}
             style={{
               position: "absolute",
-              left: arrangementPos.x,
-              top: arrangementPos.y,
+              left: isMobileFloatingPanels ? 8 : arrangementPos.x,
+              top: isMobileFloatingPanels ? 8 : arrangementPos.y,
+              maxHeight: isMobileFloatingPanels ? "calc(100vh - 16px)" : undefined,
             }}
-            onMouseDown={(e) => beginFloatingPanelDrag(e, arrangementPanelRef, arrangementDragRef)}
+            onMouseDown={(e) => {
+              if (isMobileFloatingPanels) return;
+              beginFloatingPanelDrag(e, arrangementPanelRef, arrangementDragRef);
+            }}
           >
             <div className={`grid ${!arrangementSourcesCollapsed && !arrangementDetailsCollapsed ? "grid-cols-[23rem_27rem]" : "grid-cols-1"} gap-0`}>
               {!arrangementSourcesCollapsed && (
@@ -14606,12 +14691,14 @@ useEffect(() => {
                     className={`min-w-0 flex items-center gap-2 rounded cursor-move select-none ${
                       beatLibraryDropTargetId === "__up__" ? "bg-cyan-900/15 text-cyan-50" : ""
                     }`}
-                    onMouseDown={(e) =>
-                      beginFloatingPanelDrag(e, arrangementPanelRef, arrangementDragRef)
-                    }
-                    onPointerDown={(e) =>
-                      beginFloatingPanelTouchHold(e, arrangementPanelRef, arrangementDragRef)
-                    }
+                    onMouseDown={(e) => {
+                      if (isMobileFloatingPanels) return;
+                      beginFloatingPanelDrag(e, arrangementPanelRef, arrangementDragRef);
+                    }}
+                    onPointerDown={(e) => {
+                      if (isMobileFloatingPanels) return;
+                      beginFloatingPanelTouchHold(e, arrangementPanelRef, arrangementDragRef);
+                    }}
                     onDragOver={(e) => {
                       if (arrangementSourceTab !== "local") return;
                       if (beatLibraryTreeDragRef.current?.kind !== "container") return;
@@ -14710,6 +14797,38 @@ useEffect(() => {
                     )}
                   </div>
                   <div className="ml-auto flex items-center gap-2">
+	                    {isMobileFloatingPanels && (
+	                      <>
+	                        <button
+	                          type="button"
+	                          onClick={() => {
+	                            setArrangementSourcesCollapsed(true);
+	                            setArrangementDetailsCollapsed(false);
+	                            setIsArrangementOpen(false);
+	                            setIsArrangementNotationOpen(true);
+	                            setLibraryFiltersOpen(false);
+	                          }}
+	                          className="inline-flex h-[1.625rem] items-center justify-center rounded border border-neutral-800 bg-neutral-900/60 px-2 text-xs leading-none text-neutral-400 hover:bg-neutral-800/60"
+	                          title="Open sheet"
+	                        >
+	                          Sheet
+	                        </button>
+	                        <button
+	                          type="button"
+	                          onClick={() => {
+	                            setArrangementSourcesCollapsed(true);
+	                            setArrangementDetailsCollapsed(false);
+	                            setIsArrangementNotationOpen(false);
+	                            setIsArrangementOpen(true);
+	                            setLibraryFiltersOpen(false);
+	                          }}
+	                          className="inline-flex h-[1.625rem] items-center justify-center rounded border border-neutral-800 bg-neutral-900/60 px-2 text-xs leading-none text-neutral-400 hover:bg-neutral-800/60"
+	                          title="Open arrangement"
+	                        >
+	                          Arr.
+	                        </button>
+	                      </>
+	                    )}
                     <div className="relative">
                       <button
                         ref={libraryFiltersButtonRef}
@@ -14795,6 +14914,19 @@ useEffect(() => {
                               className="inline-flex h-[1.625rem] items-center justify-center rounded border border-neutral-800 bg-neutral-900/60 px-1.5 text-xs text-neutral-400 hover:bg-neutral-800/60"
                             >
                               Beats + Arrangement
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setArrangementSourcesCollapsed(true);
+                                setArrangementDetailsCollapsed(false);
+                                setIsArrangementOpen(true);
+                                setIsArrangementNotationOpen(true);
+                                setLibraryFiltersOpen(false);
+                              }}
+                              className="inline-flex h-[1.625rem] items-center justify-center rounded border border-neutral-800 bg-neutral-900/60 px-1.5 text-xs text-neutral-400 hover:bg-neutral-800/60"
+                            >
+                              Sheet
                             </button>
                             <button
                               type="button"
@@ -15350,12 +15482,14 @@ useEffect(() => {
                 <div className="flex items-center justify-between gap-2">
                   <div
                     className="flex items-center gap-2 cursor-move select-none"
-                    onMouseDown={(e) =>
-                      beginFloatingPanelDrag(e, arrangementPanelRef, arrangementDragRef)
-                    }
-                    onPointerDown={(e) =>
-                      beginFloatingPanelTouchHold(e, arrangementPanelRef, arrangementDragRef)
-                    }
+                    onMouseDown={(e) => {
+                      if (isMobileFloatingPanels) return;
+                      beginFloatingPanelDrag(e, arrangementPanelRef, arrangementDragRef);
+                    }}
+                    onPointerDown={(e) => {
+                      if (isMobileFloatingPanels) return;
+                      beginFloatingPanelTouchHold(e, arrangementPanelRef, arrangementDragRef);
+                    }}
                   >
                     <div className="text-sm text-neutral-200">Arrangement</div>
                     <button
@@ -15384,7 +15518,7 @@ useEffect(() => {
                         onClick={() => {
                           setArrangementSourcesCollapsed(true);
                           setArrangementDetailsCollapsed(false);
-                          setIsArrangementOpen(true);
+                          setIsArrangementOpen(false);
                           setIsArrangementNotationOpen(true);
                         }}
                         className="px-2 py-1 rounded border border-neutral-800 text-xs text-neutral-400 bg-neutral-900/60 hover:bg-neutral-800/60"
@@ -15447,6 +15581,56 @@ useEffect(() => {
                                     Public
                                   </button>
                                 </div>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setArrangementSourcesCollapsed(false);
+                                    setArrangementDetailsCollapsed(true);
+                                    setIsArrangementOpen(true);
+                                    setArrangementSourceTab("local");
+                                    setArrangementLibraryMenuOpen(false);
+                                  }}
+                                  className="inline-flex h-[1.625rem] items-center justify-center rounded border border-neutral-800 bg-neutral-900/60 px-1.5 text-xs text-neutral-400 hover:bg-neutral-800/60"
+                                >
+                                  Beats
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setArrangementSourcesCollapsed(true);
+                                    setArrangementDetailsCollapsed(false);
+                                    setIsArrangementOpen(true);
+                                    setArrangementLibraryMenuOpen(false);
+                                  }}
+                                  className="inline-flex h-[1.625rem] items-center justify-center rounded border border-neutral-800 bg-neutral-900/60 px-1.5 text-xs text-neutral-400 hover:bg-neutral-800/60"
+                                >
+                                  Arrangement
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setArrangementSourcesCollapsed(false);
+                                    setArrangementDetailsCollapsed(false);
+                                    setIsArrangementOpen(true);
+                                    setArrangementLibraryMenuOpen(false);
+                                  }}
+                                  className="inline-flex h-[1.625rem] items-center justify-center rounded border border-neutral-800 bg-neutral-900/60 px-1.5 text-xs text-neutral-400 hover:bg-neutral-800/60"
+                                >
+                                  Beats + Arrangement
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setArrangementSourcesCollapsed(true);
+                                    setArrangementDetailsCollapsed(false);
+                                    setIsArrangementOpen(false);
+                                    setIsArrangementNotationOpen(true);
+                                    setArrangementLibraryMenuOpen(false);
+                                  }}
+                                  className="inline-flex h-[1.625rem] items-center justify-center rounded border border-neutral-800 bg-neutral-900/60 px-1.5 text-xs text-neutral-400 hover:bg-neutral-800/60"
+                                >
+                                  Sheet
+                                </button>
                               </div>
                             </div>,
                             document.body
@@ -15874,45 +16058,67 @@ useEffect(() => {
         <div className="fixed inset-0 z-[87] pointer-events-none">
           <div
             ref={arrangementNotationPanelRef}
-            className="max-h-[88vh] overflow-auto rounded-xl border border-neutral-700 bg-neutral-900 pt-0 pointer-events-auto shadow-2xl"
+            className={`overflow-auto rounded-xl border border-neutral-700 bg-neutral-900 pt-0 pointer-events-auto shadow-2xl ${
+              isMobileFloatingPanels ? "max-h-[calc(100vh-8px)]" : "max-h-[88vh]"
+            }`}
             style={{
               position: "absolute",
-              left: arrangementNotationPos.x,
-              top: arrangementNotationPos.y,
-              width: `${arrangementNotationPanelWidth}px`,
-              maxWidth: "calc(100vw - 16px)",
+              left: isMobileFloatingPanels ? 4 : arrangementNotationPos.x,
+              top: isMobileFloatingPanels ? 4 : arrangementNotationPos.y,
+              width: `${arrangementNotationShellWidth}px`,
+              maxWidth: "calc(100vw - 8px)",
               paddingBottom: "0px",
             }}
-            onMouseDown={(e) =>
-              beginFloatingPanelDrag(e, arrangementNotationPanelRef, arrangementNotationDragRef)
-            }
+            onMouseDown={(e) => {
+              if (isMobileFloatingPanels) return;
+              beginFloatingPanelDrag(e, arrangementNotationPanelRef, arrangementNotationDragRef);
+            }}
           >
             <div
               className="sticky top-0 z-10 mb-3 border-b border-neutral-800 bg-neutral-900 px-3 pt-2 pb-1.5 md:pt-3 cursor-move select-none touch-none"
-              onMouseDown={(e) =>
-                beginFloatingPanelDrag(e, arrangementNotationPanelRef, arrangementNotationDragRef)
-              }
-              onPointerDown={(e) =>
-                beginFloatingPanelTouchHold(e, arrangementNotationPanelRef, arrangementNotationDragRef)
-              }
+              onMouseDown={(e) => {
+                if (isMobileFloatingPanels) return;
+                beginFloatingPanelDrag(e, arrangementNotationPanelRef, arrangementNotationDragRef);
+              }}
+              onPointerDown={(e) => {
+                if (isMobileFloatingPanels) return;
+                beginFloatingPanelTouchHold(e, arrangementNotationPanelRef, arrangementNotationDragRef);
+              }}
             >
               <div className="flex items-center justify-between gap-3">
-                <div className="flex items-center gap-3">
-                  <div
-                    className="flex items-center gap-3"
-                    onMouseDown={(e) =>
-                      beginFloatingPanelDrag(e, arrangementNotationPanelRef, arrangementNotationDragRef)
-                    }
-                    onPointerDown={(e) =>
-                      beginFloatingPanelTouchHold(e, arrangementNotationPanelRef, arrangementNotationDragRef)
-                    }
+	                  <div className="flex items-center gap-3">
+	                    <div
+	                      className="flex items-center gap-3"
+                    onMouseDown={(e) => {
+                      if (isMobileFloatingPanels) return;
+                      beginFloatingPanelDrag(e, arrangementNotationPanelRef, arrangementNotationDragRef);
+                    }}
+                    onPointerDown={(e) => {
+                      if (isMobileFloatingPanels) return;
+                      beginFloatingPanelTouchHold(e, arrangementNotationPanelRef, arrangementNotationDragRef);
+                    }}
                     title="Drag window"
                   >
-                    <h3 className="text-sm text-neutral-200">Arrangement Notation</h3>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
+	                    <h3 className="text-sm text-neutral-200">Arrangement Notation</h3>
+	                  </div>
+	                  {isMobileFloatingPanels && (
+	                    <button
+	                      type="button"
+	                      onClick={() => {
+	                        setIsArrangementNotationOpen(false);
+	                        setIsArrangementOpen(true);
+	                        setArrangementSourcesCollapsed(true);
+	                        setArrangementDetailsCollapsed(false);
+	                      }}
+	                      className="inline-flex h-[1.625rem] items-center justify-center rounded border border-neutral-800 bg-neutral-900/60 px-2 text-xs leading-none text-neutral-400 hover:bg-neutral-800/60"
+	                      title="Open arrangement"
+	                    >
+	                      Arrangement
+	                    </button>
+	                  )}
+	                  <button
+	                    type="button"
+	                    onClick={() => {
                       if (arrangementPlaybackEnabled && playback.isPlaying) stopArrangementPlayback();
                       else startArrangementPlayback();
                     }}
@@ -15948,10 +16154,11 @@ useEffect(() => {
                     ? createPortal(
                         <div
                           ref={arrangementNotationMoreMenuRef}
-                          className="fixed z-[140] w-64 rounded border border-neutral-700 bg-neutral-900 p-2 shadow-2xl"
+                          className="fixed z-[140] rounded border border-neutral-700 bg-neutral-900 p-2 shadow-2xl"
                           style={{
                             top: `${arrangementNotationMoreMenuPosition.top}px`,
                             left: `${arrangementNotationMoreMenuPosition.left}px`,
+                            width: `${arrangementNotationMoreMenuPosition.width}px`,
                           }}
                           onClick={(e) => e.stopPropagation()}
                           onMouseDown={(e) => e.stopPropagation()}
@@ -16092,7 +16299,9 @@ useEffect(() => {
                                   −
                                 </button>
                                 <div className="min-w-[64px] border-l border-r border-neutral-700 px-2 py-1 text-center text-xs text-white">
-                                  {`${Math.round(arrangementNotationPreviewScale * 100)}%`}
+                                  {arrangementNotationPreviewScale === "auto"
+                                    ? "Auto"
+                                    : `${Math.round(arrangementNotationPreviewScale * 100)}%`}
                                 </div>
                                 <button
                                   type="button"
@@ -16145,7 +16354,7 @@ useEffect(() => {
               <div
                 className="mx-auto overflow-visible"
                 style={{
-                  width: `${794 * arrangementNotationPreviewScale}px`,
+                  width: `${794 * arrangementNotationEffectivePreviewScale}px`,
                   height: arrangementNotationPreviewScaledHeight > 0
                     ? `${arrangementNotationPreviewScaledHeight}px`
                     : undefined,
@@ -16156,7 +16365,7 @@ useEffect(() => {
                   className="max-w-none overflow-visible p-0"
                   style={{
                     width: "794px",
-                    transform: `scale(${arrangementNotationPreviewScale})`,
+                    transform: `scale(${arrangementNotationEffectivePreviewScale})`,
                     transformOrigin: "top left",
                   }}
                 >
