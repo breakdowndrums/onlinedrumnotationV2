@@ -22083,6 +22083,7 @@ for (let i = 0; i < notes.length; i++) {
           pointerDownHandledClick = false;
           if (event.pointerType === "mouse" && event.button !== 0) return;
           if (event.pointerType !== "mouse") {
+            pointerDownHandledClick = true;
             onBarClick(barIndex, event);
             return;
           }
