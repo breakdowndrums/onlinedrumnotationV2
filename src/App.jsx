@@ -9325,6 +9325,10 @@ useEffect(() => {
   }, []);
   const handleArrangementRowSelect = React.useCallback((rowIndex, extend = false) => {
     if (!Number.isFinite(rowIndex) || rowIndex < 0) return;
+    if (!extend) {
+      setArrangementSelection(null);
+      setArrangementBarSelection(null);
+    }
     if (extend && Number.isFinite(arrangementSelectionAnchor)) {
       const startRow = Math.min(arrangementSelectionAnchor, rowIndex);
       const endRow = Math.max(arrangementSelectionAnchor, rowIndex);
