@@ -9363,6 +9363,12 @@ useEffect(() => {
   }, [arrangementSelectionAnchor, getArrangementRowBarRange]);
   const handleArrangementNotationBarSelect = React.useCallback((barIndex, extend = false) => {
     if (!Number.isFinite(barIndex) || barIndex < 0) return;
+    if (!extend) {
+      setArrangementSelection(null);
+      setArrangementSelectionAnchor(null);
+      setArrangementBarSelection(null);
+      setArrangementBarSelectionAnchor(null);
+    }
     if (extend && Number.isFinite(arrangementBarSelectionAnchor)) {
       const startBar = Math.min(arrangementBarSelectionAnchor, barIndex);
       const endBar = Math.max(arrangementBarSelectionAnchor, barIndex);
