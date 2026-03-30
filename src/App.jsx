@@ -3363,6 +3363,10 @@ export default function App() {
     drag.startX = 0;
     drag.startY = 0;
   }, []);
+  const cancelFloatingPanelDrag = React.useCallback((dragRef) => {
+    dragRef.current.dragging = false;
+    clearFloatingPanelTouchHold(dragRef);
+  }, [clearFloatingPanelTouchHold]);
   const beginFloatingPanelDrag = React.useCallback((event, panelRef, dragRef) => {
     if (event.button !== 0) return;
     const target = event.target;
@@ -4753,18 +4757,26 @@ useEffect(() => {
     const stopDrag = (e) => {
       const drag = arrangementDragRef.current;
       if (drag.pointerId != null && e.pointerId !== drag.pointerId) return;
-      drag.dragging = false;
-      clearFloatingPanelTouchHold(arrangementDragRef);
+      cancelFloatingPanelDrag(arrangementDragRef);
     };
+    const onKeyDown = (e) => {
+      if (e.key !== "Escape") return;
+      cancelFloatingPanelDrag(arrangementDragRef);
+    };
+    const onBlur = () => cancelFloatingPanelDrag(arrangementDragRef);
     window.addEventListener("pointermove", onPointerMove);
     window.addEventListener("pointerup", stopDrag);
     window.addEventListener("pointercancel", stopDrag);
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("blur", onBlur);
     return () => {
       window.removeEventListener("pointermove", onPointerMove);
       window.removeEventListener("pointerup", stopDrag);
       window.removeEventListener("pointercancel", stopDrag);
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("blur", onBlur);
     };
-  }, [isArrangementOpen, arrangementPanelWidth, clearFloatingPanelTouchHold]);
+  }, [isArrangementOpen, arrangementPanelWidth, cancelFloatingPanelDrag, clearFloatingPanelTouchHold]);
   useEffect(() => {
     if (!isArrangementNotationOpen) return;
     const onPointerMove = (e) => {
@@ -4785,18 +4797,26 @@ useEffect(() => {
     const stopDrag = (e) => {
       const drag = arrangementNotationDragRef.current;
       if (drag.pointerId != null && e.pointerId !== drag.pointerId) return;
-      drag.dragging = false;
-      clearFloatingPanelTouchHold(arrangementNotationDragRef);
+      cancelFloatingPanelDrag(arrangementNotationDragRef);
     };
+    const onKeyDown = (e) => {
+      if (e.key !== "Escape") return;
+      cancelFloatingPanelDrag(arrangementNotationDragRef);
+    };
+    const onBlur = () => cancelFloatingPanelDrag(arrangementNotationDragRef);
     window.addEventListener("pointermove", onPointerMove);
     window.addEventListener("pointerup", stopDrag);
     window.addEventListener("pointercancel", stopDrag);
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("blur", onBlur);
     return () => {
       window.removeEventListener("pointermove", onPointerMove);
       window.removeEventListener("pointerup", stopDrag);
       window.removeEventListener("pointercancel", stopDrag);
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("blur", onBlur);
     };
-  }, [isArrangementNotationOpen, clearFloatingPanelTouchHold]);
+  }, [isArrangementNotationOpen, cancelFloatingPanelDrag, clearFloatingPanelTouchHold]);
 
   useEffect(() => {
     if (!isLegalDialogOpen) return;
