@@ -9438,6 +9438,7 @@ useEffect(() => {
       return;
     }
     if (touch.pointerId === pointerId) return;
+    if (arrangementActiveTouchPointersRef.current.size < 2) return;
     if (touch.mode !== "bar-arm" || !Number.isFinite(touch.barIndex)) return;
     const startBar = Math.min(touch.barIndex, barIndex);
     const endBar = Math.max(touch.barIndex, barIndex);
