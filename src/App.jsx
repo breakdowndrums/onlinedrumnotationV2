@@ -9476,6 +9476,13 @@ useEffect(() => {
       if (event.pointerType === "mouse") return;
       const touch = arrangementTouchSelectionRef.current;
       if (touch.pointerId === event.pointerId) {
+        if (
+          touch.mode === "bar-arm" &&
+          Number.isFinite(touch.barIndex) &&
+          !touch.moved
+        ) {
+          handleArrangementNotationBarSelect(touch.barIndex, false);
+        }
         touch.pointerId = null;
         touch.mode = null;
         touch.barIndex = null;
