@@ -9456,16 +9456,6 @@ useEffect(() => {
       window.removeEventListener("pointercancel", resetTouchSelection);
     };
   }, []);
-  useEffect(() => {
-    if (!isArrangementNotationOpen || !isMobileFloatingPanels) return;
-    const panel = arrangementNotationPanelRef.current;
-    if (!(panel instanceof HTMLElement)) return;
-    const handleScroll = () => {
-      clearArrangementNotationSelection();
-    };
-    panel.addEventListener("scroll", handleScroll, { passive: true });
-    return () => panel.removeEventListener("scroll", handleScroll);
-  }, [isArrangementNotationOpen, isMobileFloatingPanels, clearArrangementNotationSelection]);
   const selectedSavedArrangementEntry = React.useMemo(() => {
     if (!savedArrangements.length || !loadedArrangementId) return null;
     return savedArrangements.find((entry) => entry.id === loadedArrangementId) || null;
