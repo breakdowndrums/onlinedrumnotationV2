@@ -2924,6 +2924,14 @@ export default function App() {
     pointerId: null,
     mode: null,
   });
+  const clearArrangementNotationSelection = React.useCallback(() => {
+    arrangementTouchSelectionRef.current.pointerId = null;
+    arrangementTouchSelectionRef.current.mode = null;
+    setArrangementSelection(null);
+    setArrangementSelectionAnchor(null);
+    setArrangementBarSelection(null);
+    setArrangementBarSelectionAnchor(null);
+  }, []);
   const arrangementPlayButtonRef = React.useRef(null);
   const blurActiveTextInput = React.useCallback(() => {
     const activeEl = document.activeElement;
@@ -9428,6 +9436,16 @@ useEffect(() => {
       window.removeEventListener("pointercancel", resetTouchSelection);
     };
   }, []);
+  useEffect(() => {
+    if (!isArrangementNotationOpen || !isMobileFloatingPanels) return;
+    const panel = arrangementNotationPanelRef.current;
+    if (!(panel instanceof HTMLElement)) return;
+    const handleScroll = () => {
+      clearArrangementNotationSelection();
+    };
+    panel.addEventListener("scroll", handleScroll, { passive: true });
+    return () => panel.removeEventListener("scroll", handleScroll);
+  }, [isArrangementNotationOpen, isMobileFloatingPanels, clearArrangementNotationSelection]);
   const selectedSavedArrangementEntry = React.useMemo(() => {
     if (!savedArrangements.length || !loadedArrangementId) return null;
     return savedArrangements.find((entry) => entry.id === loadedArrangementId) || null;
@@ -16366,12 +16384,18 @@ useEffect(() => {
               </div>
             </div>
 
-            <div
-              className="w-full overflow-visible"
-              style={{
-                marginTop: `${arrangementNotationTopGap}px`,
-              }}
-            >
+	            <div
+	              className="w-full overflow-visible"
+	              style={{
+	                marginTop: `${arrangementNotationTopGap}px`,
+	              }}
+	              onPointerDown={(e) => {
+	                if (!isMobileFloatingPanels) return;
+	                if (e.pointerType === "mouse") return;
+	                if (e.target !== e.currentTarget) return;
+	                clearArrangementNotationSelection();
+	              }}
+	            >
               <div
                 className="mx-auto overflow-visible"
                 style={{
