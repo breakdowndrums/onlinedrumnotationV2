@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import { exportNotationPdf } from "./utils/exportNotationPdf";
 import { exportNotationPng } from "./utils/exportNotationPng";
 import { exportArrangementPdf } from "./utils/exportArrangementPdf";
@@ -2913,6 +2913,7 @@ export default function App() {
     setArrangementPdfQrEnabled(false);
   }, [isArrangementPrintDialogOpen]);
   const [arrangementPlaybackEnabled, setArrangementPlaybackEnabled] = useState(false);
+  const [arrangementPlaybackUiActive, setArrangementPlaybackUiActive] = useState(false);
   const [arrangementPlaybackIndex, setArrangementPlaybackIndex] = useState(0);
   const [activeArrangementGlobalBarIndex, setActiveArrangementGlobalBarIndex] = useState(-1);
   const [arrangementSelection, setArrangementSelection] = useState(null); // {start,end} row indices
@@ -11091,6 +11092,7 @@ useEffect(() => {
     const countInBeats = metronomeCountInEnabled ? Math.max(1, Number(startTimeSig?.n) || 4) : 0;
     setArrangementPlaybackIndex(startIndex);
     setArrangementPlaybackEnabled(true);
+    setArrangementPlaybackUiActive(true);
     setArrangementNotationVirtualize(true);
     window.requestAnimationFrame(() => {
       playback.playCompiled({
@@ -11105,6 +11107,7 @@ useEffect(() => {
       }).catch(() => {
         playback.hardStop();
         setArrangementPlaybackEnabled(false);
+        setArrangementPlaybackUiActive(false);
         setArrangementPlaybackIndex(0);
         setArrangementNotationVirtualize(false);
       });
@@ -11128,6 +11131,7 @@ useEffect(() => {
     arrangementStartedRef.current = false;
     playback.setStopAtTime(null);
     setArrangementPlaybackEnabled(false);
+    setArrangementPlaybackUiActive(false);
     setArrangementPlaybackIndex(0);
     setArrangementNotationVirtualize(false);
   }, [playback.hardStop, playback.setStopAtTime]);
@@ -11135,6 +11139,7 @@ useEffect(() => {
     arrangementStartedRef.current = false;
     playback.setStopAtTime(null);
     setArrangementPlaybackEnabled(false);
+    setArrangementPlaybackUiActive(false);
     setArrangementPlaybackIndex(0);
     setArrangementNotationVirtualize(false);
   }, [playback.setStopAtTime]);
@@ -11187,9 +11192,23 @@ useEffect(() => {
     if (!arrangementPlaybackEnabled) return;
     playback.hardStop();
     setArrangementPlaybackEnabled(false);
+    setArrangementPlaybackUiActive(false);
     arrangementStartedRef.current = false;
     playback.setStopAtTime(null);
   }, [isArrangementOpen, isArrangementNotationOpen, arrangementPlaybackEnabled, playback.hardStop]);
+  const toggleArrangementNotationPlayback = React.useCallback(() => {
+    if (arrangementPlaybackUiActive) {
+      flushSync(() => {
+        setArrangementPlaybackUiActive(false);
+      });
+      stopArrangementPlayback();
+      return;
+    }
+    flushSync(() => {
+      setArrangementPlaybackUiActive(true);
+    });
+    startArrangementPlayback();
+  }, [arrangementPlaybackUiActive, startArrangementPlayback, stopArrangementPlayback]);
 
   
   const notationExportRef = useRef(null);
@@ -15496,7 +15515,7 @@ useEffect(() => {
                       ref={arrangementPlayButtonRef}
                       type="button"
                       onClick={() => {
-                        if (arrangementPlaybackEnabled && playback.isPlaying) stopArrangementPlayback();
+                        if (arrangementPlaybackUiActive) stopArrangementPlayback();
                         else startArrangementPlayback();
                       }}
                       disabled={arrangementPlayableEntries.length < 1}
@@ -15508,7 +15527,7 @@ useEffect(() => {
                           : "border-neutral-800 text-neutral-500 bg-neutral-900/60 cursor-not-allowed"
                       }`}
                     >
-                      {arrangementPlaybackEnabled && playback.isPlaying
+                      {arrangementPlaybackUiActive
                         ? "Stop"
                         : "Play"}
                     </button>
@@ -16118,10 +16137,12 @@ useEffect(() => {
 	                  )}
 	                  <button
 	                    type="button"
-	                    onClick={() => {
-                      if (arrangementPlaybackEnabled && playback.isPlaying) stopArrangementPlayback();
-                      else startArrangementPlayback();
-                    }}
+	                    onPointerDown={(e) => {
+	                      e.stopPropagation();
+	                      e.preventDefault();
+	                      toggleArrangementNotationPlayback();
+	                    }}
+	                    onClick={() => {}}
                     disabled={arrangementPlayableEntries.length < 1}
                     className={`inline-flex h-[1.625rem] items-center justify-center rounded border px-2 text-xs leading-none ${
                       arrangementPlayableEntries.length > 0
@@ -16131,7 +16152,7 @@ useEffect(() => {
                         : "border-neutral-800 text-neutral-500 bg-neutral-900/60 cursor-not-allowed"
                     }`}
                   >
-                    {arrangementPlaybackEnabled && playback.isPlaying
+                    {arrangementPlaybackUiActive
                       ? "Stop"
                       : "Play"}
                   </button>
