@@ -2814,6 +2814,7 @@ export default function App() {
   const [lastMidiImportSession, setLastMidiImportSession] = useState(null);
   const [isLegalDialogOpen, setIsLegalDialogOpen] = useState(false);
   const [isPreferencesDialogOpen, setIsPreferencesDialogOpen] = useState(false);
+  const [showAppVersion, setShowAppVersion] = useState(false);
   const [isShortcutsDialogOpen, setIsShortcutsDialogOpen] = useState(false);
   const [editingShortcutActionId, setEditingShortcutActionId] = useState(null);
   const [isAuthDialogOpen, setIsAuthDialogOpen] = useState(false);
@@ -14772,7 +14773,11 @@ useEffect(() => {
         <div className="relative flex flex-wrap items-center gap-2">
           <button
             ref={gridMenuButtonRef}
-            onClick={() => {
+            onClick={(e) => {
+              if (e.shiftKey) {
+                setShowAppVersion((v) => !v);
+                return;
+              }
               setActiveTab((t) => (t === "timing" ? "none" : "timing"));
             }}
             className={`touch-none select-none px-3 py-1.5 rounded border text-sm capitalize ${
@@ -14783,6 +14788,14 @@ useEffect(() => {
           >
             Settings
           </button>
+          {showAppVersion ? (
+            <span
+              className="select-none whitespace-nowrap text-[11px] text-neutral-500"
+              title={`Version ${APP_VERSION}`}
+            >
+              v{APP_VERSION}
+            </span>
+          ) : null}
           <div className="relative">
             <button
               onClick={() => {
@@ -15203,9 +15216,6 @@ useEffect(() => {
               Library
             </button>
           </div>
-          <span className="select-none whitespace-nowrap text-[11px] text-neutral-500" title={`Version ${APP_VERSION}`}>
-            v{APP_VERSION}
-          </span>
           {playabilityWarningsEnabled && playabilityWarningSteps.length > 0 && (
             <span className="text-[11px] text-red-500 whitespace-nowrap">
               {playabilityWarningSteps.length} playability warning{playabilityWarningSteps.length === 1 ? "" : "s"}
