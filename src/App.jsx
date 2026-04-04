@@ -406,6 +406,7 @@ function SortableArrangementSourceBeatRow({
   beatLibraryDropTargetId,
   isLoadedTrackedBeat,
   isSelectedArrangementSourceBeat,
+  isBeatLibraryBeatSelected,
   editingBeatLibraryBeatId,
   editingBeatLibraryBeatName,
   setEditingBeatLibraryBeatName,
@@ -414,7 +415,7 @@ function SortableArrangementSourceBeatRow({
   startEditingBeatLibraryBeat,
   showUpdateButton,
   updateCurrentLoadedBeatLocal,
-  loadBeatIntoEditor,
+  onSelectBeat,
   arrangementAddBeat,
   handleDeleteLocalBeatClick,
   hideSourceWhileDragging,
@@ -429,7 +430,10 @@ function SortableArrangementSourceBeatRow({
     transform: CSS.Transform.toString(verticalTransform),
     transition: disableTransition ? undefined : transition,
   };
-  const isVisuallyActive = isLoadedTrackedBeat || (!isLoadedTrackedBeat && isSelectedArrangementSourceBeat);
+  const isVisuallyActive =
+    isBeatLibraryBeatSelected ||
+    isLoadedTrackedBeat ||
+    (!isLoadedTrackedBeat && isSelectedArrangementSourceBeat);
 
   return (
     <div
@@ -447,16 +451,16 @@ function SortableArrangementSourceBeatRow({
         data-beat-row-id={beatRowKey}
         role="button"
         tabIndex={0}
-        onClick={() => loadBeatIntoEditor("local", beat)}
+        onClick={(e) => onSelectBeat?.(beat, !!e?.shiftKey)}
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
-            loadBeatIntoEditor("local", beat);
+            onSelectBeat?.(beat, !!e?.shiftKey);
           }
         }}
         {...attributes}
         {...listeners}
-        className={`flex items-center gap-2 rounded border px-2.5 py-2 text-left text-sm outline-none focus:outline-none focus-visible:outline-none ${
+        className={`select-none flex items-center gap-2 rounded border px-2.5 py-2 text-left text-sm outline-none focus:outline-none focus-visible:outline-none ${
           isVisuallyActive
             ? "border-sky-500/70 bg-sky-900/20 shadow-[0_0_0_1px_rgba(14,165,233,0.35)]"
             : isDragging
@@ -631,6 +635,7 @@ const PUBLIC_SUBMIT_COMPOSER_STORAGE_KEY = "drum-grid-public-submit-composer-v1"
 const SONG_ARRANGEMENT_STORAGE_KEY = "drum-grid-song-arrangement-v1";
 const SONG_ARRANGEMENT_LIBRARY_STORAGE_KEY = "drum-grid-song-arrangement-library-v1";
 const LAST_USED_ARRANGEMENT_ID_STORAGE_KEY = "drum-grid-last-used-arrangement-id-v1";
+const PERSONAL_CLOUD_IMPORT_DECISIONS_STORAGE_KEY = "drum-grid-personal-cloud-import-decisions-v1";
 const ARRANGEMENT_BOUNDARY_COMP_SCALE_STORAGE_KEY = "drum-grid-arrangement-boundary-comp-scale-v1";
 const ARRANGEMENT_ADAPTIVE_COMP_ENABLED_STORAGE_KEY = "drum-grid-arrangement-adaptive-comp-enabled-v1";
 const PLAYBACK_RATE_STORAGE_KEY = "drum-grid-playback-rate-v1";
@@ -672,6 +677,8 @@ const ARRANGEMENT_COMPOSER_STORAGE_KEY = "drum-grid-arrangement-composer-v1";
 const PREFERENCES_CATEGORY_STORAGE_KEY = "drum-grid-preferences-category-v1";
 const DEFAULT_LOOP_REPEATS_STORAGE_KEY = "drum-grid-default-loop-repeats-v1";
 const BEAT_LIBRARY_CONTAINERS_STORAGE_KEY = "drum-grid-beat-library-containers-v1";
+const PERSONAL_LIBRARY_STATE_PAYLOAD_KIND = "personal-library-state";
+const PERSONAL_LIBRARY_STATE_SHARE_LINK_KIND = "arrangement";
 const BEAT_LIBRARY_SELECTED_CONTAINER_STORAGE_KEY = "drum-grid-beat-library-selected-container-v1";
 const BEAT_LIBRARY_ROOT_COLLAPSED_STORAGE_KEY = "drum-grid-beat-library-root-collapsed-v1";
 const GRID_SETTINGS_PRESET_LIBRARY_STORAGE_KEY = "drum-grid-grid-settings-presets-v1";
@@ -1111,24 +1118,93 @@ function readStoredGridSettingsPresets() {
   }
 }
 
+function normalizeBeatLibraryContainers(source) {
+  if (!Array.isArray(source)) return [];
+  return source
+    .map((entry, index) => ({
+      id: String(entry?.id || ""),
+      name: String(entry?.name || "").trim(),
+      type: "folder",
+      parentId: entry?.parentId ? String(entry.parentId) : null,
+      collapsed: entry?.collapsed === true,
+      order: Number.isFinite(Number(entry?.order)) ? Number(entry.order) : index,
+    }))
+    .filter((entry) => entry.id && entry.name);
+}
+
 function readStoredBeatLibraryContainers() {
   try {
     const raw = window.localStorage.getItem(BEAT_LIBRARY_CONTAINERS_STORAGE_KEY);
     const parsed = raw ? JSON.parse(raw) : [];
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .map((entry, index) => ({
-        id: String(entry?.id || ""),
-        name: String(entry?.name || "").trim(),
-        type: "folder",
-        parentId: entry?.parentId ? String(entry.parentId) : null,
-        collapsed: entry?.collapsed === true,
-        order: Number.isFinite(Number(entry?.order)) ? Number(entry.order) : index,
-      }))
-      .filter((entry) => entry.id && entry.name);
+    return normalizeBeatLibraryContainers(parsed);
   } catch (_) {
     return [];
   }
+}
+
+function getPersonalLibraryStateShareId(userId) {
+  const normalized = String(userId || "").trim();
+  return normalized ? `personal-library-${normalized}` : "";
+}
+
+function buildOfflineLocalLibrarySnapshot() {
+  const beats = readStoredLocalBeats();
+  const arrangements = readStoredSavedArrangements();
+  const folders = readStoredBeatLibraryContainers();
+  const fingerprint = JSON.stringify({
+    beats: beats.map((entry) => [
+      String(entry?.id || ""),
+      String(entry?.name || ""),
+      String(entry?.updatedAt || entry?.createdAt || ""),
+    ]),
+    arrangements: arrangements.map((entry) => [
+      String(entry?.id || ""),
+      String(entry?.name || ""),
+      String(entry?.updatedAt || entry?.createdAt || ""),
+    ]),
+    folders: folders.map((entry) => [
+      String(entry?.id || ""),
+      String(entry?.name || ""),
+      String(entry?.parentId || ""),
+      entry?.collapsed === true ? 1 : 0,
+      Number(entry?.order) || 0,
+    ]),
+  });
+  return { beats, arrangements, folders, fingerprint };
+}
+
+function readPersonalCloudImportDecisions() {
+  try {
+    const raw = window.localStorage.getItem(PERSONAL_CLOUD_IMPORT_DECISIONS_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function writePersonalCloudImportDecision(userId, fingerprint, decision) {
+  try {
+    const key = `${String(userId || "")}:${String(fingerprint || "")}`;
+    if (!key || key === ":") return;
+    const next = {
+      ...readPersonalCloudImportDecisions(),
+      [key]: {
+        decision: String(decision || ""),
+        updatedAt: new Date().toISOString(),
+      },
+    };
+    window.localStorage.setItem(
+      PERSONAL_CLOUD_IMPORT_DECISIONS_STORAGE_KEY,
+      JSON.stringify(next)
+    );
+  } catch (_) {}
+}
+
+function hasHandledPersonalCloudImportDecision(userId, fingerprint) {
+  if (!userId || !fingerprint) return false;
+  const decisions = readPersonalCloudImportDecisions();
+  return Boolean(decisions[`${String(userId)}:${String(fingerprint)}`]);
 }
 
 function getBeatLibraryMeta(beat) {
@@ -1145,7 +1221,62 @@ function getBeatLibraryMeta(beat) {
 
 function getComparableBeatPayload(payload) {
   if (!payload || typeof payload !== "object") return {};
-  const next = { ...payload };
+  const nextBars = Math.max(1, Math.min(8, Number(payload?.bars) || 1));
+  const nextResolution = [4, 8, 16, 32].includes(Number(payload?.resolution))
+    ? Number(payload.resolution)
+    : 8;
+  const nextTimeSig = {
+    n: Math.max(1, Number(payload?.timeSig?.n) || 4),
+    d: Math.max(1, Number(payload?.timeSig?.d) || 4),
+  };
+  const quarterCount = getQuarterBeatsPerBar(nextTimeSig);
+  const nextTupletsByBar = Array.from({ length: nextBars }, (_, barIdx) =>
+    Array.from({ length: quarterCount }, (_, qIdx) => {
+      const raw = payload?.tupletsByBar?.[barIdx]?.[qIdx];
+      return clampTupletValue(raw) ?? null;
+    })
+  );
+  const nextGrid = {};
+  ALL_INSTRUMENTS.forEach((inst) => {
+    const source = Array.isArray(payload?.grid?.[inst.id]) ? payload.grid[inst.id] : [];
+    const events = source
+      .map((entry) =>
+        Array.isArray(entry)
+          ? [Math.max(0, Math.round(Number(entry[0]) || 0)), Math.max(1, Math.min(3, Math.round(Number(entry[1]) || 1)))]
+          : null
+      )
+      .filter(Boolean)
+      .sort((a, b) => a[0] - b[0]);
+    if (events.length) nextGrid[inst.id] = events;
+  });
+  const nextNotationStickingSelection =
+    payload?.notationStickingSelection && typeof payload.notationStickingSelection === "object"
+      ? Object.fromEntries(
+          Object.entries(payload.notationStickingSelection).filter(([, value]) => value === true)
+        )
+      : {};
+  const next = {
+    v: Number(payload?.v) || 1,
+    kitInstrumentIds:
+      Array.isArray(payload?.kitInstrumentIds) && payload.kitInstrumentIds.length
+        ? [...new Set(payload.kitInstrumentIds.filter((id) => INSTRUMENT_BY_ID[id]))]
+        : [...DRUMKIT_PRESETS.standard],
+    bars: nextBars,
+    resolution: nextResolution,
+    timeSig: nextTimeSig,
+    bpm: Math.max(20, Math.min(400, Number(payload?.bpm) || 120)),
+    layout:
+      payload?.layout === "grid-right" ||
+      payload?.layout === "notation-right" ||
+      payload?.layout === "notation-top"
+        ? payload.layout
+        : "grid-top",
+    tupletsByBar: nextTupletsByBar,
+    grid: nextGrid,
+    ...(Object.keys(nextNotationStickingSelection).length > 0
+      ? { notationStickingSelection: nextNotationStickingSelection }
+      : {}),
+  };
   delete next.libraryMeta;
   return next;
 }
@@ -2610,6 +2741,12 @@ export default function App() {
   const [authMessage, setAuthMessage] = useState("");
   const [authError, setAuthError] = useState("");
   const [authSession, setAuthSession] = useState(null);
+  const [pendingPersonalCloudImport, setPendingPersonalCloudImport] = useState(null);
+  const [personalCloudImportPending, setPersonalCloudImportPending] = useState(false);
+  const [selectedPersonalCloudImportBeatIds, setSelectedPersonalCloudImportBeatIds] = useState([]);
+  const [selectedPersonalCloudImportArrangementIds, setSelectedPersonalCloudImportArrangementIds] = useState([]);
+  const [selectedPersonalCloudImportFolderIds, setSelectedPersonalCloudImportFolderIds] = useState([]);
+  const [personalCloudImportExpandedFolderIds, setPersonalCloudImportExpandedFolderIds] = useState([]);
   const [preferencesCategory, setPreferencesCategory] = useState(() => {
     try {
       const raw = (window.localStorage.getItem(PREFERENCES_CATEGORY_STORAGE_KEY) || "").toLowerCase();
@@ -3064,6 +3201,8 @@ export default function App() {
   const [activeGridSettingsPresetDragId, setActiveGridSettingsPresetDragId] = useState(null);
   const [presetLibraryDropTargetId, setPresetLibraryDropTargetId] = useState(null);
   const [beatLibraryContainers, setBeatLibraryContainers] = useState(() => readStoredBeatLibraryContainers());
+  const [selectedBeatLibraryBeatIds, setSelectedBeatLibraryBeatIds] = useState([]);
+  const [beatLibraryBeatSelectionAnchorId, setBeatLibraryBeatSelectionAnchorId] = useState(null);
   const [selectedBeatLibraryContainerId, setSelectedBeatLibraryContainerId] = useState(() => {
     try {
       return String(window.localStorage.getItem(BEAT_LIBRARY_SELECTED_CONTAINER_STORAGE_KEY) || "all");
@@ -3076,6 +3215,10 @@ export default function App() {
     const nextId = String(containerId || "all");
     selectedBeatLibraryContainerIdRef.current = nextId;
     setSelectedBeatLibraryContainerId(nextId);
+  }, []);
+  const clearBeatLibraryBeatSelection = React.useCallback(() => {
+    setSelectedBeatLibraryBeatIds([]);
+    setBeatLibraryBeatSelectionAnchorId(null);
   }, []);
   const [beatLibraryRootCollapsed, setBeatLibraryRootCollapsed] = useState(() => {
     try {
@@ -3106,6 +3249,7 @@ export default function App() {
   const [publicLibraryLoading, setPublicLibraryLoading] = useState(false);
   const [publicArrangementLibraryLoading, setPublicArrangementLibraryLoading] = useState(false);
   const [publicLibraryError, setPublicLibraryError] = useState("");
+  const [personalLibraryRefreshing, setPersonalLibraryRefreshing] = useState(false);
   const [libraryFiltersOpen, setLibraryFiltersOpen] = useState(false);
   const [arrangementLibraryMenuOpen, setArrangementLibraryMenuOpen] = useState(false);
   const [isBeatLibraryActionsMenuOpen, setIsBeatLibraryActionsMenuOpen] = useState(false);
@@ -3496,6 +3640,8 @@ export default function App() {
   const arrangementListRef = React.useRef(null);
   const arrangementSourceListRef = React.useRef(null);
   const applyImportedBeatPayloadRef = React.useRef(null);
+  const loadBeatIntoEditorRef = React.useRef(null);
+  const visibleLocalBeatIdsInLibraryOrderRef = React.useRef([]);
   const midiImportPreviewSnapshotRef = React.useRef(null);
   const arrangementStartedRef = React.useRef(false);
   const arrangementPlaybackIndexRef = React.useRef(0);
@@ -3592,6 +3738,33 @@ export default function App() {
     setAuthPasswordInput("");
     setIsAuthDialogOpen(true);
   }, [authUserEmail, authEmailInput]);
+  const dismissPendingPersonalCloudImport = React.useCallback(() => {
+    if (authUser?.id && pendingPersonalCloudImport?.fingerprint) {
+      writePersonalCloudImportDecision(authUser.id, pendingPersonalCloudImport.fingerprint, "cloud-only");
+    }
+    setPendingPersonalCloudImport(null);
+  }, [authUser?.id, pendingPersonalCloudImport]);
+  useEffect(() => {
+    if (!pendingPersonalCloudImport) {
+      setSelectedPersonalCloudImportBeatIds([]);
+      setSelectedPersonalCloudImportArrangementIds([]);
+      setSelectedPersonalCloudImportFolderIds([]);
+      setPersonalCloudImportExpandedFolderIds([]);
+      return;
+    }
+    setSelectedPersonalCloudImportBeatIds(
+      pendingPersonalCloudImport.beats.map((entry) => String(entry?.id || "")).filter(Boolean)
+    );
+    setSelectedPersonalCloudImportArrangementIds(
+      pendingPersonalCloudImport.arrangements.map((entry) => String(entry?.id || "")).filter(Boolean)
+    );
+    setSelectedPersonalCloudImportFolderIds(
+      pendingPersonalCloudImport.folders.map((entry) => String(entry?.id || "")).filter(Boolean)
+    );
+    setPersonalCloudImportExpandedFolderIds(
+      pendingPersonalCloudImport.folders.map((entry) => String(entry?.id || "")).filter(Boolean)
+    );
+  }, [pendingPersonalCloudImport]);
 
   const handleMagicLinkSignIn = React.useCallback(async () => {
     if (!hasSupabaseEnabled || !supabase) {
@@ -3767,51 +3940,662 @@ export default function App() {
       setPublicArrangementLibraryLoading(false);
     }
   }, []);
+  const fetchCloudLocalBeats = React.useCallback(async () => {
+    if (!hasSupabaseEnabled || !supabase || !authUser?.id) return [];
+    const { data, error } = await supabase
+      .from("beats")
+      .select("id,name,payload,created_at,updated_at")
+      .eq("user_id", authUser.id)
+      .order("updated_at", { ascending: false });
+    if (error) throw error;
+    return Array.isArray(data)
+      ? data.map(normalizeCloudBeatRow).filter(Boolean)
+      : [];
+  }, [authUser?.id]);
+  const fetchCloudSavedArrangements = React.useCallback(async () => {
+    if (!hasSupabaseEnabled || !supabase || !authUser?.id) return [];
+    const { data, error } = await supabase
+      .from("arrangements")
+      .select("id,name,title_line_1,title_line_2,author,rows,created_at,updated_at")
+      .eq("user_id", authUser.id)
+      .order("updated_at", { ascending: false });
+    if (error) throw error;
+    return Array.isArray(data)
+      ? data.map(normalizeCloudArrangementRow).filter(Boolean)
+      : [];
+  }, [authUser?.id]);
+  const fetchCloudBeatLibraryContainers = React.useCallback(async () => {
+    if (!hasSupabaseEnabled || !supabase || !authUser?.id) return null;
+    const stateId = getPersonalLibraryStateShareId(authUser.id);
+    if (!stateId) return null;
+    const { data, error } = await supabase
+      .from("share_links")
+      .select("payload")
+      .eq("id", stateId)
+      .eq("kind", PERSONAL_LIBRARY_STATE_SHARE_LINK_KIND)
+      .eq("owner_user_id", authUser.id)
+      .maybeSingle();
+    if (error) throw error;
+    const payload = data?.payload;
+    if (!payload || typeof payload !== "object") return null;
+    return normalizeBeatLibraryContainers(payload.beatLibraryContainers);
+  }, [authUser?.id]);
+  const personalLibraryCloudHydratedRef = React.useRef(false);
+  const lastSyncedBeatLibraryContainersJsonRef = React.useRef(
+    JSON.stringify(readStoredBeatLibraryContainers())
+  );
+  const saveCloudBeatLibraryContainers = React.useCallback(async (containers) => {
+    if (!hasSupabaseEnabled || !supabase || !authUser?.id) return false;
+    const stateId = getPersonalLibraryStateShareId(authUser.id);
+    if (!stateId) return false;
+    const nextContainers = normalizeBeatLibraryContainers(containers);
+    const { error } = await supabase.from("share_links").upsert(
+      {
+        id: stateId,
+        kind: PERSONAL_LIBRARY_STATE_SHARE_LINK_KIND,
+        owner_user_id: authUser.id,
+        payload: {
+          kind: PERSONAL_LIBRARY_STATE_PAYLOAD_KIND,
+          beatLibraryContainers: nextContainers,
+          updatedAt: new Date().toISOString(),
+        },
+      },
+      { onConflict: "id" }
+    );
+    if (error) throw error;
+    lastSyncedBeatLibraryContainersJsonRef.current = JSON.stringify(nextContainers);
+    return true;
+  }, [authUser?.id]);
+  const refreshPersonalLibraryFromCloud = React.useCallback(async (options = {}) => {
+    const { alertOnError = false } = options;
+    if (!hasSupabaseEnabled || !supabase || !authUser?.id) return false;
+    setPersonalLibraryRefreshing(true);
+    try {
+      if (personalLibraryCloudHydratedRef.current) {
+        await saveCloudBeatLibraryContainers(beatLibraryContainersRef.current);
+      }
+      const [nextBeats, nextArrangements, nextBeatLibraryContainers] = await Promise.all([
+        fetchCloudLocalBeats(),
+        fetchCloudSavedArrangements(),
+        fetchCloudBeatLibraryContainers(),
+      ]);
+      setLocalBeats(nextBeats);
+      setSavedArrangements(nextArrangements);
+      if (nextBeatLibraryContainers) {
+        setBeatLibraryContainers(nextBeatLibraryContainers);
+        setSelectedBeatLibraryContainerId((prev) =>
+          prev === "all" ||
+          nextBeatLibraryContainers.some((entry) => String(entry.id) === String(prev))
+            ? prev
+            : "all"
+        );
+        lastSyncedBeatLibraryContainersJsonRef.current = JSON.stringify(nextBeatLibraryContainers);
+      }
+      setAuthError("");
+      return true;
+    } catch (error) {
+      const message = error?.message || "Failed to refresh personal library.";
+      setAuthError(message);
+      if (alertOnError) alert(message);
+      return false;
+    } finally {
+      setPersonalLibraryRefreshing(false);
+    }
+  }, [authUser?.id, fetchCloudLocalBeats, fetchCloudSavedArrangements]);
   useEffect(() => {
     if (!hasSupabaseEnabled || !supabase) return undefined;
     if (!authUser?.id) {
       const nextLocalBeats = readStoredLocalBeats();
       const nextSavedArrangements = readStoredSavedArrangements();
+      const nextBeatLibraryContainers = readStoredBeatLibraryContainers();
       setLocalBeats(nextLocalBeats);
       setSavedArrangements(nextSavedArrangements);
+      setBeatLibraryContainers(nextBeatLibraryContainers);
+      lastSyncedBeatLibraryContainersJsonRef.current = JSON.stringify(nextBeatLibraryContainers);
+      personalLibraryCloudHydratedRef.current = false;
       return undefined;
     }
     let cancelled = false;
+    personalLibraryCloudHydratedRef.current = false;
     const loadCloudLibrary = async () => {
-      const [{ data: beatRows, error: beatsError }, { data: arrangementRows, error: arrangementsError }] =
-        await Promise.all([
-          supabase
-            .from("beats")
-            .select("id,name,payload,created_at,updated_at")
-            .order("updated_at", { ascending: false }),
-          supabase
-            .from("arrangements")
-            .select("id,name,title_line_1,title_line_2,author,rows,created_at,updated_at")
-            .order("updated_at", { ascending: false }),
+      try {
+        const [nextBeats, nextArrangements, nextBeatLibraryContainers] = await Promise.all([
+          fetchCloudLocalBeats(),
+          fetchCloudSavedArrangements(),
+          fetchCloudBeatLibraryContainers(),
         ]);
-      if (cancelled) return;
-      if (beatsError || arrangementsError) {
-        setAuthError(
-          beatsError?.message ||
-            arrangementsError?.message ||
-            "Failed to load cloud library."
-        );
-        return;
+        if (cancelled) return;
+        setLocalBeats(nextBeats);
+        setSavedArrangements(nextArrangements);
+        if (nextBeatLibraryContainers) {
+          setBeatLibraryContainers(nextBeatLibraryContainers);
+          setSelectedBeatLibraryContainerId((prev) =>
+            prev === "all" ||
+            nextBeatLibraryContainers.some((entry) => String(entry.id) === String(prev))
+              ? prev
+              : "all"
+          );
+          lastSyncedBeatLibraryContainersJsonRef.current = JSON.stringify(nextBeatLibraryContainers);
+        } else {
+          lastSyncedBeatLibraryContainersJsonRef.current = JSON.stringify(
+            normalizeBeatLibraryContainers(beatLibraryContainersRef.current)
+          );
+        }
+        const offlineSnapshot = buildOfflineLocalLibrarySnapshot();
+        const hasOfflineLocalContent =
+          offlineSnapshot.beats.length > 0 ||
+          offlineSnapshot.arrangements.length > 0 ||
+          offlineSnapshot.folders.length > 0;
+        if (
+          hasOfflineLocalContent &&
+          !hasHandledPersonalCloudImportDecision(authUser.id, offlineSnapshot.fingerprint)
+        ) {
+          setPendingPersonalCloudImport(offlineSnapshot);
+        } else {
+          setPendingPersonalCloudImport(null);
+        }
+        personalLibraryCloudHydratedRef.current = true;
+      } catch (error) {
+        if (cancelled) return;
+        setAuthError(error?.message || "Failed to load cloud library.");
+        setPendingPersonalCloudImport(null);
+        personalLibraryCloudHydratedRef.current = true;
       }
-      const nextBeats = Array.isArray(beatRows)
-        ? beatRows.map(normalizeCloudBeatRow).filter(Boolean)
-        : [];
-      const nextArrangements = Array.isArray(arrangementRows)
-        ? arrangementRows.map(normalizeCloudArrangementRow).filter(Boolean)
-        : [];
-      setLocalBeats(nextBeats);
-      setSavedArrangements(nextArrangements);
     };
     loadCloudLibrary();
     return () => {
       cancelled = true;
     };
-  }, [authUser?.id]);
+  }, [authUser?.id, fetchCloudBeatLibraryContainers, fetchCloudLocalBeats, fetchCloudSavedArrangements]);
+  const mergeOfflineLocalLibraryIntoCloud = React.useCallback(async (snapshot, selection = {}) => {
+    if (!hasSupabaseEnabled || !supabase || !authUser?.id) return false;
+    const source = snapshot && typeof snapshot === "object" ? snapshot : buildOfflineLocalLibrarySnapshot();
+    const selectedBeatIds = new Set(
+      Array.isArray(selection?.beatIds) ? selection.beatIds.map((id) => String(id || "")) : []
+    );
+    const selectedArrangementIds = new Set(
+      Array.isArray(selection?.arrangementIds)
+        ? selection.arrangementIds.map((id) => String(id || ""))
+        : []
+    );
+    const selectedFolderIds = new Set(
+      Array.isArray(selection?.folderIds) ? selection.folderIds.map((id) => String(id || "")) : []
+    );
+    const localBeatsToMerge = (Array.isArray(source.beats) ? source.beats : []).filter((entry) =>
+      selectedBeatIds.has(String(entry?.id || ""))
+    );
+    const localArrangementsToMerge = (Array.isArray(source.arrangements) ? source.arrangements : []).filter((entry) =>
+      selectedArrangementIds.has(String(entry?.id || ""))
+    );
+    const localFoldersToMerge = (Array.isArray(source.folders) ? source.folders : []).filter((entry) =>
+      selectedFolderIds.has(String(entry?.id || ""))
+    );
+
+    let mergedFolders = normalizeBeatLibraryContainers(beatLibraryContainersRef.current);
+    const folderIdMap = new Map();
+    const usedFolderIds = new Set(mergedFolders.map((entry) => String(entry.id)));
+    localFoldersToMerge.forEach((folder, index) => {
+      const originalId = String(folder?.id || "");
+      if (!originalId) return;
+      const existing = mergedFolders.find((entry) => String(entry.id) === originalId) || null;
+      if (existing) {
+        folderIdMap.set(originalId, originalId);
+        return;
+      }
+      let nextId = originalId;
+      while (usedFolderIds.has(nextId)) {
+        nextId = `folder-${Math.random().toString(36).slice(2, 10)}`;
+      }
+      usedFolderIds.add(nextId);
+      folderIdMap.set(originalId, nextId);
+      mergedFolders.push({
+        id: nextId,
+        name: String(folder?.name || "").trim() || `Folder ${index + 1}`,
+        type: "folder",
+        parentId: folder?.parentId ? String(folder.parentId) : null,
+        collapsed: folder?.collapsed === true,
+        order: Number.isFinite(Number(folder?.order)) ? Number(folder.order) : index,
+      });
+    });
+    mergedFolders = mergedFolders.map((folder, index) => ({
+      ...folder,
+      parentId: folder.parentId ? folderIdMap.get(String(folder.parentId)) || String(folder.parentId) : null,
+      order: Number.isFinite(Number(folder?.order)) ? Number(folder.order) : index,
+    }));
+
+    for (const beat of localBeatsToMerge) {
+      const payload = beat?.payload && typeof beat.payload === "object" ? { ...beat.payload } : null;
+      if (!payload) continue;
+      const meta = getBeatLibraryMeta(beat);
+      payload.libraryMeta = {
+        parentId: meta.parentId && selectedFolderIds.has(String(meta.parentId))
+          ? folderIdMap.get(String(meta.parentId)) || String(meta.parentId)
+          : null,
+        manualOrder: Number.isFinite(Number(meta.manualOrder)) ? Number(meta.manualOrder) : 0,
+      };
+      const now = new Date().toISOString();
+      const { error } = await supabase.from("beats").insert({
+        user_id: authUser.id,
+        name: String(beat?.name || "").trim() || "Untitled Beat",
+        payload,
+        created_at: String(beat?.createdAt || now),
+        updated_at: now,
+      });
+      if (error) throw error;
+    }
+
+    let arrangementNamePool = [...savedArrangementsRef.current];
+    for (const entry of localArrangementsToMerge) {
+      const normalizedItems = normalizeArrangementItems(entry?.items);
+      const now = new Date().toISOString();
+      const name = getUniqueArrangementName(
+        String(entry?.name || "").trim() || "Arrangement",
+        arrangementNamePool
+      );
+      const payload = {
+        user_id: authUser.id,
+        name,
+        title_line_1: String(entry?.titleLine1 || ""),
+        title_line_2: String(entry?.titleLine2 || ""),
+        author: String(entry?.composer || ""),
+        rows: normalizedItems,
+        settings: {},
+        created_at: String(entry?.createdAt || now),
+        updated_at: now,
+      };
+      const { data, error } = await supabase
+        .from("arrangements")
+        .insert(payload)
+        .select("id,name,title_line_1,title_line_2,author,rows,created_at,updated_at")
+        .single();
+      if (error) throw error;
+      const normalized = normalizeCloudArrangementRow(data);
+      if (normalized) arrangementNamePool = [normalized, ...arrangementNamePool];
+    }
+
+    await saveCloudBeatLibraryContainers(mergedFolders);
+    writePersonalCloudImportDecision(authUser.id, source.fingerprint, "merged");
+    await refreshPersonalLibraryFromCloud({ alertOnError: true });
+    return true;
+  }, [authUser?.id, refreshPersonalLibraryFromCloud, saveCloudBeatLibraryContainers]);
+  const pendingPersonalCloudImportFolderChildrenByParent = React.useMemo(() => {
+    const map = new Map();
+    if (!pendingPersonalCloudImport) return map;
+    pendingPersonalCloudImport.folders.forEach((entry) => {
+      const parentKey = String(entry?.parentId || "");
+      if (!map.has(parentKey)) map.set(parentKey, []);
+      map.get(parentKey).push(entry);
+    });
+    map.forEach((items) =>
+      items.sort((a, b) => {
+        const orderDiff = (Number(a?.order) || 0) - (Number(b?.order) || 0);
+        if (orderDiff) return orderDiff;
+        return String(a?.name || "").localeCompare(String(b?.name || ""));
+      })
+    );
+    return map;
+  }, [pendingPersonalCloudImport]);
+  const pendingPersonalCloudImportBeatChildrenByParent = React.useMemo(() => {
+    const map = new Map();
+    if (!pendingPersonalCloudImport) return map;
+    pendingPersonalCloudImport.beats.forEach((entry) => {
+      const parentKey = String(getBeatLibraryMeta(entry).parentId || "");
+      if (!map.has(parentKey)) map.set(parentKey, []);
+      map.get(parentKey).push(entry);
+    });
+    map.forEach((items) => items.sort(compareBeatLibraryOrder));
+    return map;
+  }, [pendingPersonalCloudImport]);
+  const getPendingPersonalCloudImportDescendantFolderIds = React.useCallback(
+    (folderId) => {
+      const key = String(folderId || "");
+      const result = [];
+      const stack = [key];
+      while (stack.length > 0) {
+        const current = stack.pop();
+        if (!current) continue;
+        result.push(current);
+        const children = pendingPersonalCloudImportFolderChildrenByParent.get(current) || [];
+        children.forEach((entry) => {
+          const childId = String(entry?.id || "");
+          if (childId) stack.push(childId);
+        });
+      }
+      return result;
+    },
+    [pendingPersonalCloudImportFolderChildrenByParent]
+  );
+  const togglePersonalCloudImportFolderExpanded = React.useCallback((folderId) => {
+    const key = String(folderId || "");
+    if (!key) return;
+    setPersonalCloudImportExpandedFolderIds((prev) =>
+      prev.includes(key) ? prev.filter((value) => value !== key) : [...prev, key]
+    );
+  }, []);
+  const togglePersonalCloudImportBeatChecked = React.useCallback((beatId, checked) => {
+    const key = String(beatId || "");
+    if (!key) return;
+    setSelectedPersonalCloudImportBeatIds((prev) =>
+      checked ? (prev.includes(key) ? prev : [...prev, key]) : prev.filter((value) => value !== key)
+    );
+    if (!checked) {
+      const beatEntry = pendingPersonalCloudImport?.beats?.find(
+        (entry) => String(entry?.id || "") === key
+      );
+      const parentId = beatEntry ? getBeatLibraryMeta(beatEntry).parentId : null;
+      if (parentId) {
+        const ancestorIds = [];
+        let currentParentId = String(parentId || "");
+        while (currentParentId) {
+          ancestorIds.push(currentParentId);
+          const nextParent = pendingPersonalCloudImport?.folders?.find(
+            (entry) => String(entry?.id || "") === currentParentId
+          )?.parentId;
+          currentParentId = String(nextParent || "");
+        }
+        if (ancestorIds.length > 0) {
+          setSelectedPersonalCloudImportFolderIds((prev) =>
+            prev.filter((value) => !ancestorIds.includes(String(value || "")))
+          );
+        }
+      }
+    }
+  }, [pendingPersonalCloudImport]);
+  const togglePersonalCloudImportBeatSelection = React.useCallback((beatId) => {
+    const key = String(beatId || "");
+    if (!key) return;
+    const checked = selectedPersonalCloudImportBeatIds.includes(key);
+    togglePersonalCloudImportBeatChecked(key, !checked);
+  }, [selectedPersonalCloudImportBeatIds, togglePersonalCloudImportBeatChecked]);
+  const togglePersonalCloudImportFolderChecked = React.useCallback(
+    (folderId, checked) => {
+      const key = String(folderId || "");
+      if (!key) return;
+      const descendantFolderIds = getPendingPersonalCloudImportDescendantFolderIds(key);
+      const descendantFolderIdSet = new Set(descendantFolderIds);
+      const descendantBeatIds = (pendingPersonalCloudImport?.beats || [])
+        .filter((entry) => descendantFolderIdSet.has(String(getBeatLibraryMeta(entry).parentId || "")))
+        .map((entry) => String(entry?.id || ""))
+        .filter(Boolean);
+      setSelectedPersonalCloudImportFolderIds((prev) =>
+        checked
+          ? [...new Set([...prev, ...descendantFolderIds])]
+          : prev.filter((value) => !descendantFolderIdSet.has(String(value || "")))
+      );
+      setSelectedPersonalCloudImportBeatIds((prev) =>
+        checked
+          ? [...new Set([...prev, ...descendantBeatIds])]
+          : prev.filter((value) => !descendantBeatIds.includes(String(value || "")))
+      );
+    },
+    [getPendingPersonalCloudImportDescendantFolderIds, pendingPersonalCloudImport]
+  );
+  const togglePersonalCloudImportFolderSelection = React.useCallback(
+    (folderId) => {
+      const key = String(folderId || "");
+      if (!key) return;
+      const descendantFolderIds = getPendingPersonalCloudImportDescendantFolderIds(key);
+      const descendantFolderIdSet = new Set(descendantFolderIds);
+      const descendantBeatIds = (pendingPersonalCloudImport?.beats || [])
+        .filter((entry) => descendantFolderIdSet.has(String(getBeatLibraryMeta(entry).parentId || "")))
+        .map((entry) => String(entry?.id || ""))
+        .filter(Boolean);
+      const fullySelected =
+        descendantFolderIds.every((id) => selectedPersonalCloudImportFolderIds.includes(id)) &&
+        descendantBeatIds.every((id) => selectedPersonalCloudImportBeatIds.includes(id));
+      togglePersonalCloudImportFolderChecked(folderId, !fullySelected);
+    },
+    [
+      getPendingPersonalCloudImportDescendantFolderIds,
+      pendingPersonalCloudImport,
+      selectedPersonalCloudImportBeatIds,
+      selectedPersonalCloudImportFolderIds,
+      togglePersonalCloudImportFolderChecked,
+    ]
+  );
+  const renderPendingPersonalCloudImportFolderContents = React.useCallback(
+    (parentId = null, depth = 0) => {
+      if (!pendingPersonalCloudImport) return null;
+      const parentKey = String(parentId || "");
+      const childFolders = pendingPersonalCloudImportFolderChildrenByParent.get(parentKey) || [];
+      const childBeats = pendingPersonalCloudImportBeatChildrenByParent.get(parentKey) || [];
+      const nodes = [];
+
+      childFolders.forEach((entry) => {
+        const folderId = String(entry?.id || "");
+        const descendantFolderIds = getPendingPersonalCloudImportDescendantFolderIds(folderId);
+        const descendantFolderIdSet = new Set(descendantFolderIds);
+        const descendantBeatIds = (pendingPersonalCloudImport.beats || [])
+          .filter((beat) => descendantFolderIdSet.has(String(getBeatLibraryMeta(beat).parentId || "")))
+          .map((beat) => String(beat?.id || ""))
+          .filter(Boolean);
+        const selectedFolderCount = descendantFolderIds.filter((id) =>
+          selectedPersonalCloudImportFolderIds.includes(id)
+        ).length;
+        const selectedBeatCount = descendantBeatIds.filter((id) =>
+          selectedPersonalCloudImportBeatIds.includes(id)
+        ).length;
+        const totalSelectableCount = descendantFolderIds.length + descendantBeatIds.length;
+        const selectedTotalCount = selectedFolderCount + selectedBeatCount;
+        const checked = totalSelectableCount > 0 && selectedTotalCount === totalSelectableCount;
+        const indeterminate = selectedTotalCount > 0 && selectedTotalCount < totalSelectableCount;
+        const expanded = personalCloudImportExpandedFolderIds.includes(folderId);
+        const hasChildren = descendantFolderIds.length > 1 || descendantBeatIds.length > 0;
+        nodes.push(
+          <div key={`pending-cloud-folder-${folderId}`}>
+            <div
+              role="button"
+              tabIndex={0}
+              onClick={() => togglePersonalCloudImportFolderSelection(folderId)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  togglePersonalCloudImportFolderSelection(folderId);
+                }
+              }}
+              className={`flex w-full cursor-pointer items-center gap-2 rounded-md px-1.5 py-0.5 text-left text-xs ${
+                checked || indeterminate
+                  ? "bg-sky-900/20 text-sky-100 ring-1 ring-inset ring-sky-500/70 shadow-[0_0_0_1px_rgba(14,165,233,0.35)]"
+                  : "text-neutral-400 hover:bg-neutral-900/40 hover:text-neutral-200"
+              }`}
+              style={{ marginLeft: `${Math.max(0, depth) * 0.5}rem` }}
+            >
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  togglePersonalCloudImportFolderExpanded(folderId);
+                }}
+                className={`inline-flex h-6 min-w-6 items-center justify-center ${
+                  hasChildren ? "text-neutral-500" : "text-neutral-800"
+                }`}
+                disabled={!hasChildren}
+              >
+                {hasChildren ? <TreeTriangle expanded={expanded} /> : null}
+              </button>
+              <span className="min-w-0 truncate px-1 py-0.5 text-left">{String(entry?.name || "Untitled Folder")}</span>
+            </div>
+            {expanded ? renderPendingPersonalCloudImportFolderContents(folderId, depth + 1) : null}
+          </div>
+        );
+      });
+
+      childBeats.forEach((entry) => {
+        const beatId = String(entry?.id || "");
+        const checked = selectedPersonalCloudImportBeatIds.includes(beatId);
+        const beatBpm = getBeatBpm(entry);
+        const beatBars = Math.max(1, Number(entry?.payload?.bars) || 1);
+        nodes.push(
+          <div
+            key={`pending-cloud-beat-${beatId}`}
+            className="mb-2.5 last:mb-0"
+            style={{ marginLeft: `${Math.max(0, depth) * 0.5}rem` }}
+          >
+            <div
+              role="button"
+              tabIndex={0}
+              onClick={() => togglePersonalCloudImportBeatSelection(beatId)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  togglePersonalCloudImportBeatSelection(beatId);
+                }
+              }}
+              className={`select-none flex items-center gap-2 rounded border px-2.5 py-2 text-left text-sm ${
+                checked
+                  ? "border-sky-500/70 bg-sky-900/20 shadow-[0_0_0_1px_rgba(14,165,233,0.35)]"
+                  : "border-neutral-800 bg-neutral-900/40"
+              }`}
+            >
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm text-white">{String(entry?.name || "Untitled Beat")}</div>
+                <div className="truncate text-xs text-neutral-400">
+                  {(entry.timeSigCategory || "4/4") +
+                    (Number.isFinite(beatBpm) ? ` · ${beatBpm} BPM` : "") +
+                    ` · ${beatBars} ${beatBars === 1 ? "bar" : "bars"}`}
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      });
+
+      return <div className="space-y-1">{nodes}</div>;
+    },
+    [
+      getPendingPersonalCloudImportDescendantFolderIds,
+      pendingPersonalCloudImport,
+      pendingPersonalCloudImportBeatChildrenByParent,
+      pendingPersonalCloudImportFolderChildrenByParent,
+      personalCloudImportExpandedFolderIds,
+      selectedPersonalCloudImportBeatIds,
+      selectedPersonalCloudImportFolderIds,
+      togglePersonalCloudImportBeatSelection,
+      togglePersonalCloudImportFolderExpanded,
+      togglePersonalCloudImportFolderSelection,
+    ]
+  );
+  const effectiveSelectedPersonalCloudImportBeatIds = React.useMemo(() => {
+    if (!pendingPersonalCloudImport) return [];
+    const validBeatIds = new Set(
+      pendingPersonalCloudImport.beats.map((entry) => String(entry?.id || "")).filter(Boolean)
+    );
+    return Array.from(
+      new Set(
+        selectedPersonalCloudImportBeatIds.filter((id) => validBeatIds.has(String(id || "")))
+      )
+    );
+  }, [pendingPersonalCloudImport, selectedPersonalCloudImportBeatIds]);
+  const effectiveSelectedPersonalCloudImportFolderIds = React.useMemo(() => {
+    if (!pendingPersonalCloudImport) return [];
+    return pendingPersonalCloudImport.folders
+      .map((entry) => String(entry?.id || ""))
+      .filter(Boolean)
+      .filter((folderId) => {
+        const descendantFolderIds = getPendingPersonalCloudImportDescendantFolderIds(folderId);
+        const descendantFolderIdSet = new Set(descendantFolderIds);
+        const descendantBeatIds = pendingPersonalCloudImport.beats
+          .filter((beat) => descendantFolderIdSet.has(String(getBeatLibraryMeta(beat).parentId || "")))
+          .map((beat) => String(beat?.id || ""))
+          .filter(Boolean);
+        return (
+          descendantFolderIds.every((id) => selectedPersonalCloudImportFolderIds.includes(id)) &&
+          descendantBeatIds.every((id) => effectiveSelectedPersonalCloudImportBeatIds.includes(id))
+        );
+      });
+  }, [
+    effectiveSelectedPersonalCloudImportBeatIds,
+    getPendingPersonalCloudImportDescendantFolderIds,
+    pendingPersonalCloudImport,
+    selectedPersonalCloudImportFolderIds,
+  ]);
+  const effectiveSelectedPersonalCloudImportArrangementIds = React.useMemo(() => {
+    if (!pendingPersonalCloudImport) return [];
+    const validArrangementIds = new Set(
+      pendingPersonalCloudImport.arrangements.map((entry) => String(entry?.id || "")).filter(Boolean)
+    );
+    return Array.from(
+      new Set(
+        selectedPersonalCloudImportArrangementIds.filter((id) =>
+          validArrangementIds.has(String(id || ""))
+        )
+      )
+    );
+  }, [pendingPersonalCloudImport, selectedPersonalCloudImportArrangementIds]);
+  const pendingPersonalCloudImportSelectedLibraryCount =
+    effectiveSelectedPersonalCloudImportBeatIds.length + effectiveSelectedPersonalCloudImportFolderIds.length;
+  const pendingPersonalCloudImportSelectedArrangementCount =
+    effectiveSelectedPersonalCloudImportArrangementIds.length;
+  const pendingPersonalCloudImportVisibleSelectedLibraryCount = React.useMemo(() => {
+    if (!pendingPersonalCloudImport) return 0;
+    let count = 0;
+    const walk = (parentId = null) => {
+      const parentKey = String(parentId || "");
+      const childFolders = pendingPersonalCloudImportFolderChildrenByParent.get(parentKey) || [];
+      const childBeats = pendingPersonalCloudImportBeatChildrenByParent.get(parentKey) || [];
+      childFolders.forEach((entry) => {
+        const folderId = String(entry?.id || "");
+        const descendantFolderIds = getPendingPersonalCloudImportDescendantFolderIds(folderId);
+        const descendantFolderIdSet = new Set(descendantFolderIds);
+        const descendantBeatIds = pendingPersonalCloudImport.beats
+          .filter((beat) => descendantFolderIdSet.has(String(getBeatLibraryMeta(beat).parentId || "")))
+          .map((beat) => String(beat?.id || ""))
+          .filter(Boolean);
+        const selectedFolderCount = descendantFolderIds.filter((id) =>
+          selectedPersonalCloudImportFolderIds.includes(id)
+        ).length;
+        const selectedBeatCount = descendantBeatIds.filter((id) =>
+          selectedPersonalCloudImportBeatIds.includes(id)
+        ).length;
+        const totalSelectableCount = descendantFolderIds.length + descendantBeatIds.length;
+        const selectedTotalCount = selectedFolderCount + selectedBeatCount;
+        const checked = totalSelectableCount > 0 && selectedTotalCount === totalSelectableCount;
+        const indeterminate = selectedTotalCount > 0 && selectedTotalCount < totalSelectableCount;
+        if (checked || indeterminate) count += 1;
+        if (personalCloudImportExpandedFolderIds.includes(folderId)) walk(folderId);
+      });
+      childBeats.forEach((entry) => {
+        const beatId = String(entry?.id || "");
+        if (selectedPersonalCloudImportBeatIds.includes(beatId)) count += 1;
+      });
+    };
+    walk(null);
+    return count;
+  }, [
+    getPendingPersonalCloudImportDescendantFolderIds,
+    pendingPersonalCloudImport,
+    pendingPersonalCloudImportBeatChildrenByParent,
+    pendingPersonalCloudImportFolderChildrenByParent,
+    personalCloudImportExpandedFolderIds,
+    selectedPersonalCloudImportBeatIds,
+    selectedPersonalCloudImportFolderIds,
+  ]);
+  const handleMergePendingPersonalCloudImport = React.useCallback(async () => {
+    if (!pendingPersonalCloudImport) return;
+    setPersonalCloudImportPending(true);
+    try {
+      const ok = await mergeOfflineLocalLibraryIntoCloud(pendingPersonalCloudImport, {
+        beatIds: effectiveSelectedPersonalCloudImportBeatIds,
+        arrangementIds: effectiveSelectedPersonalCloudImportArrangementIds,
+        folderIds: effectiveSelectedPersonalCloudImportFolderIds,
+      });
+      if (!ok) return;
+      setPendingPersonalCloudImport(null);
+      setAuthMessage("Local device library merged into your personal cloud library.");
+      setAuthError("");
+    } catch (error) {
+      setAuthError(error?.message || "Failed to merge local library into personal cloud.");
+    } finally {
+      setPersonalCloudImportPending(false);
+    }
+  }, [
+    mergeOfflineLocalLibraryIntoCloud,
+    effectiveSelectedPersonalCloudImportArrangementIds,
+    effectiveSelectedPersonalCloudImportBeatIds,
+    effectiveSelectedPersonalCloudImportFolderIds,
+    pendingPersonalCloudImport,
+  ]);
   const notationMenuRowRef = React.useRef(null);
   const selectionMenuRowRef = React.useRef(null);
 
@@ -3966,6 +4750,18 @@ export default function App() {
       );
     } catch (_) {}
   }, [beatLibraryContainers]);
+  useEffect(() => {
+    if (!authUser?.id) return;
+    if (!personalLibraryCloudHydratedRef.current) return;
+    const nextJson = JSON.stringify(normalizeBeatLibraryContainers(beatLibraryContainers));
+    if (nextJson === lastSyncedBeatLibraryContainersJsonRef.current) return;
+    const timeoutId = window.setTimeout(() => {
+      saveCloudBeatLibraryContainers(beatLibraryContainers).catch((error) => {
+        setAuthError(error?.message || "Failed to sync personal cloud library.");
+      });
+    }, 250);
+    return () => window.clearTimeout(timeoutId);
+  }, [authUser?.id, beatLibraryContainers, saveCloudBeatLibraryContainers]);
   useEffect(() => {
     try {
       window.localStorage.setItem(
@@ -5814,6 +6610,7 @@ useEffect(() => {
   const localBeatsRef = React.useRef(localBeats);
   const arrangementItemsRef = React.useRef(arrangementItems);
   const savedArrangementsRef = React.useRef(savedArrangements);
+  const beatLibraryContainersRef = React.useRef(beatLibraryContainers);
   const arrangementNameDraftRef = React.useRef(arrangementNameDraft);
   const arrangementTitleLine1DraftRef = React.useRef(arrangementTitleLine1Draft);
   const arrangementTitleLine2DraftRef = React.useRef(arrangementTitleLine2Draft);
@@ -5841,6 +6638,9 @@ useEffect(() => {
   React.useEffect(() => {
     savedArrangementsRef.current = savedArrangements;
   }, [savedArrangements]);
+  React.useEffect(() => {
+    beatLibraryContainersRef.current = beatLibraryContainers;
+  }, [beatLibraryContainers]);
   React.useEffect(() => {
     arrangementNameDraftRef.current = arrangementNameDraft;
   }, [arrangementNameDraft]);
@@ -6189,6 +6989,31 @@ useEffect(() => {
       }
     }
     setLocalBeatsWithUndo((prev) => prev.filter((beat) => String(beat?.id) !== key));
+    return true;
+  }, [authUser?.id, setLocalBeatsWithUndo]);
+  const deleteLocalBeatsByIds = React.useCallback(async (beatIds) => {
+    const ids = Array.from(new Set((Array.isArray(beatIds) ? beatIds : []).map((id) => String(id || "")).filter(Boolean)));
+    if (!ids.length) return true;
+    if (authUser?.id && hasSupabaseEnabled && supabase) {
+      const results = await Promise.all(
+        ids.map((id) =>
+          isUuidLike(id)
+            ? supabase
+                .from("beats")
+                .delete()
+                .eq("id", id)
+                .eq("user_id", authUser.id)
+            : Promise.resolve({ error: null })
+        )
+      );
+      const failed = results.find((result) => result.error);
+      if (failed?.error) {
+        alert(failed.error.message || "Failed to delete beats");
+        return false;
+      }
+    }
+    const idSet = new Set(ids);
+    setLocalBeatsWithUndo((prev) => prev.filter((beat) => !idSet.has(String(beat?.id || ""))));
     return true;
   }, [authUser?.id, setLocalBeatsWithUndo]);
   const handleDeleteLocalBeatClick = React.useCallback(async (event, beatId) => {
@@ -6987,6 +7812,7 @@ useEffect(() => {
       order: nextOrder,
     };
     setBeatLibraryContainers((prev) => [...prev, nextContainer]);
+    return nextContainer;
   }, [beatLibraryContainers, selectedBeatLibraryContainerId]);
   const toggleBeatLibraryContainerCollapsed = React.useCallback((containerId) => {
     beatLibraryExpandAllSnapshotRef.current = null;
@@ -7090,6 +7916,55 @@ useEffect(() => {
       selectBeatLibraryContainer("all");
     },
     [authUser?.id, beatLibraryContainers, localBeats, setLocalBeatsWithUndo]
+  );
+  const deleteBeatLibraryContainerWithContents = React.useCallback(
+    async (containerId) => {
+      const key = String(containerId || "");
+      if (!key || key === "all") return;
+      const target = beatLibraryContainers.find((entry) => String(entry.id) === key);
+      if (!target) return;
+      const descendantIds = new Set([key]);
+      const walk = (parentId) => {
+        beatLibraryContainers.forEach((entry) => {
+          if (String(entry.parentId || "") !== String(parentId)) return;
+          descendantIds.add(String(entry.id));
+          walk(entry.id);
+        });
+      };
+      walk(key);
+      const affectedBeats = localBeats.filter((beat) =>
+        descendantIds.has(String(getBeatLibraryMeta(beat).parentId || ""))
+      );
+
+      if (authUser?.id && hasSupabaseEnabled && supabase && affectedBeats.length > 0) {
+        const beatDeleteResults = await Promise.all(
+          affectedBeats.map((beat) =>
+            isUuidLike(beat?.id)
+              ? supabase
+                  .from("beats")
+                  .delete()
+                  .eq("id", String(beat.id))
+                  .eq("user_id", authUser.id)
+              : Promise.resolve({ error: null })
+          )
+        );
+        const failedBeatDelete = beatDeleteResults.find((result) => result.error);
+        if (failedBeatDelete?.error) {
+          alert(failedBeatDelete.error.message || "Failed to delete beats in folder");
+          return;
+        }
+      }
+
+      setLocalBeatsWithUndo((prev) =>
+        prev.filter((beat) => !descendantIds.has(String(getBeatLibraryMeta(beat).parentId || "")))
+      );
+      setBeatLibraryContainers((prev) =>
+        prev.filter((entry) => !descendantIds.has(String(entry.id)))
+      );
+      selectBeatLibraryContainer("all");
+      clearBeatLibraryBeatSelection();
+    },
+    [authUser?.id, beatLibraryContainers, localBeats, setLocalBeatsWithUndo, clearBeatLibraryBeatSelection, selectBeatLibraryContainer]
   );
   const startEditingBeatLibraryContainer = React.useCallback(
     (containerId) => {
@@ -7241,6 +8116,69 @@ useEffect(() => {
             : beat
         )
       );
+    },
+    [authUser?.id, localBeats, setLocalBeatsWithUndo]
+  );
+  const moveBeatsToLibraryContainer = React.useCallback(
+    async (beatIds, targetParentId) => {
+      const orderedIds = Array.from(
+        new Set((Array.isArray(beatIds) ? beatIds : []).map((id) => String(id || "")).filter(Boolean))
+      );
+      if (!orderedIds.length) return [];
+      const normalizedTargetParentId = targetParentId ? String(targetParentId) : null;
+      const beatById = new Map(
+        localBeats.map((beat) => [String(beat?.id || ""), beat])
+      );
+      const updatedById = new Map();
+      orderedIds.forEach((id, index) => {
+        const beat = beatById.get(id);
+        if (!beat) return;
+        const nextLibraryMeta = {
+          ...getBeatLibraryMeta(beat),
+          parentId: normalizedTargetParentId,
+          manualOrder: index + 1,
+        };
+        const nextPayload =
+          beat?.payload && typeof beat.payload === "object"
+            ? {
+                ...beat.payload,
+                libraryMeta: nextLibraryMeta,
+              }
+            : beat.payload;
+        updatedById.set(id, {
+          ...beat,
+          payload: nextPayload,
+          libraryMeta: nextLibraryMeta,
+        });
+      });
+      if (!updatedById.size) return [];
+
+      if (authUser?.id && hasSupabaseEnabled && supabase) {
+        const results = await Promise.all(
+          Array.from(updatedById.values()).map((beat) =>
+            isUuidLike(beat?.id)
+              ? supabase
+                  .from("beats")
+                  .update({
+                    payload: beat.payload,
+                    updated_at: new Date().toISOString(),
+                  })
+                  .eq("id", String(beat.id))
+                  .eq("user_id", authUser.id)
+              : Promise.resolve({ error: null })
+          )
+        );
+        const failed = results.find((result) => result.error);
+        if (failed?.error) {
+          alert(failed.error.message || "Failed to move beats");
+          return [];
+        }
+      }
+
+      setLocalBeatsWithUndo((prev) =>
+        prev.map((beat) => updatedById.get(String(beat?.id || "")) || beat)
+      );
+      return Array.from(updatedById.keys());
     },
     [authUser?.id, localBeats, setLocalBeatsWithUndo]
   );
@@ -7422,12 +8360,19 @@ useEffect(() => {
     const activeId = String(event?.active?.id || "");
     if (!activeId.startsWith("beat:")) return;
     const beatId = activeId.slice(5);
-    beatLibraryTreeDragRef.current = { kind: "beat", beatId };
+    const selectedIds = selectedBeatLibraryBeatIds.includes(beatId)
+      ? visibleLocalBeatIdsInLibraryOrderRef.current.filter((id) => selectedBeatLibraryBeatIds.includes(id))
+      : [beatId];
+    beatLibraryTreeDragRef.current = {
+      kind: "beat",
+      beatId,
+      beatIds: selectedIds,
+    };
     setActiveBeatLibraryDragBeatId(beatId);
     beatLibraryLastHoverTargetRef.current = "";
     beatLibraryLastBeatOverIdRef.current = "";
     clearBeatLibraryFolderExpandTimer();
-  }, [clearBeatLibraryFolderExpandTimer]);
+  }, [clearBeatLibraryFolderExpandTimer, selectedBeatLibraryBeatIds]);
   const handleBeatLibrarySortDragOver = React.useCallback((event) => {
     const overId = String(event?.over?.id || "");
     if (overId.startsWith("beat:")) beatLibraryLastBeatOverIdRef.current = overId.slice(5);
@@ -7436,6 +8381,7 @@ useEffect(() => {
   const handleBeatLibrarySortDragEnd = React.useCallback(async (event) => {
     const activeId = String(event?.active?.id || "");
     const overId = String(event?.over?.id || "");
+    const dragged = beatLibraryTreeDragRef.current;
     beatLibraryTreeDragRef.current = null;
     setActiveBeatLibraryDragBeatId(null);
     beatLibraryLastHoverTargetRef.current = "";
@@ -7444,8 +8390,12 @@ useEffect(() => {
     clearBeatLibraryFolderExpandTimer();
     if (!activeId.startsWith("beat:") || !overId) return;
     const draggedBeatId = activeId.slice(5);
+    const draggedBeatIds =
+      dragged?.kind === "beat" && Array.isArray(dragged?.beatIds)
+        ? dragged.beatIds
+        : [draggedBeatId];
     if (overId === "__trash__") {
-      await deleteLocalBeatById(draggedBeatId);
+      await deleteLocalBeatsByIds(draggedBeatIds);
       return;
     }
     if (overId === "__up__") {
@@ -7456,11 +8406,11 @@ useEffect(() => {
               (entry) => String(entry.id || "") === String(selectedBeatLibraryContainerId || "")
             ) || null;
       const targetParentId = selectedContainer?.parentId ? String(selectedContainer.parentId) : null;
-      await moveBeatToLibraryContainer(draggedBeatId, targetParentId);
+      await moveBeatsToLibraryContainer(draggedBeatIds, targetParentId);
       return;
     }
     if (overId === "all") {
-      await moveBeatToLibraryContainer(draggedBeatId, null);
+      await moveBeatsToLibraryContainer(draggedBeatIds, null);
       return;
     }
     if (overId.startsWith("beat:")) {
@@ -7469,8 +8419,8 @@ useEffect(() => {
       await reorderBeatInLibrary(draggedBeatId, targetBeatId);
       return;
     }
-    await moveBeatToLibraryContainer(draggedBeatId, overId);
-  }, [beatLibraryContainers, clearBeatLibraryFolderExpandTimer, deleteLocalBeatById, moveBeatToLibraryContainer, reorderBeatInLibrary, selectedBeatLibraryContainerId]);
+    await moveBeatsToLibraryContainer(draggedBeatIds, overId);
+  }, [beatLibraryContainers, clearBeatLibraryFolderExpandTimer, deleteLocalBeatsByIds, moveBeatsToLibraryContainer, reorderBeatInLibrary, selectedBeatLibraryContainerId]);
   const handleBeatLibrarySortDragCancel = React.useCallback(() => {
     beatLibraryTreeDragRef.current = null;
     setActiveBeatLibraryDragBeatId(null);
@@ -7523,10 +8473,13 @@ useEffect(() => {
         return;
       }
       if (dragged.kind === "beat") {
-        await moveBeatToLibraryContainer(dragged.beatId, normalizedTargetParentId);
+        await moveBeatsToLibraryContainer(
+          Array.isArray(dragged.beatIds) && dragged.beatIds.length ? dragged.beatIds : [dragged.beatId],
+          normalizedTargetParentId
+        );
       }
     },
-    [clearBeatLibraryFolderExpandTimer, moveBeatLibraryContainer, moveBeatToLibraryContainer]
+    [clearBeatLibraryFolderExpandTimer, moveBeatLibraryContainer, moveBeatsToLibraryContainer]
   );
   const handleBeatLibraryBeatDrop = React.useCallback(
     async (targetBeatId) => {
@@ -7547,13 +8500,15 @@ useEffect(() => {
     setBeatLibraryDropTargetId(null);
     if (!dragged || typeof dragged !== "object") return;
     if (dragged.kind === "container") {
-      await deleteBeatLibraryContainer(dragged.containerId);
+      await deleteBeatLibraryContainerWithContents(dragged.containerId);
       return;
     }
     if (dragged.kind === "beat") {
-      await deleteLocalBeatById(dragged.beatId);
+      await deleteLocalBeatsByIds(
+        Array.isArray(dragged.beatIds) && dragged.beatIds.length ? dragged.beatIds : [dragged.beatId]
+      );
     }
-  }, [deleteBeatLibraryContainer, deleteLocalBeatById]);
+  }, [deleteBeatLibraryContainerWithContents, deleteLocalBeatsByIds]);
   const libraryBpmValues = React.useMemo(() => {
     const source = arrangementSourceTab === "public" ? publicBeats : localBeats;
     const values = source
@@ -7733,6 +8688,54 @@ useEffect(() => {
         (entry) => String(entry.parentId || "") === String(currentBeatLibraryParentId || "")
       ),
     [beatLibraryContainers, currentBeatLibraryParentId]
+  );
+  const visibleLocalBeatIdsInLibraryOrder = React.useMemo(() => {
+    const walk = (parentId) => {
+      const ids = [];
+      const childBeats = filteredLocalBeats
+        .filter((beat) => String(getBeatLibraryMeta(beat).parentId || "") === String(parentId || ""))
+        .sort(compareBeatLibraryOrder);
+      childBeats.forEach((beat) => {
+        ids.push(String(beat?.id || ""));
+      });
+      const childFolders = beatLibraryContainers
+        .filter((entry) => String(entry.parentId || "") === String(parentId || ""))
+        .sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0) || a.name.localeCompare(b.name));
+      childFolders.forEach((entry) => {
+        if (!entry.collapsed) {
+          ids.push(...walk(entry.id));
+        }
+      });
+      return ids;
+    };
+    return walk(currentBeatLibraryParentId);
+  }, [beatLibraryContainers, currentBeatLibraryParentId, filteredLocalBeats]);
+  useEffect(() => {
+    visibleLocalBeatIdsInLibraryOrderRef.current = visibleLocalBeatIdsInLibraryOrder;
+  }, [visibleLocalBeatIdsInLibraryOrder]);
+  const handleBeatLibraryBeatSelect = React.useCallback(
+    async (beat, extend = false) => {
+      const beatId = String(beat?.id || "");
+      if (!beatId) return;
+      if (extend && beatLibraryBeatSelectionAnchorId) {
+        const anchorIndex = visibleLocalBeatIdsInLibraryOrder.findIndex(
+          (id) => id === String(beatLibraryBeatSelectionAnchorId || "")
+        );
+        const targetIndex = visibleLocalBeatIdsInLibraryOrder.findIndex((id) => id === beatId);
+        if (anchorIndex >= 0 && targetIndex >= 0) {
+          const start = Math.min(anchorIndex, targetIndex);
+          const end = Math.max(anchorIndex, targetIndex);
+          setSelectedBeatLibraryBeatIds(visibleLocalBeatIdsInLibraryOrder.slice(start, end + 1));
+          setBeatLibraryBeatSelectionAnchorId(beatId);
+          await loadBeatIntoEditorRef.current?.("local", beat);
+          return;
+        }
+      }
+      setSelectedBeatLibraryBeatIds([beatId]);
+      setBeatLibraryBeatSelectionAnchorId(beatId);
+      await loadBeatIntoEditorRef.current?.("local", beat);
+    },
+    [beatLibraryBeatSelectionAnchorId, visibleLocalBeatIdsInLibraryOrder]
   );
   const currentBeatLibraryBeats = React.useMemo(
     () =>
@@ -8538,6 +9541,9 @@ useEffect(() => {
       setLoadedLocalBeatId(null);
     }
   }, []);
+  useEffect(() => {
+    loadBeatIntoEditorRef.current = loadBeatIntoEditor;
+  }, [loadBeatIntoEditor]);
   const buildCurrentArrangementSharePayload = React.useCallback(() => {
     const normalizedItems = normalizeArrangementItems(arrangementItems);
     const sharedBeats = [];
@@ -9521,6 +10527,11 @@ useEffect(() => {
     return savedArrangements.find((entry) => entry.id === loadedArrangementId) || null;
   }, [savedArrangements, loadedArrangementId]);
   const selectedLocalBeatForTrash = React.useMemo(() => {
+    if (selectedBeatLibraryBeatIds.length === 1) {
+      const selectedId = String(selectedBeatLibraryBeatIds[0] || "");
+      const selectedBeat = localBeats.find((entry) => String(entry?.id || "") === selectedId) || null;
+      if (selectedBeat) return selectedBeat;
+    }
     const loadedBeat =
       loadedLocalBeatId != null
         ? localBeats.find((entry) => String(entry?.id || "") === String(loadedLocalBeatId || "")) || null
@@ -9530,7 +10541,7 @@ useEffect(() => {
     const beatId = String(selectedArrangementSourceBeatKey || "").slice("local:".length);
     if (!beatId) return null;
     return localBeats.find((entry) => String(entry?.id || "") === beatId) || null;
-  }, [loadedLocalBeatId, localBeats, selectedArrangementSourceBeatKey]);
+  }, [loadedLocalBeatId, localBeats, selectedArrangementSourceBeatKey, selectedBeatLibraryBeatIds]);
   const arrangementDisplayName = React.useMemo(
     () =>
       getArrangementNameFromTitles(
@@ -13079,6 +14090,7 @@ useEffect(() => {
         beatLibraryDropTargetId={beatLibraryDropTargetId}
         isLoadedTrackedBeat={isLoadedTrackedBeat}
         isSelectedArrangementSourceBeat={isSelectedArrangementSourceBeat}
+        isBeatLibraryBeatSelected={selectedBeatLibraryBeatIds.includes(String(beat.id))}
         editingBeatLibraryBeatId={editingBeatLibraryBeatId}
         editingBeatLibraryBeatName={editingBeatLibraryBeatName}
         setEditingBeatLibraryBeatName={setEditingBeatLibraryBeatName}
@@ -13091,7 +14103,7 @@ useEffect(() => {
           canUpdateLoadedLocalBeat
         }
         updateCurrentLoadedBeatLocal={updateCurrentLoadedBeatLocal}
-        loadBeatIntoEditor={loadBeatIntoEditor}
+        onSelectBeat={handleBeatLibraryBeatSelect}
         arrangementAddBeat={arrangementAddBeat}
         handleDeleteLocalBeatClick={handleDeleteLocalBeatClick}
         hideSourceWhileDragging={hideSourceWhileDragging}
@@ -13118,8 +14130,10 @@ useEffect(() => {
     loadBeatIntoEditor,
     setEditingBeatLibraryBeatName,
     selectedArrangementSourceBeatKey,
+    selectedBeatLibraryBeatIds,
     startEditingBeatLibraryBeat,
     updateCurrentLoadedBeatLocal,
+    handleBeatLibraryBeatSelect,
   ]);
 
   const countBeatLibraryFolderBeats = React.useCallback((containerId) => {
@@ -13246,6 +14260,7 @@ useEffect(() => {
                     beatLibraryJustDraggedContainerRef.current = { id: "", at: 0 };
                     return;
                   }
+                  clearBeatLibraryBeatSelection();
                   selectBeatLibraryContainer(entry.id);
                 }}
                 className="inline-flex min-w-0 max-w-full items-center rounded px-1 py-0.5 text-left hover:bg-neutral-800/40"
@@ -13316,6 +14331,7 @@ useEffect(() => {
     selectedArrangementSourceBeatKey,
     selectedBeatLibraryContainerId,
     scheduleBeatLibraryFolderExpand,
+    clearBeatLibraryBeatSelection,
     setEditingBeatLibraryContainerName,
     startEditingBeatLibraryContainer,
     toggleBeatLibraryContainerCollapsed,
@@ -13620,15 +14636,15 @@ useEffect(() => {
               <>
                 <button
                   type="button"
-                  onClick={authUser ? handleSignOut : openAuthDialog}
+                  onClick={openAuthDialog}
                   disabled={authPending}
                   className={`touch-none select-none inline-flex h-[2.125rem] w-[2.125rem] items-center justify-center rounded border ${
                     authPending
                       ? "bg-neutral-900 border-neutral-800 text-neutral-500 cursor-not-allowed"
                       : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
                   }`}
-                  title={authPending ? "Authentication pending" : authUser ? `Sign out ${authUserLabel}` : "Sign in with email"}
-                  aria-label={authPending ? "Authentication pending" : authUser ? `Sign out ${authUserLabel}` : "Sign in with email"}
+                  title={authPending ? "Authentication pending" : authUser ? `Open account for ${authUserLabel}` : "Sign in with email"}
+                  aria-label={authPending ? "Authentication pending" : authUser ? `Open account for ${authUserLabel}` : "Sign in with email"}
                 >
                   {authPending ? "…" : <UserIcon />}
                 </button>
@@ -15049,6 +16065,23 @@ useEffect(() => {
                             >
                               Presets
                             </button>
+                            {arrangementSourceTab === "local" && authUser?.id && hasSupabaseEnabled ? (
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  await refreshPersonalLibraryFromCloud({ alertOnError: true });
+                                  setLibraryFiltersOpen(false);
+                                }}
+                                disabled={personalLibraryRefreshing}
+                                className={`inline-flex h-[1.625rem] items-center justify-center rounded border px-1.5 text-xs ${
+                                  personalLibraryRefreshing
+                                    ? "border-neutral-800 bg-neutral-900/60 text-neutral-500 cursor-not-allowed"
+                                    : "border-neutral-800 bg-neutral-900/60 text-neutral-400 hover:bg-neutral-800/60"
+                                }`}
+                              >
+                                {personalLibraryRefreshing ? "Syncing..." : "Sync personal cloud library"}
+                              </button>
+                            ) : null}
                             {arrangementSourceTab !== "presets" ? (
                               <>
                             <div className="flex items-center justify-between gap-3">
@@ -15196,7 +16229,20 @@ useEffect(() => {
                           <div className="flex items-center gap-2">
                             <button
                               type="button"
-                              onClick={() => createBeatLibraryContainer("folder")}
+                              onClick={async () => {
+                                const nextContainer = createBeatLibraryContainer("folder");
+                                if (!nextContainer) return;
+                                setEditingBeatLibraryContainerId(String(nextContainer.id));
+                                setEditingBeatLibraryContainerName(String(nextContainer.name || ""));
+                                if (selectedBeatLibraryBeatIds.length > 0) {
+                                  const orderedSelectedIds = visibleLocalBeatIdsInLibraryOrder.filter((id) =>
+                                    selectedBeatLibraryBeatIds.includes(id)
+                                  );
+                                  await moveBeatsToLibraryContainer(orderedSelectedIds, nextContainer.id);
+                                  clearBeatLibraryBeatSelection();
+                                  return;
+                                }
+                              }}
                               className="flex h-7 flex-1 items-center justify-center rounded border border-neutral-800 bg-neutral-900/40 px-2 text-sm text-neutral-400 hover:bg-neutral-800/60"
                             >
                               + Folder
@@ -15675,11 +16721,11 @@ useEffect(() => {
                                   >
                                     Local
                                   </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setArrangementLibraryTab("public");
-                                      setArrangementLibraryMenuOpen(false);
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setArrangementLibraryTab("public");
+                                    setArrangementLibraryMenuOpen(false);
                                     }}
                                     className={`inline-flex h-[1.625rem] items-center justify-center rounded border px-1.5 text-xs ${
                                       arrangementLibraryTab === "public"
@@ -15690,6 +16736,23 @@ useEffect(() => {
                                     Public
                                   </button>
                                 </div>
+                                {arrangementLibraryTab === "local" && authUser?.id && hasSupabaseEnabled ? (
+                                  <button
+                                    type="button"
+                                    onClick={async () => {
+                                      await refreshPersonalLibraryFromCloud({ alertOnError: true });
+                                      setArrangementLibraryMenuOpen(false);
+                                    }}
+                                    disabled={personalLibraryRefreshing}
+                                    className={`inline-flex h-[1.625rem] items-center justify-center rounded border px-1.5 text-xs ${
+                                      personalLibraryRefreshing
+                                        ? "border-neutral-800 bg-neutral-900/60 text-neutral-500 cursor-not-allowed"
+                                        : "border-neutral-800 bg-neutral-900/60 text-neutral-400 hover:bg-neutral-800/60"
+                                    }`}
+                                  >
+                                    {personalLibraryRefreshing ? "Syncing..." : "Sync personal cloud library"}
+                                  </button>
+                                ) : null}
                                 <button
                                   type="button"
                                   onClick={() => {
@@ -18252,6 +19315,7 @@ useEffect(() => {
         isOpen={isAuthDialogOpen}
         mode={authMode}
         onModeChange={setAuthMode}
+        signedInEmail={authUserEmail}
         emailInputRef={authEmailInputRef}
         email={authEmailInput}
         onEmailChange={setAuthEmailInput}
@@ -18268,10 +19332,191 @@ useEffect(() => {
           if (authMode === "magic-link") return handleMagicLinkSignIn();
           return handlePasswordSignIn();
         }}
+        onSignOut={authUser ? handleSignOut : null}
         pending={authPending}
         error={authError}
         message={authMessage}
       />
+      {pendingPersonalCloudImport ? (
+        (() => {
+          const hasPendingPersonalCloudImportSelection =
+            pendingPersonalCloudImportVisibleSelectedLibraryCount > 0 ||
+            effectiveSelectedPersonalCloudImportArrangementIds.length > 0;
+          return (
+        <div
+          className="fixed inset-0 z-[151] bg-black/60 p-4 flex items-center justify-center"
+          onMouseDown={() => {
+            if (personalCloudImportPending) return;
+            dismissPendingPersonalCloudImport();
+          }}
+        >
+          <div
+            className="w-full max-w-lg rounded-xl border border-neutral-700 bg-neutral-900 p-4 md:p-5"
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-base font-semibold text-white">Sync Local Library To Personal Cloud?</h3>
+            <div className="mt-3 text-sm text-neutral-300">
+              This device still has offline local content that is not yet part of your personal cloud library.
+            </div>
+            <div className="mt-3 rounded border border-neutral-800 bg-neutral-950/40 px-3 py-2 text-sm text-neutral-400">
+              <div>
+                {pendingPersonalCloudImport.beats.length} beat{pendingPersonalCloudImport.beats.length === 1 ? "" : "s"}
+              </div>
+              <div>
+                {pendingPersonalCloudImport.arrangements.length} arrangement{pendingPersonalCloudImport.arrangements.length === 1 ? "" : "s"}
+              </div>
+              <div>
+                {pendingPersonalCloudImport.folders.length} folder{pendingPersonalCloudImport.folders.length === 1 ? "" : "s"}
+              </div>
+            </div>
+            <div className="mt-3 text-sm text-neutral-400">
+              Choose whether to merge this device’s local library into your personal cloud library, or keep using the cloud library as-is.
+            </div>
+            <div className="mt-3 flex items-center justify-between gap-3 rounded border border-neutral-800 bg-neutral-950/40 px-3 py-2 text-sm text-neutral-400">
+              <span>
+                Selected for merge: {pendingPersonalCloudImportVisibleSelectedLibraryCount} library item
+                {pendingPersonalCloudImportVisibleSelectedLibraryCount === 1 ? "" : "s"}, {pendingPersonalCloudImportSelectedArrangementCount} arrangement
+                {pendingPersonalCloudImportSelectedArrangementCount === 1 ? "" : "s"}
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedPersonalCloudImportBeatIds([]);
+                  setSelectedPersonalCloudImportFolderIds([]);
+                  setSelectedPersonalCloudImportArrangementIds([]);
+                }}
+                className="text-xs text-neutral-400 hover:text-white"
+              >
+                None
+              </button>
+            </div>
+            {pendingPersonalCloudImportSelectedLibraryCount === 0 &&
+              pendingPersonalCloudImportSelectedArrangementCount > 0 ? (
+              <div className="mt-3 rounded border border-neutral-800 bg-neutral-950/40 px-3 py-2 text-sm text-neutral-400">
+                The library tree is currently unselected, but arrangements are still selected for merge.
+              </div>
+            ) : null}
+            <div className="mt-4 space-y-3">
+              <div className="rounded border border-neutral-800 bg-neutral-950/40 px-3 py-2">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="text-sm text-neutral-300">Library</div>
+                  <div className="flex items-center gap-2 text-xs">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedPersonalCloudImportBeatIds(
+                          pendingPersonalCloudImport.beats.map((entry) => String(entry?.id || "")).filter(Boolean)
+                        );
+                        setSelectedPersonalCloudImportFolderIds(
+                          pendingPersonalCloudImport.folders.map((entry) => String(entry?.id || "")).filter(Boolean)
+                        );
+                      }}
+                      className="text-neutral-400 hover:text-white"
+                    >
+                      All
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedPersonalCloudImportBeatIds([]);
+                        setSelectedPersonalCloudImportFolderIds([]);
+                      }}
+                      className="text-neutral-400 hover:text-white"
+                    >
+                      None
+                    </button>
+                  </div>
+                </div>
+                <div className="mt-2 max-h-56 overflow-auto pr-1">
+                  {renderPendingPersonalCloudImportFolderContents(null, 0)}
+                </div>
+              </div>
+              <div className="rounded border border-neutral-800 bg-neutral-950/40 px-3 py-2">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="text-sm text-neutral-300">Arrangements</div>
+                  <div className="flex items-center gap-2 text-xs">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setSelectedPersonalCloudImportArrangementIds(
+                          pendingPersonalCloudImport.arrangements.map((entry) => String(entry?.id || "")).filter(Boolean)
+                        )
+                      }
+                      className="text-neutral-400 hover:text-white"
+                    >
+                      All
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedPersonalCloudImportArrangementIds([])}
+                      className="text-neutral-400 hover:text-white"
+                    >
+                      None
+                    </button>
+                  </div>
+                </div>
+                <div className="mt-2 max-h-28 space-y-1 overflow-auto pr-1">
+                  {pendingPersonalCloudImport.arrangements.map((entry) => {
+                    const id = String(entry?.id || "");
+                    const checked = selectedPersonalCloudImportArrangementIds.includes(id);
+                    return (
+                      <label key={`cloud-import-arrangement-${id}`} className="flex items-center gap-2 text-sm text-neutral-400">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={(e) =>
+                            setSelectedPersonalCloudImportArrangementIds((prev) =>
+                              e.target.checked
+                                ? [...prev, id]
+                                : prev.filter((value) => value !== id)
+                            )
+                          }
+                          className="accent-neutral-500"
+                        />
+                        <span className="truncate">{String(entry?.name || "Untitled Arrangement")}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+            <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={dismissPendingPersonalCloudImport}
+                disabled={personalCloudImportPending}
+                className={`px-3 py-1.5 rounded border text-sm ${
+                  personalCloudImportPending
+                    ? "border-neutral-800 text-neutral-500 bg-neutral-900/60 cursor-not-allowed"
+                    : !hasPendingPersonalCloudImportSelection
+                      ? "border-sky-500/70 text-sky-100 bg-sky-900/20 hover:bg-sky-900/30"
+                      : "border-neutral-700 text-neutral-300 hover:bg-neutral-800/60"
+                }`}
+              >
+                Use cloud now, keep local on this device
+              </button>
+              <button
+                type="button"
+                onClick={handleMergePendingPersonalCloudImport}
+                disabled={
+                  personalCloudImportPending ||
+                  !hasPendingPersonalCloudImportSelection
+                }
+                className={`px-3 py-1.5 rounded border text-sm ${
+                  personalCloudImportPending ||
+                  !hasPendingPersonalCloudImportSelection
+                    ? "border-neutral-800 text-neutral-500 bg-neutral-900/60 cursor-not-allowed"
+                    : "border-sky-500/70 text-sky-100 bg-sky-900/20 hover:bg-sky-900/30"
+                }`}
+              >
+                {personalCloudImportPending ? "Merging…" : "Merge into personal cloud"}
+              </button>
+            </div>
+          </div>
+        </div>
+          );
+        })()
+      ) : null}
       {isPreferencesDialogOpen && (
         <div
           className="fixed inset-0 z-[92] bg-black/60 p-4 flex items-center justify-center"
@@ -19006,7 +20251,7 @@ function SortableArrangementRow({
       }}
       onDragOver={onExternalDragOver}
       onDrop={onExternalDrop}
-      className={`rounded border px-2.5 py-2 ${
+      className={`select-none rounded border px-2.5 py-2 ${
         isPlaying
           ? "border-cyan-500/80 bg-cyan-900/20 shadow-[0_0_0_1px_rgba(6,182,212,0.35)]"
           : isSelected

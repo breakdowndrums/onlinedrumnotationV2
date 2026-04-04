@@ -4,6 +4,7 @@ export default function AuthDialog({
   isOpen,
   mode,
   onModeChange,
+  signedInEmail,
   emailInputRef,
   email,
   onEmailChange,
@@ -11,11 +12,13 @@ export default function AuthDialog({
   onPasswordChange,
   onCancel,
   onSubmit,
+  onSignOut,
   pending,
   error,
   message,
 }) {
   if (!isOpen) return null;
+  const isSignedIn = Boolean(String(signedInEmail || "").trim());
   const isPasswordMode = mode === "sign-in" || mode === "sign-up" || mode === "new-password";
   const showEmailField = mode !== "new-password";
   const submitLabel =
@@ -60,6 +63,12 @@ export default function AuthDialog({
                 {label}
               </button>
             ))}
+          </div>
+        ) : null}
+        {isSignedIn ? (
+          <div className="mt-4 rounded border border-neutral-800 bg-neutral-950/40 px-3 py-2">
+            <div className="text-xs text-neutral-500">Signed in as</div>
+            <div className="mt-1 text-sm text-neutral-300 break-all">{signedInEmail}</div>
           </div>
         ) : null}
         {showEmailField ? (
@@ -112,6 +121,20 @@ export default function AuthDialog({
         {error ? <div className="mt-3 text-sm text-red-400">{error}</div> : null}
         {message ? <div className="mt-3 text-sm text-neutral-400">{message}</div> : null}
         <div className="mt-4 flex items-center justify-end gap-2">
+          {isSignedIn && onSignOut ? (
+            <button
+              type="button"
+              onClick={onSignOut}
+              disabled={pending}
+              className={`mr-auto px-3 py-1.5 rounded border text-sm ${
+                pending
+                  ? "border-neutral-800 text-neutral-500 bg-neutral-900/60 cursor-not-allowed"
+                  : "border-neutral-700 text-neutral-300 hover:bg-neutral-800/60"
+              }`}
+            >
+              Sign out
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={onCancel}
