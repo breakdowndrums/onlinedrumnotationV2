@@ -1207,6 +1207,24 @@ function hasHandledPersonalCloudImportDecision(userId, fingerprint) {
   return Boolean(decisions[`${String(userId)}:${String(fingerprint)}`]);
 }
 
+function writeStoredLocalBeats(beats) {
+  try {
+    window.localStorage.setItem(LOCAL_BEAT_LIBRARY_STORAGE_KEY, JSON.stringify(beats || []));
+  } catch (_) {}
+}
+
+function writeStoredSavedArrangements(items) {
+  try {
+    window.localStorage.setItem(SONG_ARRANGEMENT_LIBRARY_STORAGE_KEY, JSON.stringify(items || []));
+  } catch (_) {}
+}
+
+function writeStoredBeatLibraryContainers(items) {
+  try {
+    window.localStorage.setItem(BEAT_LIBRARY_CONTAINERS_STORAGE_KEY, JSON.stringify(items || []));
+  } catch (_) {}
+}
+
 function getBeatLibraryMeta(beat) {
   const direct = beat?.libraryMeta && typeof beat.libraryMeta === "object" ? beat.libraryMeta : null;
   const payloadMeta = beat?.payload?.libraryMeta && typeof beat.payload.libraryMeta === "object"
@@ -4045,18 +4063,27 @@ export default function App() {
   useEffect(() => {
     if (!hasSupabaseEnabled || !supabase) return undefined;
     if (!authUser?.id) {
-      const nextLocalBeats = readStoredLocalBeats();
-      const nextSavedArrangements = readStoredSavedArrangements();
-      const nextBeatLibraryContainers = readStoredBeatLibraryContainers();
+      const nextLocalBeats = deviceLocalBeatsRef.current;
+      const nextSavedArrangements = deviceLocalArrangementsRef.current;
+      const nextBeatLibraryContainers = deviceLocalBeatLibraryContainersRef.current;
       setLocalBeats(nextLocalBeats);
       setSavedArrangements(nextSavedArrangements);
       setBeatLibraryContainers(nextBeatLibraryContainers);
+      writeStoredLocalBeats(nextLocalBeats);
+      writeStoredSavedArrangements(nextSavedArrangements);
+      writeStoredBeatLibraryContainers(nextBeatLibraryContainers);
       lastSyncedBeatLibraryContainersJsonRef.current = JSON.stringify(nextBeatLibraryContainers);
       personalLibraryCloudHydratedRef.current = false;
       return undefined;
     }
     let cancelled = false;
     personalLibraryCloudHydratedRef.current = false;
+    deviceLocalBeatsRef.current = localBeatsRef.current;
+    deviceLocalArrangementsRef.current = savedArrangementsRef.current;
+    deviceLocalBeatLibraryContainersRef.current = beatLibraryContainersRef.current;
+    writeStoredLocalBeats(deviceLocalBeatsRef.current);
+    writeStoredSavedArrangements(deviceLocalArrangementsRef.current);
+    writeStoredBeatLibraryContainers(deviceLocalBeatLibraryContainersRef.current);
     const loadCloudLibrary = async () => {
       try {
         const [nextBeats, nextArrangements, nextBeatLibraryContainers] = await Promise.all([
@@ -4619,10 +4646,8 @@ export default function App() {
   useEffect(() => {
     try {
       if (authUser?.id) return;
-      window.localStorage.setItem(
-        SONG_ARRANGEMENT_LIBRARY_STORAGE_KEY,
-        JSON.stringify(savedArrangements)
-      );
+      deviceLocalArrangementsRef.current = savedArrangements;
+      writeStoredSavedArrangements(savedArrangements);
     } catch (_) {}
   }, [savedArrangements, authUser?.id]);
   useEffect(() => {
@@ -4744,12 +4769,11 @@ export default function App() {
   }, [preferencesCategory]);
   useEffect(() => {
     try {
-      window.localStorage.setItem(
-        BEAT_LIBRARY_CONTAINERS_STORAGE_KEY,
-        JSON.stringify(beatLibraryContainers)
-      );
+      if (authUser?.id) return;
+      deviceLocalBeatLibraryContainersRef.current = beatLibraryContainers;
+      writeStoredBeatLibraryContainers(beatLibraryContainers);
     } catch (_) {}
-  }, [beatLibraryContainers]);
+  }, [beatLibraryContainers, authUser?.id]);
   useEffect(() => {
     if (!authUser?.id) return;
     if (!personalLibraryCloudHydratedRef.current) return;
@@ -6611,6 +6635,9 @@ useEffect(() => {
   const arrangementItemsRef = React.useRef(arrangementItems);
   const savedArrangementsRef = React.useRef(savedArrangements);
   const beatLibraryContainersRef = React.useRef(beatLibraryContainers);
+  const deviceLocalBeatsRef = React.useRef(readStoredLocalBeats());
+  const deviceLocalArrangementsRef = React.useRef(readStoredSavedArrangements());
+  const deviceLocalBeatLibraryContainersRef = React.useRef(readStoredBeatLibraryContainers());
   const arrangementNameDraftRef = React.useRef(arrangementNameDraft);
   const arrangementTitleLine1DraftRef = React.useRef(arrangementTitleLine1Draft);
   const arrangementTitleLine2DraftRef = React.useRef(arrangementTitleLine2Draft);
@@ -7196,7 +7223,8 @@ useEffect(() => {
   useEffect(() => {
     try {
       if (authUser?.id) return;
-      window.localStorage.setItem(LOCAL_BEAT_LIBRARY_STORAGE_KEY, JSON.stringify(localBeats));
+      deviceLocalBeatsRef.current = localBeats;
+      writeStoredLocalBeats(localBeats);
     } catch (_) {}
   }, [localBeats, authUser?.id]);
   useEffect(() => {
