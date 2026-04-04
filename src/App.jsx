@@ -631,9 +631,13 @@ const PRESET_LABELS = {
 };
 const USER_PRESETS_STORAGE_KEY = "drum-grid-user-presets-v1";
 const LOCAL_BEAT_LIBRARY_STORAGE_KEY = "drum-grid-local-beat-library-v1";
+const DEVICE_LOCAL_BEAT_LIBRARY_SNAPSHOT_STORAGE_KEY =
+  "drum-grid-device-local-beat-library-snapshot-v1";
 const PUBLIC_SUBMIT_COMPOSER_STORAGE_KEY = "drum-grid-public-submit-composer-v1";
 const SONG_ARRANGEMENT_STORAGE_KEY = "drum-grid-song-arrangement-v1";
 const SONG_ARRANGEMENT_LIBRARY_STORAGE_KEY = "drum-grid-song-arrangement-library-v1";
+const DEVICE_LOCAL_SONG_ARRANGEMENT_LIBRARY_SNAPSHOT_STORAGE_KEY =
+  "drum-grid-device-local-song-arrangement-library-snapshot-v1";
 const LAST_USED_ARRANGEMENT_ID_STORAGE_KEY = "drum-grid-last-used-arrangement-id-v1";
 const PERSONAL_CLOUD_IMPORT_DECISIONS_STORAGE_KEY = "drum-grid-personal-cloud-import-decisions-v1";
 const ARRANGEMENT_BOUNDARY_COMP_SCALE_STORAGE_KEY = "drum-grid-arrangement-boundary-comp-scale-v1";
@@ -677,11 +681,14 @@ const ARRANGEMENT_COMPOSER_STORAGE_KEY = "drum-grid-arrangement-composer-v1";
 const PREFERENCES_CATEGORY_STORAGE_KEY = "drum-grid-preferences-category-v1";
 const DEFAULT_LOOP_REPEATS_STORAGE_KEY = "drum-grid-default-loop-repeats-v1";
 const BEAT_LIBRARY_CONTAINERS_STORAGE_KEY = "drum-grid-beat-library-containers-v1";
+const DEVICE_LOCAL_BEAT_LIBRARY_CONTAINERS_SNAPSHOT_STORAGE_KEY =
+  "drum-grid-device-local-beat-library-containers-snapshot-v1";
 const PERSONAL_LIBRARY_STATE_PAYLOAD_KIND = "personal-library-state";
 const PERSONAL_LIBRARY_STATE_SHARE_LINK_KIND = "arrangement";
 const BEAT_LIBRARY_SELECTED_CONTAINER_STORAGE_KEY = "drum-grid-beat-library-selected-container-v1";
 const BEAT_LIBRARY_ROOT_COLLAPSED_STORAGE_KEY = "drum-grid-beat-library-root-collapsed-v1";
 const GRID_SETTINGS_PRESET_LIBRARY_STORAGE_KEY = "drum-grid-grid-settings-presets-v1";
+const APP_VERSION = "0.1.1";
 const BEAT_CATEGORY_OPTIONS = [
   "Groove",
   "Fill",
@@ -1142,15 +1149,46 @@ function readStoredBeatLibraryContainers() {
   }
 }
 
+function readStoredDeviceLocalBeats() {
+  try {
+    const raw = window.localStorage.getItem(DEVICE_LOCAL_BEAT_LIBRARY_SNAPSHOT_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (Array.isArray(parsed)) return normalizeLocalBeatLibrary(parsed);
+  } catch (_) {}
+  return readStoredLocalBeats();
+}
+
+function readStoredDeviceLocalArrangements() {
+  try {
+    const raw = window.localStorage.getItem(
+      DEVICE_LOCAL_SONG_ARRANGEMENT_LIBRARY_SNAPSHOT_STORAGE_KEY
+    );
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (Array.isArray(parsed)) return normalizeArrangementLibrary(parsed);
+  } catch (_) {}
+  return readStoredSavedArrangements();
+}
+
+function readStoredDeviceLocalBeatLibraryContainers() {
+  try {
+    const raw = window.localStorage.getItem(
+      DEVICE_LOCAL_BEAT_LIBRARY_CONTAINERS_SNAPSHOT_STORAGE_KEY
+    );
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (Array.isArray(parsed)) return normalizeBeatLibraryContainers(parsed);
+  } catch (_) {}
+  return readStoredBeatLibraryContainers();
+}
+
 function getPersonalLibraryStateShareId(userId) {
   const normalized = String(userId || "").trim();
   return normalized ? `personal-library-${normalized}` : "";
 }
 
 function buildOfflineLocalLibrarySnapshot() {
-  const beats = readStoredLocalBeats();
-  const arrangements = readStoredSavedArrangements();
-  const folders = readStoredBeatLibraryContainers();
+  const beats = readStoredDeviceLocalBeats();
+  const arrangements = readStoredDeviceLocalArrangements();
+  const folders = readStoredDeviceLocalBeatLibraryContainers();
   const fingerprint = JSON.stringify({
     beats: beats.map((entry) => [
       String(entry?.id || ""),
@@ -1213,15 +1251,42 @@ function writeStoredLocalBeats(beats) {
   } catch (_) {}
 }
 
+function writeStoredDeviceLocalBeats(beats) {
+  try {
+    window.localStorage.setItem(
+      DEVICE_LOCAL_BEAT_LIBRARY_SNAPSHOT_STORAGE_KEY,
+      JSON.stringify(beats || [])
+    );
+  } catch (_) {}
+}
+
 function writeStoredSavedArrangements(items) {
   try {
     window.localStorage.setItem(SONG_ARRANGEMENT_LIBRARY_STORAGE_KEY, JSON.stringify(items || []));
   } catch (_) {}
 }
 
+function writeStoredDeviceLocalArrangements(items) {
+  try {
+    window.localStorage.setItem(
+      DEVICE_LOCAL_SONG_ARRANGEMENT_LIBRARY_SNAPSHOT_STORAGE_KEY,
+      JSON.stringify(items || [])
+    );
+  } catch (_) {}
+}
+
 function writeStoredBeatLibraryContainers(items) {
   try {
     window.localStorage.setItem(BEAT_LIBRARY_CONTAINERS_STORAGE_KEY, JSON.stringify(items || []));
+  } catch (_) {}
+}
+
+function writeStoredDeviceLocalBeatLibraryContainers(items) {
+  try {
+    window.localStorage.setItem(
+      DEVICE_LOCAL_BEAT_LIBRARY_CONTAINERS_SNAPSHOT_STORAGE_KEY,
+      JSON.stringify(items || [])
+    );
   } catch (_) {}
 }
 
@@ -4025,11 +4090,11 @@ export default function App() {
     return true;
   }, [authUser?.id]);
   const refreshPersonalLibraryFromCloud = React.useCallback(async (options = {}) => {
-    const { alertOnError = false } = options;
+    const { alertOnError = false, pushCurrentFoldersFirst = true } = options;
     if (!hasSupabaseEnabled || !supabase || !authUser?.id) return false;
     setPersonalLibraryRefreshing(true);
     try {
-      if (personalLibraryCloudHydratedRef.current) {
+      if (pushCurrentFoldersFirst && personalLibraryCloudHydratedRef.current) {
         await saveCloudBeatLibraryContainers(beatLibraryContainersRef.current);
       }
       const [nextBeats, nextArrangements, nextBeatLibraryContainers] = await Promise.all([
@@ -4059,7 +4124,7 @@ export default function App() {
     } finally {
       setPersonalLibraryRefreshing(false);
     }
-  }, [authUser?.id, fetchCloudLocalBeats, fetchCloudSavedArrangements]);
+  }, [authUser?.id, fetchCloudLocalBeats, fetchCloudSavedArrangements, saveCloudBeatLibraryContainers]);
   useEffect(() => {
     if (!hasSupabaseEnabled || !supabase) return undefined;
     if (!authUser?.id) {
@@ -4072,6 +4137,9 @@ export default function App() {
       writeStoredLocalBeats(nextLocalBeats);
       writeStoredSavedArrangements(nextSavedArrangements);
       writeStoredBeatLibraryContainers(nextBeatLibraryContainers);
+      writeStoredDeviceLocalBeats(nextLocalBeats);
+      writeStoredDeviceLocalArrangements(nextSavedArrangements);
+      writeStoredDeviceLocalBeatLibraryContainers(nextBeatLibraryContainers);
       lastSyncedBeatLibraryContainersJsonRef.current = JSON.stringify(nextBeatLibraryContainers);
       personalLibraryCloudHydratedRef.current = false;
       return undefined;
@@ -4081,9 +4149,9 @@ export default function App() {
     deviceLocalBeatsRef.current = localBeatsRef.current;
     deviceLocalArrangementsRef.current = savedArrangementsRef.current;
     deviceLocalBeatLibraryContainersRef.current = beatLibraryContainersRef.current;
-    writeStoredLocalBeats(deviceLocalBeatsRef.current);
-    writeStoredSavedArrangements(deviceLocalArrangementsRef.current);
-    writeStoredBeatLibraryContainers(deviceLocalBeatLibraryContainersRef.current);
+    writeStoredDeviceLocalBeats(deviceLocalBeatsRef.current);
+    writeStoredDeviceLocalArrangements(deviceLocalArrangementsRef.current);
+    writeStoredDeviceLocalBeatLibraryContainers(deviceLocalBeatLibraryContainersRef.current);
     const loadCloudLibrary = async () => {
       try {
         const [nextBeats, nextArrangements, nextBeatLibraryContainers] = await Promise.all([
@@ -4242,7 +4310,10 @@ export default function App() {
 
     await saveCloudBeatLibraryContainers(mergedFolders);
     writePersonalCloudImportDecision(authUser.id, source.fingerprint, "merged");
-    await refreshPersonalLibraryFromCloud({ alertOnError: true });
+    await refreshPersonalLibraryFromCloud({
+      alertOnError: true,
+      pushCurrentFoldersFirst: false,
+    });
     return true;
   }, [authUser?.id, refreshPersonalLibraryFromCloud, saveCloudBeatLibraryContainers]);
   const pendingPersonalCloudImportFolderChildrenByParent = React.useMemo(() => {
@@ -4648,6 +4719,7 @@ export default function App() {
       if (authUser?.id) return;
       deviceLocalArrangementsRef.current = savedArrangements;
       writeStoredSavedArrangements(savedArrangements);
+      writeStoredDeviceLocalArrangements(savedArrangements);
     } catch (_) {}
   }, [savedArrangements, authUser?.id]);
   useEffect(() => {
@@ -4772,6 +4844,7 @@ export default function App() {
       if (authUser?.id) return;
       deviceLocalBeatLibraryContainersRef.current = beatLibraryContainers;
       writeStoredBeatLibraryContainers(beatLibraryContainers);
+      writeStoredDeviceLocalBeatLibraryContainers(beatLibraryContainers);
     } catch (_) {}
   }, [beatLibraryContainers, authUser?.id]);
   useEffect(() => {
@@ -6635,9 +6708,9 @@ useEffect(() => {
   const arrangementItemsRef = React.useRef(arrangementItems);
   const savedArrangementsRef = React.useRef(savedArrangements);
   const beatLibraryContainersRef = React.useRef(beatLibraryContainers);
-  const deviceLocalBeatsRef = React.useRef(readStoredLocalBeats());
-  const deviceLocalArrangementsRef = React.useRef(readStoredSavedArrangements());
-  const deviceLocalBeatLibraryContainersRef = React.useRef(readStoredBeatLibraryContainers());
+  const deviceLocalBeatsRef = React.useRef(readStoredDeviceLocalBeats());
+  const deviceLocalArrangementsRef = React.useRef(readStoredDeviceLocalArrangements());
+  const deviceLocalBeatLibraryContainersRef = React.useRef(readStoredDeviceLocalBeatLibraryContainers());
   const arrangementNameDraftRef = React.useRef(arrangementNameDraft);
   const arrangementTitleLine1DraftRef = React.useRef(arrangementTitleLine1Draft);
   const arrangementTitleLine2DraftRef = React.useRef(arrangementTitleLine2Draft);
@@ -7225,6 +7298,7 @@ useEffect(() => {
       if (authUser?.id) return;
       deviceLocalBeatsRef.current = localBeats;
       writeStoredLocalBeats(localBeats);
+      writeStoredDeviceLocalBeats(localBeats);
     } catch (_) {}
   }, [localBeats, authUser?.id]);
   useEffect(() => {
@@ -15129,6 +15203,9 @@ useEffect(() => {
               Library
             </button>
           </div>
+          <span className="select-none whitespace-nowrap text-[11px] text-neutral-500" title={`Version ${APP_VERSION}`}>
+            v{APP_VERSION}
+          </span>
           {playabilityWarningsEnabled && playabilityWarningSteps.length > 0 && (
             <span className="text-[11px] text-red-500 whitespace-nowrap">
               {playabilityWarningSteps.length} playability warning{playabilityWarningSteps.length === 1 ? "" : "s"}
