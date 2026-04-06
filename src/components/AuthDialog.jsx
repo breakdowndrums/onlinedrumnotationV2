@@ -5,6 +5,7 @@ export default function AuthDialog({
   mode,
   onModeChange,
   signedInEmail,
+  roleLabel = "",
   emailInputRef,
   email,
   onEmailChange,
@@ -16,6 +17,12 @@ export default function AuthDialog({
   pending,
   error,
   message,
+  beatsCount = 0,
+  arrangementsCount = 0,
+  foldersCount = 0,
+  shareQrCount = 0,
+  lastSyncAt = "",
+  statsPending = false,
 }) {
   if (!isOpen) return null;
   const isSignedIn = Boolean(String(signedInEmail || "").trim());
@@ -31,7 +38,7 @@ export default function AuthDialog({
         : mode === "magic-link"
           ? "Send link"
           : "Sign in";
-  const title = mode === "new-password" ? "Set New Password" : "Sign In";
+  const title = isSignedIn ? "Profile" : mode === "new-password" ? "Set New Password" : "Sign In";
   return (
     <div
       className="fixed inset-0 z-[150] bg-black/60 p-4 flex items-center justify-center"
@@ -42,6 +49,70 @@ export default function AuthDialog({
         onMouseDown={(e) => e.stopPropagation()}
       >
         <h3 className="text-base font-semibold">{title}</h3>
+        {isSignedIn ? (
+          <>
+            <div className="mt-4 rounded-xl border border-neutral-800 bg-neutral-950/40 px-3.5 py-3">
+              <div className="flex items-center gap-2">
+                <span
+                  className={`inline-flex rounded border px-2 py-1 text-[11px] ${
+                    roleLabel === "Admin"
+                      ? "border-amber-700/60 bg-amber-950/30 text-amber-200"
+                      : "border-sky-700/50 bg-sky-950/20 text-sky-200"
+                  }`}
+                >
+                  {roleLabel || "Signed in"}
+                </span>
+              </div>
+              <div className="mt-3 text-[11px] uppercase tracking-[0.16em] text-neutral-500">Email</div>
+              <div className="mt-1 break-all text-sm text-neutral-300">{signedInEmail}</div>
+            </div>
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              {[
+                ["Beats", beatsCount],
+                ["Arrangements", arrangementsCount],
+                ["Folders", foldersCount],
+                ["Share / QR", shareQrCount],
+              ].map(([label, value]) => (
+                <div key={label} className="rounded-xl border border-neutral-800 bg-neutral-950/40 px-3 py-2.5">
+                  <div className="text-[11px] uppercase tracking-[0.14em] text-neutral-500">{label}</div>
+                  <div className="mt-1 text-lg font-semibold text-neutral-200">{value}</div>
+                </div>
+              ))}
+            </div>
+            <div className="mt-4 rounded-xl border border-neutral-800 bg-neutral-950/40 px-3.5 py-3">
+              <div className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">Last sync</div>
+              <div className="mt-1 text-sm text-neutral-300">
+                {statsPending ? "Loading…" : lastSyncAt || "Not synced yet"}
+              </div>
+            </div>
+            {error ? <div className="mt-3 text-sm text-red-400">{error}</div> : null}
+            {message ? <div className="mt-3 text-sm text-neutral-400">{message}</div> : null}
+            <div className="mt-4 flex items-center justify-end gap-2">
+              {onSignOut ? (
+                <button
+                  type="button"
+                  onClick={onSignOut}
+                  disabled={pending}
+                  className={`mr-auto px-3 py-1.5 rounded border text-sm ${
+                    pending
+                      ? "border-neutral-800 text-neutral-500 bg-neutral-900/60 cursor-not-allowed"
+                      : "border-neutral-700 text-neutral-300 hover:bg-neutral-800/60"
+                  }`}
+                >
+                  Sign out
+                </button>
+              ) : null}
+              <button
+                type="button"
+                onClick={onCancel}
+                className="px-3 py-1.5 rounded border border-neutral-700 text-sm text-neutral-300 hover:bg-neutral-800/60"
+              >
+                Close
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
         {mode !== "new-password" ? (
           <div className="mt-4 flex flex-wrap items-center gap-2">
             {[
@@ -63,12 +134,6 @@ export default function AuthDialog({
                 {label}
               </button>
             ))}
-          </div>
-        ) : null}
-        {isSignedIn ? (
-          <div className="mt-4 rounded border border-neutral-800 bg-neutral-950/40 px-3 py-2">
-            <div className="text-xs text-neutral-500">Signed in as</div>
-            <div className="mt-1 text-sm text-neutral-300 break-all">{signedInEmail}</div>
           </div>
         ) : null}
         {showEmailField ? (
@@ -155,6 +220,8 @@ export default function AuthDialog({
             {pending ? "Sending…" : submitLabel}
           </button>
         </div>
+          </>
+        )}
       </div>
     </div>
   );

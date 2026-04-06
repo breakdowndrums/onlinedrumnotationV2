@@ -72,7 +72,7 @@ export function usePlayback({
       setError(null);
       // iOS: prime audio session via HTMLMediaElement
       primeIOSAudioSync();
-      engine.unlock();
+      await engine.unlock();
       engine.ensureContext();
       const ctx = engine.getContext();
       const buffers = await loadSamples(ctx, SAMPLE_MAP);
@@ -91,7 +91,7 @@ export function usePlayback({
       try {
         // iOS: prime audio session via HTMLMediaElement
         primeIOSAudioSync();
-        engine.unlock();
+        await engine.unlock();
         setError(null);
         setStartupLagMs(0);
         setSlowStartDetected(false);
@@ -168,10 +168,10 @@ export function usePlayback({
       loop = false,
       countInBeats = 0,
       countInBeatDurSec = 0,
-    } = {}) => {
+      } = {}) => {
       try {
         primeIOSAudioSync();
-        engine.unlock();
+        await engine.unlock();
         setError(null);
         setStartupLagMs(0);
         setSlowStartDetected(false);
@@ -183,13 +183,26 @@ export function usePlayback({
           await initSamples();
         }
         await engine.resumeIfNeeded();
-        const startedAt = await engine.playCompiled(events, {
-          startAtSec,
-          totalDurationSec,
-          loop,
-          countInBeats,
-          countInBeatDurSec,
-        });
+        let startedAt;
+        try {
+          startedAt = await engine.playCompiled(events, {
+            startAtSec,
+            totalDurationSec,
+            loop,
+            countInBeats,
+            countInBeatDurSec,
+          });
+        } catch (err) {
+          await engine.unlock();
+          await engine.resumeIfNeeded();
+          startedAt = await engine.playCompiled(events, {
+            startAtSec,
+            totalDurationSec,
+            loop,
+            countInBeats,
+            countInBeatDurSec,
+          });
+        }
         setIsPlaying(true);
         return startedAt;
       } catch (e) {
