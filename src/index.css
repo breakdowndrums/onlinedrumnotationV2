@@ -21,3 +21,26 @@
 .no-spinner[type="number"] {
   -moz-appearance: textfield;
 }
+
+.dg-slim-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(163, 163, 163, 0.55) transparent;
+}
+
+.dg-slim-scrollbar::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.dg-slim-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.dg-slim-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(163, 163, 163, 0.55);
+  border-radius: 9999px;
+}
+
+.dg-slim-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(212, 212, 212, 0.65);
+}

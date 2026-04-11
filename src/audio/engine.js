@@ -1,6 +1,8 @@
 export function makeAudioEngine() {
   let audioCtx = null;
   let master = null;
+  let drumsBus = null;
+  let metronomeBus = null;
 
   // Transport
   let isPlaying = false;
@@ -11,6 +13,7 @@ export function makeAudioEngine() {
   let timeSig = { n: 4, d: 4 };
   let metronomeEnabled = false;
   let metronomeVolume = 0.5;
+  let drumVolume = 0.9;
 
   // Scheduler state
   let currentStep = 0;
@@ -40,7 +43,13 @@ export function makeAudioEngine() {
     if (audioCtx) return;
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     master = audioCtx.createGain();
-    master.gain.value = 0.9;
+    master.gain.value = 1;
+    drumsBus = audioCtx.createGain();
+    drumsBus.gain.value = drumVolume;
+    metronomeBus = audioCtx.createGain();
+    metronomeBus.gain.value = 1;
+    drumsBus.connect(master);
+    metronomeBus.connect(master);
     master.connect(audioCtx.destination);
   }
 
@@ -86,6 +95,7 @@ export function makeAudioEngine() {
     nextTimeSig,
     nextMetronomeEnabled,
     nextMetronomeVolume,
+    nextDrumVolume,
   }) {
     if (typeof nextBpm === "number") bpm = nextBpm;
     if (typeof nextResolution === "number") resolution = nextResolution;
@@ -98,6 +108,10 @@ export function makeAudioEngine() {
     if (typeof nextMetronomeEnabled === "boolean") metronomeEnabled = nextMetronomeEnabled;
     if (typeof nextMetronomeVolume === "number" && Number.isFinite(nextMetronomeVolume)) {
       metronomeVolume = Math.max(0, Math.min(1, nextMetronomeVolume));
+    }
+    if (typeof nextDrumVolume === "number" && Number.isFinite(nextDrumVolume)) {
+      drumVolume = Math.max(0, Math.min(1, nextDrumVolume));
+      if (drumsBus) drumsBus.gain.value = drumVolume;
     }
     const prevStepQuarterDurations = stepQuarterDurations;
     if (Array.isArray(nextStepQuarterDurations) && nextStepQuarterDurations.length > 0) {
@@ -205,7 +219,7 @@ export function makeAudioEngine() {
 
   
   function triggerWithGain(instId, time, gainValue = 1) {
-    if (!audioCtx || !master) return null;
+    if (!audioCtx || !master || !drumsBus || !metronomeBus) return null;
     const buf = buffers[instId];
     if (!buf) return null;
 
@@ -219,9 +233,10 @@ export function makeAudioEngine() {
 
     const gain = audioCtx.createGain();
     gain.gain.value = Math.max(0, Math.min(1, gainValue));
+    const outputBus = instId === "metronomeHi" || instId === "metronomeLo" ? metronomeBus : drumsBus;
 
     src.connect(gain);
-    gain.connect(master);
+    gain.connect(outputBus);
 
     src.start(time);
     return { src, gain };
@@ -244,7 +259,7 @@ export function makeAudioEngine() {
   }
 
 function trigger(instId, time, gainValue = 1) {
-    if (!audioCtx || !master) return;
+    if (!audioCtx || !master || !drumsBus || !metronomeBus) return;
     const buf = buffers[instId];
     if (!buf) return;
 
@@ -258,9 +273,10 @@ function trigger(instId, time, gainValue = 1) {
 
     const gain = audioCtx.createGain();
     gain.gain.value = Math.max(0, Math.min(1, gainValue));
+    const outputBus = instId === "metronomeHi" || instId === "metronomeLo" ? metronomeBus : drumsBus;
 
     src.connect(gain);
-    gain.connect(master);
+    gain.connect(outputBus);
 
     src.start(time);
     return src;

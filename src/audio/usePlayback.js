@@ -14,6 +14,7 @@ export function usePlayback({
   timeSig,
   metronomeEnabled,
   metronomeVolume,
+  drumVolume,
 }) {
   const engine = useMemo(() => makeAudioEngine(), []);
   const [isReady, setIsReady] = useState(false);
@@ -42,8 +43,9 @@ export function usePlayback({
       nextTimeSig: timeSig,
       nextMetronomeEnabled: metronomeEnabled,
       nextMetronomeVolume: metronomeVolume,
+      nextDrumVolume: drumVolume,
     });
-  }, [engine, bpm, resolution, columns, stepQuarterDurations, timeSig, metronomeEnabled, metronomeVolume]);
+  }, [engine, bpm, resolution, columns, stepQuarterDurations, timeSig, metronomeEnabled, metronomeVolume, drumVolume]);
 
   useEffect(() => {
     engine.setOnStep((step, meta) => {
@@ -72,8 +74,8 @@ export function usePlayback({
       setError(null);
       // iOS: prime audio session via HTMLMediaElement
       primeIOSAudioSync();
-      await engine.unlock();
       engine.ensureContext();
+      await engine.resumeIfNeeded();
       const ctx = engine.getContext();
       const buffers = await loadSamples(ctx, SAMPLE_MAP);
       engine.setBuffers(buffers);
@@ -91,7 +93,6 @@ export function usePlayback({
       try {
         // iOS: prime audio session via HTMLMediaElement
         primeIOSAudioSync();
-        await engine.unlock();
         setError(null);
         setStartupLagMs(0);
         setSlowStartDetected(false);
@@ -102,7 +103,6 @@ export function usePlayback({
         if (!isReady) {
           await initSamples();
         }
-        await engine.resumeIfNeeded();
 
         const startStep =
           typeof opts.startStep === "number" ? opts.startStep : playhead;
@@ -112,13 +112,14 @@ export function usePlayback({
         }
 
         try {
+          await engine.resumeIfNeeded();
           await engine.play(() => snapRef.current, {
             startStep,
             countInBeats: opts.countInBeats,
             countInBeatDurSec: opts.countInBeatDurSec,
           });
         } catch (err) {
-          // One retry after explicit unlock/resume helps on strict Chromium autoplay states.
+          // Retry with the heavier explicit unlock path only if the fast path fails.
           await engine.unlock();
           await engine.resumeIfNeeded();
           await engine.play(() => snapRef.current, {
@@ -171,7 +172,6 @@ export function usePlayback({
       } = {}) => {
       try {
         primeIOSAudioSync();
-        await engine.unlock();
         setError(null);
         setStartupLagMs(0);
         setSlowStartDetected(false);
@@ -182,9 +182,9 @@ export function usePlayback({
         if (!isReady) {
           await initSamples();
         }
-        await engine.resumeIfNeeded();
         let startedAt;
         try {
+          await engine.resumeIfNeeded();
           startedAt = await engine.playCompiled(events, {
             startAtSec,
             totalDurationSec,

@@ -179,13 +179,13 @@ function readGridSelectionHoldDelayMs() {
     const raw = String(
       window.localStorage.getItem("drum-grid-selection-hold-speed-v1") || ""
     ).toLowerCase();
-    if (raw === "fast") return 130;
+    if (raw === "fast") return 300;
     if (raw === "slow") return 500;
     const value = Number(raw);
-    if (!Number.isFinite(value)) return 130;
-    return Math.max(130, Math.min(800, Math.round(value)));
+    if (!Number.isFinite(value)) return 300;
+    return Math.max(300, Math.min(800, Math.round(value)));
   } catch (_) {
-    return 130;
+    return 300;
   }
 }
 
@@ -225,6 +225,64 @@ function UserIcon() {
       <circle cx="8" cy="5" r="2.5" strokeWidth="1.4" />
       <path d="M3 13c.7-2 2.5-3 5-3s4.3 1 5 3" strokeWidth="1.4" strokeLinecap="round" />
     </svg>
+  );
+}
+
+function PlayIcon() {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      className="h-[1.05rem] w-[1.05rem] -translate-x-[0.5px] translate-y-[0.5px] fill-current"
+      aria-hidden="true"
+    >
+      <path d="M4.5 2.75a.75.75 0 0 1 1.14-.64l6.5 4a.75.75 0 0 1 0 1.28l-6.5 4A.75.75 0 0 1 4.5 10.75z" />
+    </svg>
+  );
+}
+
+function StopIcon() {
+  return (
+    <svg viewBox="0 0 16 16" className="h-[1.05rem] w-[1.05rem] fill-current" aria-hidden="true">
+      <rect x="3.25" y="3.25" width="9.5" height="9.5" rx="1.25" />
+    </svg>
+  );
+}
+
+function LibraryIcon() {
+  return (
+    <span
+      aria-hidden="true"
+      className="block h-3.5 w-3.5 bg-current"
+      style={{
+        WebkitMaskImage: 'url("/open-book.png")',
+        maskImage: 'url("/open-book.png")',
+        WebkitMaskSize: "contain",
+        maskSize: "contain",
+        WebkitMaskRepeat: "no-repeat",
+        maskRepeat: "no-repeat",
+        WebkitMaskPosition: "center",
+        maskPosition: "center",
+      }}
+    />
+  );
+}
+
+function SettingsIcon() {
+  return (
+    <span
+      aria-hidden="true"
+      className="block h-4 w-4 bg-current"
+      style={{
+        WebkitMaskImage: 'url("/setting.png")',
+        maskImage: 'url("/setting.png")',
+        WebkitMaskSize: "contain",
+        maskSize: "contain",
+        WebkitMaskRepeat: "no-repeat",
+        maskRepeat: "no-repeat",
+        WebkitMaskPosition: "center",
+        maskPosition: "center",
+      }}
+    />
   );
 }
 
@@ -452,6 +510,7 @@ function SortableArrangementSourceBeatRow({
   const secondaryActiveClass = softActiveHighlight
     ? "border-neutral-700 bg-neutral-900/50 shadow-[0_0_0_1px_rgba(38,38,38,0.4)]"
     : "border-sky-500/30 bg-sky-950/10 shadow-[0_0_0_1px_rgba(14,165,233,0.12)]";
+  const canRenameViaTitle = isLoadedVisual || isSecondaryActive;
 
   return (
     <div
@@ -478,7 +537,7 @@ function SortableArrangementSourceBeatRow({
         }}
         {...attributes}
         {...listeners}
-        className={`select-none flex items-center gap-2 rounded border px-2.5 py-2 text-left text-sm outline-none focus:outline-none focus-visible:outline-none ${
+        className={`select-none flex items-center gap-1.5 rounded border px-2 py-2 text-left text-sm outline-none focus:outline-none focus-visible:outline-none ${
           isLoadedVisual
             ? loadedActiveClass
             : isSecondaryActive
@@ -514,9 +573,34 @@ function SortableArrangementSourceBeatRow({
               className="w-full bg-transparent px-0 py-0 text-sm text-white outline-none"
             />
           ) : (
-            <div className="truncate text-sm text-white">{beat.name || "Untitled Beat"}</div>
+            <button
+              type="button"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (canRenameViaTitle) {
+                  startEditingBeatLibraryBeat(beat.id);
+                  return;
+                }
+                onSelectBeat?.(beat, !!e?.shiftKey);
+              }}
+              onKeyDown={(e) => {
+                if (e.key !== "Enter" && e.key !== " ") return;
+                e.preventDefault();
+                e.stopPropagation();
+                if (canRenameViaTitle) {
+                  startEditingBeatLibraryBeat(beat.id);
+                  return;
+                }
+                onSelectBeat?.(beat, !!e?.shiftKey);
+              }}
+              className="block w-full truncate bg-transparent p-0 text-left text-sm text-white"
+              title={canRenameViaTitle ? "Rename beat" : "Select beat"}
+            >
+              {beat.name || "Untitled Beat"}
+            </button>
           )}
-          <div className="truncate text-xs text-neutral-400">
+          <div className="truncate text-[11px] leading-tight text-neutral-400">
             {(() => {
               const beatBars = Math.max(1, Number(beat?.payload?.bars) || 1);
               return (beat.timeSigCategory || "4/4") +
@@ -525,7 +609,7 @@ function SortableArrangementSourceBeatRow({
             })()}
           </div>
         </div>
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1">
         {showUpdateButton ? (
           <button
             type="button"
@@ -542,46 +626,12 @@ function SortableArrangementSourceBeatRow({
         ) : null}
         <button
           type="button"
-          onPointerDown={(e) => {
-            if (String(editingBeatLibraryBeatId || "") === String(beat.id)) {
-              e.preventDefault();
-              e.stopPropagation();
-              if (pendingBeatRenameExitRef) {
-                pendingBeatRenameExitRef.current = String(beat.id);
-              }
-              return;
-            }
-            e.stopPropagation();
-          }}
-          onClick={(e) => {
-            e.stopPropagation();
-            if (pendingBeatRenameExitRef?.current === String(beat.id)) {
-              pendingBeatRenameExitRef.current = "";
-              commitEditingBeatLibraryBeat();
-              return;
-            }
-            if (String(editingBeatLibraryBeatId || "") === String(beat.id)) {
-              return;
-            } else {
-              if (pendingBeatRenameExitRef) {
-                pendingBeatRenameExitRef.current = "";
-              }
-              startEditingBeatLibraryBeat(beat.id);
-            }
-          }}
-          className="inline-flex h-6 min-w-6 items-center justify-center rounded text-neutral-400 hover:bg-neutral-800/60 hover:text-white"
-          title="Rename beat"
-        >
-          <PencilIcon />
-        </button>
-        <button
-          type="button"
           onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => {
             e.stopPropagation();
             arrangementAddBeat("local", beat.id);
           }}
-          className="px-2 py-1 rounded border border-neutral-800 text-xs text-neutral-400 bg-neutral-900/60 hover:bg-neutral-800/60"
+          className="px-1.5 py-1 rounded border border-neutral-800 text-[11px] text-neutral-400 bg-neutral-900/60 hover:bg-neutral-800/60"
         >
           Add
         </button>
@@ -670,6 +720,8 @@ const MIDI_IMPORT_SNARE_GHOST_MAX_STORAGE_KEY = "drum-grid-midi-import-snare-gho
 const MIDI_IMPORT_TOM_GHOST_MAX_STORAGE_KEY = "drum-grid-midi-import-tom-ghost-max-v1";
 const MIDI_IMPORT_HIHAT_GHOST_MAX_STORAGE_KEY = "drum-grid-midi-import-hihat-ghost-max-v1";
 const GRID_SELECTION_HOLD_SPEED_STORAGE_KEY = "drum-grid-selection-hold-speed-v1";
+const SETTINGS_SIDEBAR_COLLAPSED_STORAGE_KEY = "drum-grid-settings-sidebar-collapsed-v1";
+const SETTINGS_SIDEBAR_DEFAULT_OPEN_STORAGE_KEY = "drum-grid-settings-sidebar-default-open-v1";
 const STICKING_GUIDE_ENABLED_STORAGE_KEY = "drum-grid-sticking-guide-enabled-v1";
 const STICKING_HANDEDNESS_STORAGE_KEY = "drum-grid-sticking-handedness-v1";
 const STICKING_LEAD_HAND_STORAGE_KEY = "drum-grid-sticking-lead-hand-v1";
@@ -708,7 +760,7 @@ const PERSONAL_LIBRARY_STATE_SHARE_LINK_KIND = "arrangement";
 const BEAT_LIBRARY_SELECTED_CONTAINER_STORAGE_KEY = "drum-grid-beat-library-selected-container-v1";
 const BEAT_LIBRARY_ROOT_COLLAPSED_STORAGE_KEY = "drum-grid-beat-library-root-collapsed-v1";
 const GRID_SETTINGS_PRESET_LIBRARY_STORAGE_KEY = "drum-grid-grid-settings-presets-v1";
-const APP_VERSION = "0.1.40";
+const APP_VERSION = "0.1.151";
 const BEAT_CATEGORY_OPTIONS = [
   "Groove",
   "Fill",
@@ -2824,6 +2876,27 @@ export default function App() {
     height: window.innerHeight || document.documentElement.clientHeight || 0,
   }));
   const isMobileFloatingPanels = viewportSize.width > 0 && viewportSize.width < 768;
+  const showDesktopSettingsSidebar = !isEmbedMode && viewportSize.width >= 1100;
+  const [settingsSidebarDefaultOpen, setSettingsSidebarDefaultOpen] = useState(() => {
+    try {
+      const raw = window.localStorage.getItem(SETTINGS_SIDEBAR_DEFAULT_OPEN_STORAGE_KEY);
+      if (raw === "false") return false;
+      return true;
+    } catch {
+      return true;
+    }
+  });
+  const [settingsSidebarCollapsed, setSettingsSidebarCollapsed] = useState(() => {
+    try {
+      const raw = window.localStorage.getItem(SETTINGS_SIDEBAR_COLLAPSED_STORAGE_KEY);
+      if (raw === "true") return true;
+      if (raw === "false") return false;
+      const defaultOpenRaw = window.localStorage.getItem(SETTINGS_SIDEBAR_DEFAULT_OPEN_STORAGE_KEY);
+      return defaultOpenRaw === "false";
+    } catch {
+      return false;
+    }
+  });
   const useFixedDesktopFooter =
     !isEmbedMode && viewportSize.width >= 768 && viewportSize.height >= 820;
   const requestedExample = React.useMemo(() => {
@@ -2908,6 +2981,22 @@ export default function App() {
     window.addEventListener("resize", onViewportChange);
     return () => window.removeEventListener("resize", onViewportChange);
   }, []);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        SETTINGS_SIDEBAR_COLLAPSED_STORAGE_KEY,
+        settingsSidebarCollapsed ? "true" : "false"
+      );
+    } catch (_) {}
+  }, [settingsSidebarCollapsed]);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        SETTINGS_SIDEBAR_DEFAULT_OPEN_STORAGE_KEY,
+        settingsSidebarDefaultOpen ? "true" : "false"
+      );
+    } catch (_) {}
+  }, [settingsSidebarDefaultOpen]);
   const [arrangementBoundaryCompScale, setArrangementBoundaryCompScale] = useState(() => {
     try {
       const raw = Number(window.localStorage.getItem(ARRANGEMENT_BOUNDARY_COMP_SCALE_STORAGE_KEY));
@@ -3309,6 +3398,10 @@ export default function App() {
   const [arrangementOrderDropTargetId, setArrangementOrderDropTargetId] = useState(null);
   const [arrangementOrderTrashHover, setArrangementOrderTrashHover] = useState(false);
   const [beatNameDraft, setBeatNameDraft] = useState("");
+  const [isCurrentBeatStripRenaming, setIsCurrentBeatStripRenaming] = useState(false);
+  const [currentBeatStripRenameWidth, setCurrentBeatStripRenameWidth] = useState(null);
+  const [pendingCurrentBeatStripAutoRename, setPendingCurrentBeatStripAutoRename] = useState(false);
+  const [unsavedBeatStripSnapshot, setUnsavedBeatStripSnapshot] = useState(null);
   const [publicSubmitTitle, setPublicSubmitTitle] = useState("");
   const [publicSubmitComposer, setPublicSubmitComposer] = useState("");
   const [publicSubmitCategory, setPublicSubmitCategory] = useState("all");
@@ -3403,10 +3496,13 @@ export default function App() {
   const beatLibraryActionsMenuButtonRef = useRef(null);
   const arrangementActionsMenuRef = useRef(null);
   const arrangementActionsMenuButtonRef = useRef(null);
+  const currentBeatStripNameInputRef = useRef(null);
+  const currentBeatStripNameButtonRef = useRef(null);
   const [libraryFiltersMenuStyle, setLibraryFiltersMenuStyle] = useState(null);
   const [arrangementLibraryMenuStyle, setArrangementLibraryMenuStyle] = useState(null);
   const [beatLibraryActionsMenuStyle, setBeatLibraryActionsMenuStyle] = useState(null);
   const [arrangementActionsMenuStyle, setArrangementActionsMenuStyle] = useState(null);
+  const [transportMenuPosition, setTransportMenuPosition] = useState(null);
   const [savedPresets, setSavedPresets] = useState(() => {
     try {
       const raw = window.localStorage.getItem(USER_PRESETS_STORAGE_KEY);
@@ -3701,6 +3797,7 @@ export default function App() {
       return 0.5;
     }
   });
+  const [drumVolume, setDrumVolume] = useState(1);
   const [metronomeCountInEnabled, setMetronomeCountInEnabled] = useState(() => {
     try {
       return window.localStorage.getItem(METRONOME_COUNT_IN_ENABLED_STORAGE_KEY) === "true";
@@ -3827,6 +3924,7 @@ export default function App() {
   const authRecoveryUrlFlowRef = React.useRef(false);
   const transportMenuRef = React.useRef(null);
   const transportMenuButtonRef = React.useRef(null);
+  const bpmButtonScrubSuppressUntilRef = React.useRef(0);
   const editingAdvancedMenuRef = React.useRef(null);
   const editingAdvancedMenuButtonRef = React.useRef(null);
   const notationStickingMenuRef = React.useRef(null);
@@ -5255,6 +5353,24 @@ export default function App() {
   }, [isShareActionsDialogOpen]);
   React.useEffect(() => {
     if (!isTransportMenuOpen) return undefined;
+    const updateMenuPosition = () => {
+      const button = transportMenuButtonRef.current;
+      if (!(button instanceof HTMLElement)) return;
+      const menu = transportMenuRef.current;
+      const rect = button.getBoundingClientRect();
+      const menuWidth = 224;
+      const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+      const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+      const menuHeight = menu instanceof HTMLElement ? menu.offsetHeight : 360;
+      const left = Math.max(8, Math.min(rect.left, viewportWidth - menuWidth - 8));
+      const preferredTop = rect.bottom + 8;
+      const maxTop = Math.max(8, viewportHeight - menuHeight - 8);
+      const top =
+        preferredTop <= maxTop
+          ? preferredTop
+          : Math.max(8, Math.min(rect.top - menuHeight - 8, maxTop));
+      setTransportMenuPosition({ top, left, width: menuWidth });
+    };
     const handlePointerDown = (event) => {
       const target = event.target;
       if (!(target instanceof Node)) return;
@@ -5267,11 +5383,16 @@ export default function App() {
     const handleKeyDown = (event) => {
       if (event.key === "Escape") setIsTransportMenuOpen(false);
     };
+    updateMenuPosition();
     document.addEventListener("pointerdown", handlePointerDown, true);
     document.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("resize", updateMenuPosition);
+    window.addEventListener("scroll", updateMenuPosition, true);
     return () => {
       document.removeEventListener("pointerdown", handlePointerDown, true);
       document.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("resize", updateMenuPosition);
+      window.removeEventListener("scroll", updateMenuPosition, true);
     };
   }, [isTransportMenuOpen]);
   React.useEffect(() => {
@@ -5628,6 +5749,13 @@ export default function App() {
         try {
           scrub.target.blur();
         } catch (_) {}
+      }
+      if (
+        scrub.dragging &&
+        scrub.target instanceof HTMLElement &&
+        scrub.target === transportMenuButtonRef.current
+      ) {
+        bpmButtonScrubSuppressUntilRef.current = performance.now() + 250;
       }
       scrub.active = false;
       scrub.dragging = false;
@@ -6042,11 +6170,11 @@ useEffect(() => {
   const [gridSelectionHoldDelayMs, setGridSelectionHoldDelayMs] = useState(() => {
     try {
       const raw = String(window.localStorage.getItem(GRID_SELECTION_HOLD_SPEED_STORAGE_KEY) || "").toLowerCase();
-      if (raw === "fast") return 130;
+      if (raw === "fast") return 300;
       if (raw === "slow") return 500;
       const value = Number(raw);
       if (!Number.isFinite(value)) return 350;
-      return Math.max(130, Math.min(800, Math.round(value)));
+      return Math.max(300, Math.min(800, Math.round(value)));
     } catch (_) {
       return 350;
     }
@@ -8998,9 +9126,49 @@ useEffect(() => {
     };
     return walk(currentBeatLibraryParentId);
   }, [beatLibraryContainers, currentBeatLibraryParentId, filteredLocalBeats]);
+  const allLocalBeatIdsInLibraryOrder = React.useMemo(() => {
+    const walk = (parentId) => {
+      const ids = [];
+      const childBeats = filteredLocalBeats
+        .filter((beat) => String(getBeatLibraryMeta(beat).parentId || "") === String(parentId || ""))
+        .sort(compareBeatLibraryOrder);
+      childBeats.forEach((beat) => {
+        ids.push(String(beat?.id || ""));
+      });
+      const childFolders = beatLibraryContainers
+        .filter((entry) => String(entry.parentId || "") === String(parentId || ""))
+        .sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0) || a.name.localeCompare(b.name));
+      childFolders.forEach((entry) => {
+        ids.push(...walk(entry.id));
+      });
+      return ids;
+    };
+    return walk(null);
+  }, [beatLibraryContainers, filteredLocalBeats]);
   useEffect(() => {
     visibleLocalBeatIdsInLibraryOrderRef.current = visibleLocalBeatIdsInLibraryOrder;
   }, [visibleLocalBeatIdsInLibraryOrder]);
+  useEffect(() => {
+    if (!isCurrentBeatStripRenaming) return;
+    const input = currentBeatStripNameInputRef.current;
+    if (!(input instanceof HTMLInputElement)) return;
+    window.requestAnimationFrame(() => {
+      input.focus();
+      input.select();
+    });
+  }, [isCurrentBeatStripRenaming]);
+  useEffect(() => {
+    if (!pendingCurrentBeatStripAutoRename || isCurrentBeatStripRenaming) return;
+    const button = currentBeatStripNameButtonRef.current;
+    if (!(button instanceof HTMLElement)) return;
+    const frame = window.requestAnimationFrame(() => {
+      const width = Math.ceil(button.getBoundingClientRect().width);
+      setCurrentBeatStripRenameWidth(width > 0 ? width : null);
+      setIsCurrentBeatStripRenaming(true);
+      setPendingCurrentBeatStripAutoRename(false);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [beatNameDraft, loadedLocalBeatId, isCurrentBeatStripRenaming, pendingCurrentBeatStripAutoRename]);
   const handleBeatLibraryBeatSelect = React.useCallback(
     async (beat, extend = false) => {
       const beatId = String(beat?.id || "");
@@ -11925,6 +12093,7 @@ useEffect(() => {
     timeSig,
     metronomeEnabled,
     metronomeVolume,
+    drumVolume,
   });
   useEffect(() => {
     playheadRef.current = playback.playhead;
@@ -12758,10 +12927,74 @@ useEffect(() => {
 
   
   const notationExportRef = useRef(null);
+  const fixedFooterRef = useRef(null);
+  const [shouldInlineFooterForViewport, setShouldInlineFooterForViewport] = useState(false);
+  const [measuredFixedFooterHeight, setMeasuredFixedFooterHeight] = useState(112);
+  const effectiveUseFixedDesktopFooter = useFixedDesktopFooter && !shouldInlineFooterForViewport;
 
   const setNotationExportEl = React.useCallback((el) => {
     if (el) notationExportRef.current = el;
   }, []);
+
+  useEffect(() => {
+    if (isEmbedMode || !useFixedDesktopFooter) {
+      setShouldInlineFooterForViewport(false);
+      return;
+    }
+    if (typeof window === "undefined") return undefined;
+    let frameId = 0;
+    const measureFooterMode = () => {
+      const notationEl = notationExportRef.current;
+      if (!(notationEl instanceof HTMLElement)) {
+        setShouldInlineFooterForViewport(false);
+        return;
+      }
+      const notationRect = notationEl.getBoundingClientRect();
+      const notationSvg =
+        notationEl.querySelector?.("svg") instanceof SVGElement ? notationEl.querySelector("svg") : null;
+      const notationSvgRect = notationSvg ? notationSvg.getBoundingClientRect() : null;
+      const visualNotationBottom = Math.max(
+        notationRect.bottom,
+        notationSvgRect ? notationSvgRect.bottom : Number.NEGATIVE_INFINITY
+      );
+      const measuredFooterRect =
+        fixedFooterRef.current instanceof HTMLElement
+          ? fixedFooterRef.current.getBoundingClientRect()
+          : null;
+      const fixedFooterHeight =
+        measuredFooterRect && measuredFooterRect.height > 0
+          ? measuredFooterRect.height
+          : measuredFixedFooterHeight;
+      if (measuredFooterRect && measuredFooterRect.height > 0) {
+        setMeasuredFixedFooterHeight((prev) =>
+          Math.abs(prev - measuredFooterRect.height) < 1 ? prev : Math.ceil(measuredFooterRect.height)
+        );
+      }
+      const desiredGap = 24;
+      const estimatedFixedFooterTop = window.innerHeight - fixedFooterHeight;
+      const shouldInline = visualNotationBottom + desiredGap > estimatedFixedFooterTop;
+      setShouldInlineFooterForViewport((prev) => (prev === shouldInline ? prev : shouldInline));
+    };
+    const scheduleMeasure = () => {
+      if (frameId) window.cancelAnimationFrame(frameId);
+      frameId = window.requestAnimationFrame(measureFooterMode);
+    };
+    scheduleMeasure();
+    const observer = new ResizeObserver(scheduleMeasure);
+    if (notationExportRef.current instanceof HTMLElement) observer.observe(notationExportRef.current);
+    const notationSvg =
+      notationExportRef.current?.querySelector?.("svg") instanceof SVGElement
+        ? notationExportRef.current.querySelector("svg")
+        : null;
+    if (notationSvg instanceof SVGElement) observer.observe(notationSvg);
+    if (fixedFooterRef.current instanceof HTMLElement) observer.observe(fixedFooterRef.current);
+    window.addEventListener("resize", scheduleMeasure);
+    return () => {
+      if (frameId) window.cancelAnimationFrame(frameId);
+      observer.disconnect();
+      window.removeEventListener("resize", scheduleMeasure);
+    };
+  }, [isEmbedMode, measuredFixedFooterHeight, useFixedDesktopFooter]);
 
   const handlePrintSubmit = React.useCallback(async () => {
     try {
@@ -13323,10 +13556,20 @@ useEffect(() => {
       if (!nextItem) return;
       setLocalBeatsWithUndo((prev) => [nextItem, ...prev].slice(0, 500));
       setLoadedLocalBeatId(nextItem.id);
+      setUnsavedBeatStripSnapshot(null);
+      setBeatNameDraft(String(nextItem.name || ""));
+      setIsCurrentBeatStripRenaming(false);
+      setCurrentBeatStripRenameWidth(null);
+      setPendingCurrentBeatStripAutoRename(true);
       return;
     }
     setLocalBeatsWithUndo((prev) => [item, ...prev].slice(0, 500));
     setLoadedLocalBeatId(item.id);
+    setUnsavedBeatStripSnapshot(null);
+    setBeatNameDraft(String(item.name || ""));
+    setIsCurrentBeatStripRenaming(false);
+    setCurrentBeatStripRenameWidth(null);
+    setPendingCurrentBeatStripAutoRename(true);
   }, [
     authUser?.id,
     selectedBeatLibraryContainerId,
@@ -13410,6 +13653,971 @@ useEffect(() => {
     timeSig.d,
     bpm,
   ]);
+  const currentBeatStripName = React.useMemo(() => {
+    const draft = String(beatNameDraft || "").trim();
+    if (draft) return draft;
+    if (loadedLocalBeat?.name) return String(loadedLocalBeat.name);
+    return "Untitled beat";
+  }, [beatNameDraft, loadedLocalBeat]);
+  const isUnsavedBeatStripDraftActive = React.useMemo(
+    () =>
+      !loadedLocalBeatId &&
+      !String(currentEditorBeatKey || "").startsWith("public:") &&
+      !String(currentEditorBeatKey || "").startsWith("shared:"),
+    [currentEditorBeatKey, loadedLocalBeatId]
+  );
+  const captureCurrentUnsavedBeatStripSnapshot = React.useCallback(() => {
+    if (!isUnsavedBeatStripDraftActive) return null;
+    const snapshot = {
+      name: String(beatNameDraft || ""),
+      category: String(beatCategoryDraft || "all"),
+      style: String(beatStyleDraft || "all"),
+      payload: buildCurrentBeatPayload(),
+    };
+    setUnsavedBeatStripSnapshot(snapshot);
+    return snapshot;
+  }, [
+    beatCategoryDraft,
+    beatNameDraft,
+    beatStyleDraft,
+    buildCurrentBeatPayload,
+    isUnsavedBeatStripDraftActive,
+  ]);
+  const restoreUnsavedBeatStripSnapshot = React.useCallback(
+    (snapshotArg = null) => {
+      const snapshot = snapshotArg || unsavedBeatStripSnapshot;
+      if (!snapshot?.payload) return false;
+      setPendingCurrentBeatStripAutoRename(false);
+      setCurrentBeatStripRenameWidth(null);
+      setIsCurrentBeatStripRenaming(false);
+      applyImportedBeatPayloadRef.current?.(snapshot.payload, "beat-strip-unsaved");
+      setLoadedLocalBeatId(null);
+      setCurrentEditorBeatKey("__unsaved__");
+      setBeatNameDraft(String(snapshot.name || ""));
+      setBeatCategoryDraft(String(snapshot.category || "all"));
+      setBeatStyleDraft(String(snapshot.style || "all"));
+      setSelectedBeatLibraryBeatIds([]);
+      setBeatLibraryBeatSelectionAnchorId(null);
+      return true;
+    },
+    [unsavedBeatStripSnapshot]
+  );
+  const effectiveCurrentBeatStripBeatId = React.useMemo(() => {
+    if (isUnsavedBeatStripDraftActive) {
+      return "__unsaved__";
+    }
+    if (loadedLocalBeatId) return String(loadedLocalBeatId);
+    if (String(currentEditorBeatKey || "").startsWith("local:")) {
+      const id = String(currentEditorBeatKey || "").slice("local:".length);
+      if (id) return id;
+    }
+    if (selectedBeatLibraryBeatIds.length === 1) {
+      const id = String(selectedBeatLibraryBeatIds[0] || "");
+      if (id) return id;
+    }
+    if (beatLibraryBeatSelectionAnchorId) {
+      const id = String(beatLibraryBeatSelectionAnchorId || "");
+      if (id) return id;
+    }
+    return "";
+  }, [
+    beatLibraryBeatSelectionAnchorId,
+    currentEditorBeatKey,
+    isUnsavedBeatStripDraftActive,
+    loadedLocalBeatId,
+    selectedBeatLibraryBeatIds,
+  ]);
+  const effectiveCurrentBeatStripBeat = React.useMemo(() => {
+    if (!effectiveCurrentBeatStripBeatId || effectiveCurrentBeatStripBeatId === "__unsaved__") return null;
+    return (
+      localBeats.find((entry) => String(entry?.id || "") === effectiveCurrentBeatStripBeatId) || null
+    );
+  }, [effectiveCurrentBeatStripBeatId, localBeats]);
+  const currentBeatStripNavigationIds = React.useMemo(() => {
+    const ids = [...allLocalBeatIdsInLibraryOrder];
+    if (isUnsavedBeatStripDraftActive || unsavedBeatStripSnapshot) {
+      return [...ids, "__unsaved__"];
+    }
+    return ids;
+  }, [allLocalBeatIdsInLibraryOrder, isUnsavedBeatStripDraftActive, unsavedBeatStripSnapshot]);
+  const currentBeatStripParentContainer = React.useMemo(() => {
+    const parentId = String(getBeatLibraryMeta(effectiveCurrentBeatStripBeat).parentId || "");
+    if (!parentId) return null;
+    return beatLibraryContainers.find((entry) => String(entry?.id || "") === parentId) || null;
+  }, [beatLibraryContainers, effectiveCurrentBeatStripBeat]);
+  const currentBeatStripScopeLabel = React.useMemo(() => {
+    if (!currentBeatStripParentContainer) {
+      return "All beats";
+    }
+    return String(currentBeatStripParentContainer.name || "Current folder");
+  }, [currentBeatStripParentContainer]);
+  const currentBeatStripPosition = React.useMemo(() => {
+    if (!effectiveCurrentBeatStripBeatId) {
+      return { index: -1, total: currentBeatStripNavigationIds.length };
+    }
+    return {
+      index: currentBeatStripNavigationIds.findIndex(
+        (id) => String(id || "") === String(effectiveCurrentBeatStripBeatId || "")
+      ),
+      total: currentBeatStripNavigationIds.length,
+    };
+  }, [currentBeatStripNavigationIds, effectiveCurrentBeatStripBeatId]);
+  const canNavigateCurrentBeatBackward =
+    currentBeatStripPosition.index > 0;
+  const canNavigateCurrentBeatForward =
+    currentBeatStripPosition.index >= 0 &&
+    currentBeatStripPosition.index < currentBeatStripPosition.total - 1;
+  const beatLibraryDockedInSidebar =
+    showDesktopSettingsSidebar &&
+    !isMobileFloatingPanels &&
+    isArrangementOpen &&
+    !arrangementSourcesCollapsed &&
+    arrangementDetailsCollapsed;
+  const hasDesktopSidebarColumn =
+    showDesktopSettingsSidebar &&
+    (beatLibraryDockedInSidebar || !settingsSidebarCollapsed);
+  const isBeatLibraryPanelActive =
+    isArrangementOpen && !arrangementSourcesCollapsed && arrangementDetailsCollapsed;
+  const canRenameCurrentBeat = Boolean(loadedLocalBeatId);
+  const canSaveCurrentBeatFromStrip = React.useMemo(
+    () => isUnsavedBeatStripDraftActive || !loadedLocalBeatId,
+    [isUnsavedBeatStripDraftActive, loadedLocalBeatId]
+  );
+  const beginCurrentBeatStripRename = React.useCallback(() => {
+    if (!canRenameCurrentBeat) return;
+    const width =
+      currentBeatStripNameButtonRef.current instanceof HTMLElement
+        ? Math.ceil(currentBeatStripNameButtonRef.current.getBoundingClientRect().width)
+        : null;
+    setCurrentBeatStripRenameWidth(width && width > 0 ? width : null);
+    setIsCurrentBeatStripRenaming(true);
+  }, [canRenameCurrentBeat]);
+  const navigateCurrentBeatInLibrary = React.useCallback(
+    async (direction) => {
+      if (currentBeatStripNavigationIds.length === 0) return;
+      const currentIndex = currentBeatStripNavigationIds.findIndex(
+        (id) => String(id || "") === String(effectiveCurrentBeatStripBeatId || "")
+      );
+      if (currentIndex < 0) return;
+      if (effectiveCurrentBeatStripBeatId === "__unsaved__") {
+        captureCurrentUnsavedBeatStripSnapshot();
+      }
+      const nextIndex = currentIndex + direction;
+      if (nextIndex < 0 || nextIndex >= currentBeatStripNavigationIds.length) return;
+      const nextId = String(currentBeatStripNavigationIds[nextIndex] || "");
+      if (nextId === "__unsaved__") {
+        restoreUnsavedBeatStripSnapshot();
+        return;
+      }
+      if (!nextId) return;
+      const nextBeat =
+        localBeats.find((entry) => String(entry?.id || "") === nextId) || null;
+      if (!nextBeat) return;
+      const nextParentId = String(getBeatLibraryMeta(nextBeat).parentId || "");
+      selectBeatLibraryContainer(nextParentId || "all");
+      setSelectedBeatLibraryBeatIds([nextId]);
+      setBeatLibraryBeatSelectionAnchorId(nextId);
+      setIsCurrentBeatStripRenaming(false);
+      await loadBeatIntoEditorRef.current?.("local", nextBeat);
+    },
+    [
+      captureCurrentUnsavedBeatStripSnapshot,
+      effectiveCurrentBeatStripBeatId,
+      currentBeatStripNavigationIds,
+      localBeats,
+      restoreUnsavedBeatStripSnapshot,
+      selectBeatLibraryContainer,
+    ]
+  );
+  const cancelCurrentBeatStripRename = React.useCallback(() => {
+    if (loadedLocalBeat) {
+      setBeatNameDraft(String(loadedLocalBeat.name || ""));
+    }
+    setPendingCurrentBeatStripAutoRename(false);
+    setCurrentBeatStripRenameWidth(null);
+    setIsCurrentBeatStripRenaming(false);
+  }, [loadedLocalBeat]);
+  const commitCurrentBeatStripRename = React.useCallback(async () => {
+    if (!loadedLocalBeatId) {
+      setPendingCurrentBeatStripAutoRename(false);
+      setCurrentBeatStripRenameWidth(null);
+      setIsCurrentBeatStripRenaming(false);
+      return;
+    }
+    await updateCurrentLoadedBeatLocal();
+    setPendingCurrentBeatStripAutoRename(false);
+    setCurrentBeatStripRenameWidth(null);
+    setIsCurrentBeatStripRenaming(false);
+  }, [loadedLocalBeatId, updateCurrentLoadedBeatLocal]);
+  const toggleBeatLibraryPanel = React.useCallback(() => {
+    setActiveTab("none");
+    if (!isArrangementOpen) {
+      setArrangementSourcesCollapsed(false);
+      setArrangementDetailsCollapsed(true);
+      setArrangementSourceTab("local");
+      setIsArrangementOpen(true);
+      return;
+    }
+    if (!arrangementSourcesCollapsed && arrangementDetailsCollapsed) {
+      setIsArrangementOpen(false);
+      return;
+    }
+    setArrangementSourcesCollapsed(false);
+    setArrangementDetailsCollapsed(true);
+    setArrangementSourceTab("local");
+    setIsArrangementOpen(true);
+  }, [
+    arrangementDetailsCollapsed,
+    arrangementSourcesCollapsed,
+    isArrangementOpen,
+  ]);
+  const settingsToolbarButton = (
+          <div className="relative flex items-center gap-2">
+            <button
+              ref={gridMenuButtonRef}
+              type="button"
+              onClick={(e) => {
+                if (e.shiftKey) {
+                  setShowAppVersion((v) => !v);
+                  return;
+                }
+                if (showDesktopSettingsSidebar) {
+                  if (beatLibraryDockedInSidebar) {
+                    setIsArrangementOpen(false);
+                    setSettingsSidebarCollapsed(false);
+                    return;
+                  }
+                  setSettingsSidebarCollapsed((v) => !v);
+                  return;
+                }
+                setActiveTab((t) => (t === "timing" ? "none" : "timing"));
+              }}
+              className={`touch-none select-none inline-flex h-[2.125rem] w-[2.125rem] items-center justify-center rounded border text-sm outline-none focus:outline-none focus-visible:outline-none ${
+                !showDesktopSettingsSidebar && activeTab === "timing"
+                  ? "bg-neutral-800 border-neutral-600 text-white"
+                  : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
+              }`}
+              title={
+                showDesktopSettingsSidebar
+                  ? settingsSidebarCollapsed
+                    ? "Show settings"
+                    : "Hide settings"
+                  : "Open settings"
+              }
+            >
+              <SettingsIcon />
+            </button>
+            {showAppVersion ? (
+              <span
+                className="select-none whitespace-nowrap text-[11px] text-neutral-500"
+                title={`Version ${APP_VERSION}`}
+              >
+                v{APP_VERSION}
+              </span>
+            ) : null}
+            {!showDesktopSettingsSidebar && activeTab === "timing" && (
+              <div
+                ref={gridMenuPopupRef}
+                className="absolute left-0 top-full z-20 mt-2 w-fit max-w-[min(100vw-2rem,980px)] rounded-lg border border-neutral-700 bg-neutral-900 p-3 shadow-xl"
+              >
+              <div className="flex flex-col gap-3">
+                <div className="flex items-center gap-2">
+                    <span className="text-sm text-neutral-300 whitespace-nowrap">Resolution</span>
+                    <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const order = [4, 8, 16, 32];
+                          const idx = order.indexOf(resolution);
+                          const next = order[(idx - 1 + order.length) % order.length];
+                          handleResolutionChange(next);
+                        }}
+                        className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                      >
+                        −
+                      </button>
+                      <div className="min-w-[60px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700">
+                        {resolution === 4 ? "4th" : resolution === 8 ? "8th" : resolution === 16 ? "16th" : "32th"}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const order = [4, 8, 16, 32];
+                          const idx = order.indexOf(resolution);
+                          const next = order[(idx + 1) % order.length];
+                          handleResolutionChange(next);
+                        }}
+                        className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                      >
+                        +
+                      </button>
+                    </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                    <span className="text-sm text-neutral-300">Bars</span>
+                    <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
+                      <button
+                        type="button"
+                        onClick={() => setBars((b) => Math.max(1, b - 1))}
+                        className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                        aria-label="Decrease bars"
+                      >
+                        −
+                      </button>
+                      <div className="min-w-[44px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700">
+                        {bars}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setBars((b) => Math.min(8, b + 1))}
+                        className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                        aria-label="Increase bars"
+                      >
+                        +
+                      </button>
+                    </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                    <span className="text-sm text-neutral-300 whitespace-nowrap">Time</span>
+                    <div className="flex items-center gap-1.5">
+                      <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
+                        <button
+                          type="button"
+                          onClick={() => stepTimeSigNumerator(-1)}
+                          className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                          aria-label="Decrease time signature numerator"
+                        >
+                          −
+                        </button>
+                        <div className="min-w-[36px] px-2.5 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700 tabular-nums">
+                          {Math.max(2, Math.min(15, Number(timeSig.n) || 4))}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => stepTimeSigNumerator(1)}
+                          className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                          aria-label="Increase time signature numerator"
+                        >
+                          +
+                        </button>
+                      </div>
+                      <div className="text-sm text-neutral-400 select-none">/</div>
+                      <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
+                        <button
+                          type="button"
+                          onClick={() => stepTimeSigDenominator(-1)}
+                          className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                          aria-label="Previous time signature denominator"
+                        >
+                          −
+                        </button>
+                        <div className="min-w-[36px] px-2.5 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700 tabular-nums">
+                          {timeSig.d === 8 ? 8 : 4}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => stepTimeSigDenominator(1)}
+                          className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                          aria-label="Next time signature denominator"
+                        >
+                          +
+                        </button>
+                      </div>
+                    </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                    <span className="text-sm text-neutral-300 whitespace-nowrap">Tuplets</span>
+                    <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
+                      <button
+                        type="button"
+                        onClick={() => stepGlobalTupletValue(-1)}
+                        className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                        aria-label="Previous global tuplet value"
+                      >
+                        −
+                      </button>
+                      <button
+                        type="button"
+                        onClick={toggleGlobalTupletOffLast}
+                        className="min-w-[64px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700 hover:bg-neutral-700/50"
+                        title="Toggle off / last tuplet"
+                      >
+                        {globalTupletValue === "mixed"
+                          ? "Mixed"
+                          : globalTupletValue == null
+                            ? "Off"
+                            : String(globalTupletValue)}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => stepGlobalTupletValue(1)}
+                        className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                        aria-label="Next global tuplet value"
+                      >
+                        +
+                      </button>
+                    </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                    <span className="text-sm text-neutral-300">Drumkit</span>
+                    <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
+                      <button
+                        type="button"
+                        onClick={() => stepPreset(-1)}
+                        className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                        aria-label="Previous preset"
+                      >
+                        −
+                      </button>
+                      <div
+                        onClick={() => setIsKitEditorOpen(true)}
+                        className="min-w-[88px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700 cursor-pointer hover:bg-neutral-700/60"
+                        title="Open drumkit editor"
+                      >
+                        {selectedPresetLabel}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => stepPreset(1)}
+                        className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                        aria-label="Next preset"
+                      >
+                        +
+                      </button>
+                    </div>
+                </div>
+
+                <div className="border-t border-neutral-700 pt-4">
+                  <div className="flex flex-col gap-3">
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setStickingEditModeEnabled((v) => {
+                            const next = !v;
+                            if (next) {
+                              setStickingGuideEnabled(true);
+                            } else {
+                              setNotationStickingSelectionModeEnabled(false);
+                            }
+                            return next;
+                          })
+                        }
+                        className={`w-fit touch-none select-none px-3 py-[5px] rounded border text-sm ${
+                          stickingEditModeEnabled
+                            ? "bg-neutral-800 border-neutral-700 text-white"
+                            : "bg-neutral-900 border-neutral-800 text-neutral-600"
+                        }`}
+                        title="When enabled, clicking active hand-hit cells edits R/L sticking instead of toggling notes"
+                      >
+                        Sticking edit mode
+                      </button>
+                      <div className="relative">
+                        <button
+                          ref={editingAdvancedMenuButtonRef}
+                          type="button"
+                          onClick={() => setIsEditingAdvancedMenuOpen((v) => !v)}
+                          className={`touch-none select-none px-3 py-[5px] rounded border text-sm ${
+                            isEditingAdvancedMenuOpen
+                              ? "bg-neutral-800 border-neutral-700 text-white"
+                              : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
+                          }`}
+                          title="Sticking display options"
+                          aria-label="Sticking display options"
+                        >
+                          ...
+                        </button>
+                        {isEditingAdvancedMenuOpen && (
+                          <div
+                            ref={editingAdvancedMenuRef}
+                            className="absolute left-full top-0 z-[140] ml-2 min-w-[10.5rem] rounded-lg border border-neutral-700 bg-neutral-900 p-3 shadow-xl"
+                          >
+                            <div className="flex flex-col gap-3">
+                              <div className="space-y-1">
+                                <span className="text-sm text-neutral-300">Sticking display</span>
+                                <div className="flex w-fit items-stretch overflow-hidden rounded-md border border-neutral-800 bg-neutral-900/60">
+                                  <button
+                                    type="button"
+                                    onClick={() => setNotationStickingView("above")}
+                                    className={`whitespace-nowrap px-3 py-1 text-sm ${
+                                      notationStickingView === "above"
+                                        ? "bg-neutral-800 text-white"
+                                        : "bg-neutral-900 text-neutral-600"
+                                    }`}
+                                    title="Show sticking above notation"
+                                  >
+                                    Above
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setNotationStickingView("split-rows")}
+                                    className={`whitespace-nowrap border-l border-neutral-800 px-3 py-1 text-sm ${
+                                      notationStickingView === "split-rows"
+                                        ? "bg-neutral-800 text-white"
+                                        : "bg-neutral-900 text-neutral-600"
+                                    }`}
+                                    title="Change sticking display"
+                                  >
+                                    Split rows
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setNotationStickingSelectionModeEnabled((v) => {
+                            const next = !v;
+                            if (next) {
+                              setStickingGuideEnabled(true);
+                              setShowNotationSticking(true);
+                            }
+                            return next;
+                          })
+                        }
+                        disabled={!stickingEditModeEnabled}
+                        className={`w-fit touch-none select-none px-3 py-[5px] rounded border text-sm ${
+                          !stickingEditModeEnabled
+                            ? "bg-neutral-900 border-neutral-800 text-neutral-600 opacity-50 cursor-not-allowed"
+                            : notationStickingSelectionModeEnabled
+                              ? "bg-neutral-800 border-neutral-700 text-white"
+                              : "bg-neutral-900 border-neutral-800 text-neutral-600"
+                        }`}
+                        title="When enabled, clicking or selecting active hand-hit cells toggles whether their sticking prints in notation"
+                      >
+                        Print sticking
+                      </button>
+                      <div className="relative">
+                        <button
+                          ref={notationStickingMenuButtonRef}
+                          type="button"
+                          onClick={() => setIsNotationStickingMenuOpen((v) => !v)}
+                          disabled={!stickingEditModeEnabled}
+                          className={`touch-none select-none px-3 py-[5px] rounded border text-sm ${
+                            !stickingEditModeEnabled
+                              ? "bg-neutral-900 border-neutral-800 text-neutral-600 opacity-50 cursor-not-allowed"
+                              : isNotationStickingMenuOpen
+                                ? "bg-neutral-800 border-neutral-700 text-white"
+                                : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
+                          }`}
+                          title="Notation sticking selection actions"
+                          aria-label="Notation sticking selection actions"
+                        >
+                          ...
+                        </button>
+                        {isNotationStickingMenuOpen && stickingEditModeEnabled && (
+                          <div
+                            ref={notationStickingMenuRef}
+                            className="absolute left-full top-0 z-30 ml-2 min-w-[9rem] rounded-lg border border-neutral-700 bg-neutral-900 p-3 shadow-xl"
+                          >
+                            <div className="flex flex-col gap-3">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  selectAllNotationSticking();
+                                  setNotationStickingSelectionModeEnabled(true);
+                                  setIsNotationStickingMenuOpen(false);
+                                }}
+                                className="w-fit whitespace-nowrap touch-none select-none px-3 py-[5px] rounded border border-neutral-800 bg-neutral-900 text-neutral-300 hover:bg-neutral-800/60"
+                                title="Select all active hand hits for notation"
+                              >
+                                All
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  clearNotationStickingSelection();
+                                  setIsNotationStickingMenuOpen(false);
+                                }}
+                                className="w-fit whitespace-nowrap touch-none select-none px-3 py-[5px] rounded border border-neutral-800 bg-neutral-900 text-neutral-300 hover:bg-neutral-800/60"
+                                title="Clear the current notation sticking selection"
+                              >
+                                None
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setBeatAutoUpdateEnabled((v) => !v)}
+                        className={`w-fit touch-none select-none px-3 py-[5px] rounded border text-sm ${
+                          beatAutoUpdateEnabled
+                            ? "bg-neutral-800 border-neutral-700 text-white"
+                            : "bg-neutral-900 border-neutral-800 text-neutral-600"
+                        }`}
+                        title="Automatically update the loaded local beat after beat changes. Notation sticking selection always auto-updates."
+                      >
+                        Auto update
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleMainTrashClick}
+                        className={`touch-none select-none inline-flex h-8 w-8 items-center justify-center rounded border ${
+                          canClearSelection
+                            ? "bg-neutral-800 border-neutral-700 text-white"
+                            : "bg-neutral-900 border-neutral-800 text-neutral-500 hover:bg-neutral-800/40"
+                        }`}
+                        title={canClearSelection ? "Clear selection (Cmd/Ctrl+click: reset defaults + delete library)" : "Clear all notes (Cmd/Ctrl+click: reset defaults + delete library)"}
+                        aria-label={canClearSelection ? "Clear selection" : "Clear all notes"}
+                      >
+                        <svg
+                          xmlns="http://www.w3.org/2000/svg"
+                          viewBox="0 0 16 16"
+                          className="-translate-y-px h-[0.95rem] w-[0.95rem]"
+                          fill="currentColor"
+                          aria-hidden="true"
+                        >
+                          <path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0z" />
+                          <path d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4zM2.5 3h11V2h-11z" />
+                        </svg>
+                      </button>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm text-neutral-300">Looping</span>
+                      <div
+                        className={`flex items-stretch overflow-hidden rounded-md border ${
+                          loopRepeats === "off"
+                            ? "border-neutral-800 bg-neutral-900/60"
+                            : "border-neutral-800 bg-neutral-900/60"
+                        }`}
+                      >
+                        <button
+                          type="button"
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            const order = ["all", "off", "1", "2", "3", "4", "5", "6", "7", "8"];
+                            const stepOnce = () => {
+                              setLoopRepeats((prev) => {
+                                const i = Math.max(0, order.indexOf(String(prev)));
+                                return order[(i - 1 + order.length) % order.length];
+                              });
+                            };
+                            stepOnce();
+                            let interval = null;
+                            let timeout = window.setTimeout(() => {
+                              interval = window.setInterval(stepOnce, 160);
+                            }, 130);
+                            const stop = () => {
+                              if (timeout) window.clearTimeout(timeout);
+                              timeout = null;
+                              if (interval) window.clearInterval(interval);
+                              interval = null;
+                              window.removeEventListener("mouseup", stop);
+                              window.removeEventListener("touchend", stop);
+                              window.removeEventListener("touchcancel", stop);
+                            };
+                            window.addEventListener("mouseup", stop);
+                            window.addEventListener("touchend", stop, { passive: true });
+                            window.addEventListener("touchcancel", stop, { passive: true });
+                          }}
+                          className={`px-2 text-base leading-none ${
+                            loopRepeats === "off"
+                              ? "text-neutral-500 hover:bg-neutral-800/50 active:bg-neutral-800"
+                              : "text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                          }`}
+                          title="Decrease loop repeats"
+                        >
+                          –
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setLoopRepeats((prev) => {
+                              if (prev === "all") {
+                                return lastNonAllLoopRepeats.current || "1";
+                              }
+                              return "all";
+                            });
+                          }}
+                          className={`min-w-[44px] px-3 py-1 flex items-center justify-center text-sm border-l border-r capitalize ${
+                            loopRepeats === "off"
+                              ? "text-neutral-500 bg-neutral-900/60 hover:bg-neutral-800/50 border-neutral-800"
+                              : "text-white bg-neutral-900/60 hover:bg-neutral-800/50 border-neutral-800"
+                          }`}
+                          title="How many times the selection repeats"
+                        >
+                          {loopRepeats}
+                        </button>
+                        <button
+                          type="button"
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            const order = ["all", "off", "1", "2", "3", "4", "5", "6", "7", "8"];
+                            const stepOnce = () => {
+                              setLoopRepeats((prev) => {
+                                const i = Math.max(0, order.indexOf(String(prev)));
+                                return order[(i + 1) % order.length];
+                              });
+                            };
+                            stepOnce();
+                            let interval = null;
+                            let timeout = window.setTimeout(() => {
+                              interval = window.setInterval(stepOnce, 160);
+                            }, 130);
+                            const stop = () => {
+                              if (timeout) window.clearTimeout(timeout);
+                              timeout = null;
+                              if (interval) window.clearInterval(interval);
+                              interval = null;
+                              window.removeEventListener("mouseup", stop);
+                              window.removeEventListener("touchend", stop);
+                              window.removeEventListener("touchcancel", stop);
+                            };
+                            window.addEventListener("mouseup", stop);
+                            window.addEventListener("touchend", stop, { passive: true });
+                            window.addEventListener("touchcancel", stop, { passive: true });
+                          }}
+                          className={`px-2 text-base leading-none ${
+                            loopRepeats === "off"
+                              ? "text-neutral-500 hover:bg-neutral-800/50 active:bg-neutral-800"
+                              : "text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                          }`}
+                          title="Increase loop repeats"
+                        >
+                          +
+                        </button>
+                      </div>
+                      <div className="relative">
+                        <button
+                          ref={loopAdvancedMenuButtonRef}
+                          type="button"
+                          onClick={() => setIsLoopAdvancedMenuOpen((v) => !v)}
+                          className={`touch-none select-none px-3 py-[5px] rounded border text-sm ${
+                            isLoopAdvancedMenuOpen
+                              ? "bg-neutral-800 border-neutral-700 text-white"
+                              : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
+                          }`}
+                          title="Loop overlap options"
+                          aria-label="Loop overlap options"
+                        >
+                          ...
+                        </button>
+                        {isLoopAdvancedMenuOpen && (
+                          <div
+                            ref={loopAdvancedMenuRef}
+                            className="absolute left-full top-0 z-30 ml-2 w-fit rounded-lg border border-neutral-700 bg-neutral-900 p-3 shadow-xl"
+                          >
+                            <div className="flex flex-col gap-3">
+                              <div className="space-y-1">
+                                <span className="text-sm text-neutral-300">Loop overlap</span>
+                                <div className="flex w-fit max-w-full items-stretch overflow-hidden rounded-md border border-neutral-800 bg-neutral-900/60">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setLoopOverlapMode((prev) => {
+                                        const idx = Math.max(0, MOVE_OVERLAP_MODES.findIndex((m) => m.id === prev));
+                                        return MOVE_OVERLAP_MODES[(idx - 1 + MOVE_OVERLAP_MODES.length) % MOVE_OVERLAP_MODES.length].id;
+                                      })
+                                    }
+                                    className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                                  >
+                                    −
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setLoopOverlapMode((prev) => (prev === "all-to-all" ? "active-to-empty" : "all-to-all"))
+                                    }
+                                    className="min-w-[126px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-900/60 border-l border-r border-neutral-800 hover:bg-neutral-800/50"
+                                    title={getOverlapModeDescription(loopOverlapMode)}
+                                  >
+                                    {MOVE_OVERLAP_MODES.find((m) => m.id === loopOverlapMode)?.label || "Fill in gaps"}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setLoopOverlapMode((prev) => {
+                                        const idx = Math.max(0, MOVE_OVERLAP_MODES.findIndex((m) => m.id === prev));
+                                        return MOVE_OVERLAP_MODES[(idx + 1) % MOVE_OVERLAP_MODES.length].id;
+                                      })
+                                    }
+                                    className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                                  >
+                                    +
+                                  </button>
+                                </div>
+                              </div>
+                              <div className="space-y-1">
+                                <span className="text-sm text-neutral-300">Move overlap</span>
+                                <div className="flex w-fit max-w-full items-stretch overflow-hidden rounded-md border border-neutral-800 bg-neutral-900/60">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setMoveOverlapMode((prev) => {
+                                        const idx = Math.max(0, MOVE_OVERLAP_MODES.findIndex((m) => m.id === prev));
+                                        return MOVE_OVERLAP_MODES[(idx - 1 + MOVE_OVERLAP_MODES.length) % MOVE_OVERLAP_MODES.length].id;
+                                      })
+                                    }
+                                    className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                                  >
+                                    −
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setMoveOverlapMode((prev) => (prev === "all-to-all" ? "active-to-empty" : "all-to-all"))
+                                    }
+                                    className="min-w-[126px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-900/60 border-l border-r border-neutral-800 hover:bg-neutral-800/50"
+                                    title={getOverlapModeDescription(moveOverlapMode)}
+                                  >
+                                    {MOVE_OVERLAP_MODES.find((m) => m.id === moveOverlapMode)?.label || "All overrides all"}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setMoveOverlapMode((prev) => {
+                                        const idx = Math.max(0, MOVE_OVERLAP_MODES.findIndex((m) => m.id === prev));
+                                        return MOVE_OVERLAP_MODES[(idx + 1) % MOVE_OVERLAP_MODES.length].id;
+                                      })
+                                    }
+                                    className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                                  >
+                                    +
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+              </div>
+              </div>
+            )}
+          </div>
+  );
+  const currentBeatEditorStrip = (
+    <div className="inline-flex max-w-full items-center gap-1.5 bg-transparent px-0 py-0.5 align-top">
+      {settingsToolbarButton}
+      <button
+        type="button"
+        onClick={toggleBeatLibraryPanel}
+        className={`inline-flex h-7 w-7 items-center justify-center rounded text-sm transition-colors ${
+          isBeatLibraryPanelActive
+            ? "bg-neutral-900/70 text-neutral-200"
+            : "text-neutral-500 hover:bg-neutral-900/70 hover:text-neutral-200"
+        }`}
+        title="Open beat library"
+        aria-label="Open beat library"
+      >
+        <LibraryIcon />
+      </button>
+      <button
+        type="button"
+        onClick={() => navigateCurrentBeatInLibrary(-1)}
+        disabled={!canNavigateCurrentBeatBackward}
+        className={`inline-flex h-7 w-7 items-center justify-center rounded text-sm transition-colors ${
+          canNavigateCurrentBeatBackward
+            ? "text-neutral-500 hover:bg-neutral-900/70 hover:text-neutral-200"
+            : "text-neutral-700 opacity-50 cursor-not-allowed"
+        }`}
+        title="Previous beat in current library view"
+        aria-label="Previous beat"
+      >
+        ←
+      </button>
+      <button
+        type="button"
+        onClick={() => navigateCurrentBeatInLibrary(1)}
+        disabled={!canNavigateCurrentBeatForward}
+        className={`inline-flex h-7 w-7 items-center justify-center rounded text-sm transition-colors ${
+          canNavigateCurrentBeatForward
+            ? "text-neutral-500 hover:bg-neutral-900/70 hover:text-neutral-200"
+            : "text-neutral-700 opacity-50 cursor-not-allowed"
+        }`}
+        title="Next beat in current library view"
+        aria-label="Next beat"
+      >
+        →
+      </button>
+      <div className="min-w-0 flex items-center text-sm">
+        <div
+          className="min-w-0 max-w-[16rem]"
+          style={isCurrentBeatStripRenaming && currentBeatStripRenameWidth
+            ? { width: `${currentBeatStripRenameWidth}px` }
+            : undefined}
+        >
+          {isCurrentBeatStripRenaming && canRenameCurrentBeat ? (
+            <input
+              ref={currentBeatStripNameInputRef}
+              type="text"
+              value={beatNameDraft}
+              onChange={(e) => setBeatNameDraft(e.target.value)}
+              onBlur={() => commitCurrentBeatStripRename()}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  commitCurrentBeatStripRename();
+                } else if (e.key === "Escape") {
+                  e.preventDefault();
+                  cancelCurrentBeatStripRename();
+                }
+              }}
+              className="block w-full min-w-0 border-0 bg-transparent p-0 text-base font-medium text-white outline-none ring-0 focus:outline-none focus:ring-0"
+              aria-label="Current beat name"
+            />
+          ) : (
+            <button
+              ref={currentBeatStripNameButtonRef}
+              type="button"
+              onClick={() => {
+                if (canRenameCurrentBeat) {
+                  beginCurrentBeatStripRename();
+                  return;
+                }
+                if (canSaveCurrentBeatFromStrip) {
+                  saveCurrentBeatLocal();
+                }
+              }}
+              disabled={!canRenameCurrentBeat && !canSaveCurrentBeatFromStrip}
+              className={`block w-full min-w-0 truncate bg-transparent p-0 text-left text-base font-medium transition-colors ${
+                canRenameCurrentBeat
+                  ? "text-neutral-100 hover:text-white"
+                  : canSaveCurrentBeatFromStrip
+                    ? "text-neutral-500 hover:text-neutral-300"
+                  : "text-neutral-400 cursor-default"
+              }`}
+              title={
+                canRenameCurrentBeat
+                  ? "Rename current beat"
+                  : canSaveCurrentBeatFromStrip
+                    ? "Save as new beat"
+                    : currentBeatStripName
+              }
+            >
+              {currentBeatStripName}
+            </button>
+          )}
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={saveCurrentBeatLocal}
+        className="rounded px-1.5 py-0.5 text-sm text-neutral-500 transition-colors hover:text-neutral-200"
+        title="Save current beat as new"
+      >
+        Save as
+      </button>
+    </div>
+  );
   const updateCurrentLoadedBeatNotationSelectionOnly = React.useCallback(async () => {
     if (!loadedLocalBeatId || !loadedLocalBeat) return;
     const compactNotationStickingSelection = Object.fromEntries(
@@ -15082,6 +16290,1363 @@ useEffect(() => {
     () => (activeBeatLibraryDragBeat ? getBeatBpm(activeBeatLibraryDragBeat) : null),
     [activeBeatLibraryDragBeat, getBeatBpm]
   );
+  const dockedBeatLibrarySidebar = beatLibraryDockedInSidebar ? (
+    <aside
+      className="sticky top-6 z-20 self-start w-[15.5rem] shrink-0 overflow-visible rounded-xl border border-neutral-700 bg-neutral-900 p-4"
+      data-loopui="1"
+    >
+      <div className="flex h-full flex-col">
+        <div className="flex items-center justify-between gap-2">
+          <div
+            ref={arrangementSourceTab === "local" ? beatLibraryMoveUpTargetRef : null}
+            className={`min-w-0 flex items-center gap-2 rounded select-none ${
+              beatLibraryDropTargetId === "__up__" ? "bg-cyan-900/15 text-cyan-50" : ""
+            }`}
+            onDragOver={(e) => {
+              if (arrangementSourceTab !== "local") return;
+              if (beatLibraryTreeDragRef.current?.kind !== "container") return;
+              e.preventDefault();
+              e.stopPropagation();
+              setBeatLibraryDropTargetId("__up__");
+              if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+            }}
+            onDragLeave={(e) => {
+              if (arrangementSourceTab !== "local") return;
+              if (beatLibraryTreeDragRef.current?.kind !== "container") return;
+              if (e.currentTarget.contains(e.relatedTarget)) return;
+              setBeatLibraryDropTargetId((prev) => (prev === "__up__" ? null : prev));
+            }}
+            onDrop={(e) => {
+              if (arrangementSourceTab !== "local") return;
+              if (beatLibraryTreeDragRef.current?.kind !== "container") return;
+              e.preventDefault();
+              e.stopPropagation();
+              handleBeatLibraryTreeDrop(null);
+            }}
+          >
+            <div className="text-sm text-neutral-200">
+              {arrangementSourceTab === "presets" ? "Presets" : "Beats"}
+            </div>
+            {arrangementSourceTab === "local" && (
+              <div
+                className="min-w-0 overflow-hidden text-[11px] text-neutral-500 whitespace-nowrap text-ellipsis"
+                style={{ direction: "rtl", textAlign: "left" }}
+              >
+                <div className="inline-flex min-w-max items-center whitespace-nowrap" style={{ direction: "ltr" }}>
+                  <button
+                    type="button"
+                    onClick={() => selectBeatLibraryContainer("all")}
+                    onDragOver={(e) => {
+                      if (beatLibraryTreeDragRef.current?.kind === "container") return;
+                      e.preventDefault();
+                      setBeatLibraryDropTargetId("all");
+                      if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+                    }}
+                    onDragLeave={() => {
+                      if (beatLibraryTreeDragRef.current?.kind === "container") return;
+                      setBeatLibraryDropTargetId((prev) => (prev === "all" ? null : prev));
+                    }}
+                    onDrop={(e) => {
+                      if (beatLibraryTreeDragRef.current?.kind === "container") return;
+                      e.preventDefault();
+                      e.stopPropagation();
+                      handleBeatLibraryTreeDrop(null);
+                    }}
+                    className={`px-1 hover:text-neutral-300 ${
+                      beatLibraryDropTargetId === "all"
+                        ? "text-cyan-100 border-b border-cyan-400/70"
+                        : selectedBeatLibraryContainerId === "all"
+                          ? "text-neutral-400"
+                          : ""
+                    }`}
+                  >
+                    All beats
+                  </button>
+                  {selectedBeatLibraryContainerPath.map((entry) => (
+                    <React.Fragment key={`beatlib-path-docked-${entry.id}`}>
+                      <span className="px-1 text-neutral-600">/</span>
+                      <button
+                        type="button"
+                        onClick={() => selectBeatLibraryContainer(entry.id)}
+                        onDragOver={(e) => {
+                          e.preventDefault();
+                          setBeatLibraryDropTargetId(String(entry.id));
+                          if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+                        }}
+                        onDragLeave={() =>
+                          setBeatLibraryDropTargetId((prev) =>
+                            prev === String(entry.id) ? null : prev
+                          )
+                        }
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          handleBeatLibraryTreeDrop(entry.id);
+                        }}
+                        className={`rounded px-1 truncate hover:text-neutral-300 ${
+                          beatLibraryDropTargetId === String(entry.id)
+                            ? "bg-cyan-900/25 text-cyan-50 shadow-[0_0_0_1px_rgba(34,211,238,0.35)]"
+                            : String(selectedBeatLibraryContainerId) === String(entry.id)
+                              ? "text-neutral-400"
+                              : ""
+                        }`}
+                      >
+                        {entry.name}
+                      </button>
+                    </React.Fragment>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+          <div className="ml-auto flex items-center gap-2">
+            <div className="relative">
+              <button
+                ref={libraryFiltersButtonRef}
+                type="button"
+                onClick={() => setLibraryFiltersOpen((v) => !v)}
+                className={`inline-flex h-[1.625rem] items-center justify-center px-1.5 rounded border text-xs leading-none ${
+                  libraryFiltersOpen
+                    ? "border-neutral-700 text-white bg-neutral-800"
+                    : "border-neutral-800 text-neutral-400 bg-neutral-900/60"
+                }`}
+                title={libraryFiltersOpen ? "Hide beat filters" : "Show beat filters"}
+              >
+                ...
+              </button>
+              {libraryFiltersOpen && libraryFiltersMenuStyle
+                ? createPortal(
+                    <div
+                      ref={libraryFiltersRef}
+                      style={libraryFiltersMenuStyle}
+                      className="min-w-[16rem] rounded-lg border border-neutral-700 bg-neutral-900 p-2.5 shadow-xl"
+                    >
+                      <div className="flex flex-col gap-2">
+                        <div className="grid grid-cols-2 gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setArrangementSourceTab("local");
+                              setLibraryFiltersOpen(false);
+                            }}
+                            className={`inline-flex h-[1.625rem] items-center justify-center rounded border px-1.5 text-xs ${
+                              arrangementSourceTab === "local"
+                                ? "border-neutral-700 text-white bg-neutral-800"
+                                : "border-neutral-800 bg-neutral-900/60 text-neutral-400 hover:bg-neutral-800/60"
+                            }`}
+                          >
+                            Local
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setArrangementSourceTab("public");
+                              setLibraryFiltersOpen(false);
+                            }}
+                            className={`inline-flex h-[1.625rem] items-center justify-center rounded border px-1.5 text-xs ${
+                              arrangementSourceTab === "public"
+                                ? "border-neutral-700 text-white bg-neutral-800"
+                                : "border-neutral-800 bg-neutral-900/60 text-neutral-400 hover:bg-neutral-800/60"
+                            }`}
+                          >
+                            Public
+                          </button>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setArrangementSourcesCollapsed(false);
+                            setArrangementDetailsCollapsed(true);
+                            setArrangementSourceTab("local");
+                            setLibraryFiltersOpen(false);
+                          }}
+                          className="inline-flex h-[1.625rem] items-center justify-center rounded border border-neutral-800 bg-neutral-900/60 px-1.5 text-xs text-neutral-400 hover:bg-neutral-800/60"
+                        >
+                          Beats
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setArrangementSourcesCollapsed(true);
+                            setArrangementDetailsCollapsed(false);
+                            setLibraryFiltersOpen(false);
+                          }}
+                          className="inline-flex h-[1.625rem] items-center justify-center rounded border border-neutral-800 bg-neutral-900/60 px-1.5 text-xs text-neutral-400 hover:bg-neutral-800/60"
+                        >
+                          Arrangement
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setArrangementSourcesCollapsed(false);
+                            setArrangementDetailsCollapsed(false);
+                            setLibraryFiltersOpen(false);
+                          }}
+                          className="inline-flex h-[1.625rem] items-center justify-center rounded border border-neutral-800 bg-neutral-900/60 px-1.5 text-xs text-neutral-400 hover:bg-neutral-800/60"
+                        >
+                          Beats + Arrangement
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setArrangementSourcesCollapsed(true);
+                            setArrangementDetailsCollapsed(false);
+                            setIsArrangementOpen(true);
+                            setIsArrangementNotationOpen(true);
+                            setLibraryFiltersOpen(false);
+                          }}
+                          className="inline-flex h-[1.625rem] items-center justify-center rounded border border-neutral-800 bg-neutral-900/60 px-1.5 text-xs text-neutral-400 hover:bg-neutral-800/60"
+                        >
+                          Sheet
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setArrangementSourcesCollapsed(false);
+                            setArrangementDetailsCollapsed(true);
+                            setArrangementSourceTab("presets");
+                            setLibraryFiltersOpen(false);
+                          }}
+                          className="inline-flex h-[1.625rem] items-center justify-center rounded border border-neutral-800 bg-neutral-900/60 px-1.5 text-xs text-neutral-400 hover:bg-neutral-800/60"
+                        >
+                          Presets
+                        </button>
+                        {arrangementSourceTab === "local" && authUser?.id && hasSupabaseEnabled ? (
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              await refreshPersonalLibraryFromCloud({ alertOnError: true });
+                              setLibraryFiltersOpen(false);
+                            }}
+                            disabled={personalLibraryRefreshing}
+                            className={`inline-flex h-[1.625rem] items-center justify-center rounded border px-1.5 text-xs ${
+                              personalLibraryRefreshing
+                                ? "border-neutral-800 bg-neutral-900/60 text-neutral-500 cursor-not-allowed"
+                                : "border-neutral-800 bg-neutral-900/60 text-neutral-400 hover:bg-neutral-800/60"
+                            }`}
+                          >
+                            {personalLibraryRefreshing ? "Syncing..." : "Sync personal cloud library"}
+                          </button>
+                        ) : null}
+                        {arrangementSourceTab !== "presets" ? (
+                          <>
+                            <div className="flex items-center justify-between gap-3">
+                              <span className="text-xs text-neutral-400">Sort</span>
+                              <button
+                                type="button"
+                                onClick={cycleLibrarySort}
+                                className="inline-flex h-[1.625rem] items-center justify-center rounded border border-neutral-800 bg-neutral-900/60 px-1.5 text-xs text-neutral-400 hover:bg-neutral-800/60"
+                              >
+                                {getLibrarySortLabel(librarySort)}
+                              </button>
+                            </div>
+                            <div className="flex items-center justify-between gap-3">
+                              <span className="text-xs text-neutral-400">Time sig</span>
+                              <select
+                                value={libraryTimeSigFilter}
+                                onChange={(e) => setLibraryTimeSigFilter(e.target.value)}
+                                className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs text-white"
+                              >
+                                <option value="all">All</option>
+                                {allTimeSigCategories.map((ts) => (
+                                  <option key={`arr-docked-ts-${ts}`} value={ts}>
+                                    {ts}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                            <div className="flex items-center justify-between gap-3">
+                              <span className="text-xs text-neutral-400">BPM</span>
+                              <div className="flex items-stretch overflow-hidden rounded border border-neutral-700 bg-neutral-800">
+                                <button
+                                  type="button"
+                                  onPointerDown={() => startLibraryBpmRepeat(-1)}
+                                  onPointerUp={stopLibraryBpmRepeat}
+                                  onPointerCancel={stopLibraryBpmRepeat}
+                                  onPointerLeave={stopLibraryBpmRepeat}
+                                  className="px-2 text-xs text-neutral-300 hover:bg-neutral-700/60 active:bg-neutral-700"
+                                >
+                                  −
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={cycleLibraryBpmFilterMode}
+                                  className="min-w-[64px] border-l border-r border-neutral-700 px-2 py-1 text-xs text-white hover:bg-neutral-700/60"
+                                  title="Cycle BPM filter mode"
+                                >
+                                  {getBpmFilterLabel()}
+                                </button>
+                                <button
+                                  type="button"
+                                  onPointerDown={() => startLibraryBpmRepeat(1)}
+                                  onPointerUp={stopLibraryBpmRepeat}
+                                  onPointerCancel={stopLibraryBpmRepeat}
+                                  onPointerLeave={stopLibraryBpmRepeat}
+                                  className="px-2 text-xs text-neutral-300 hover:bg-neutral-700/60 active:bg-neutral-700"
+                                >
+                                  +
+                                </button>
+                              </div>
+                            </div>
+                            {arrangementSourceTab === "public" && (
+                              <div className="flex justify-end">
+                                <button
+                                  type="button"
+                                  onClick={refreshPublicLibrary}
+                                  className="px-2 py-0.5 rounded border border-neutral-700 text-xs text-neutral-300 hover:bg-neutral-800/50"
+                                >
+                                  Refresh
+                                </button>
+                              </div>
+                            )}
+                          </>
+                        ) : null}
+                      </div>
+                    </div>,
+                    document.body
+                  )
+                : null}
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsArrangementOpen(false)}
+              className="inline-flex h-[1.625rem] w-[1.625rem] items-center justify-center rounded border border-neutral-800 bg-neutral-900/60 text-xs leading-none text-neutral-400 hover:bg-neutral-800/60"
+              title="Close beat library"
+              aria-label="Close beat library"
+            >
+              ×
+            </button>
+          </div>
+        </div>
+        {publicLibraryError && (
+          <div className="mt-3 rounded border border-amber-700/70 bg-amber-950/30 px-2 py-1 text-xs text-amber-100 flex items-center justify-between gap-2">
+            <span>{publicLibraryError}</span>
+            <button
+              type="button"
+              onClick={() => setPublicLibraryError("")}
+              className="px-1 rounded border border-amber-700/60 text-amber-100 hover:bg-amber-800/40"
+              aria-label="Close source error"
+              title="Close"
+            >
+              x
+            </button>
+          </div>
+        )}
+        {arrangementSourceTab === "local" ? (
+          <div className="mt-3 flex min-h-0 flex-1 flex-col">
+            <div ref={arrangementSourceListRef} className="dg-slim-scrollbar max-h-[52vh] flex-1 overflow-auto pr-1">
+              <DndContext
+                sensors={beatLibraryOrderSensors}
+                collisionDetection={detectBeatLibraryDropCollision}
+                onDragStart={handleBeatLibrarySortDragStart}
+                onDragOver={handleBeatLibrarySortDragOver}
+                onDragEnd={handleBeatLibrarySortDragEnd}
+                onDragCancel={handleBeatLibrarySortDragCancel}
+                modifiers={[restrictBeatLibraryDragToList]}
+              >
+                <div className="space-y-0">
+                  <BeatLibraryDropTarget id="__up__" className="absolute h-0 w-0 overflow-hidden opacity-0 pointer-events-none" />
+                  <BeatLibraryDropTarget id="__trash__" className="absolute h-0 w-0 overflow-hidden opacity-0 pointer-events-none" />
+                  <div className={selectedBeatLibraryContainerId !== "all" ? "pt-1" : ""}>
+                    {renderArrangementSourceFolderContents(currentBeatLibraryParentId, 0)}
+                  </div>
+                  {currentBeatLibraryFolders.length === 0 &&
+                    currentBeatLibraryBeats.length === 0 && (
+                      <div className="px-2 py-1 text-xs text-neutral-500">
+                        {selectedBeatLibraryContainerId === "all"
+                          ? "No local beats saved yet. Create a folder or save a beat."
+                          : "This folder is empty."}
+                      </div>
+                    )}
+                </div>
+                <DragOverlay>
+                  <BeatLibraryDragOverlayCard
+                    beat={activeBeatLibraryDragBeat}
+                    beatBpm={activeBeatLibraryDragBeatBpm}
+                  />
+                </DragOverlay>
+              </DndContext>
+            </div>
+            <div className="mt-3 border-t border-neutral-800 pt-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const nextContainer = createBeatLibraryContainer("folder");
+                    if (!nextContainer) return;
+                    setEditingBeatLibraryContainerId(String(nextContainer.id));
+                    setEditingBeatLibraryContainerName(String(nextContainer.name || ""));
+                    if (selectedBeatLibraryBeatIds.length > 0) {
+                      const orderedSelectedIds = visibleLocalBeatIdsInLibraryOrder.filter((id) =>
+                        selectedBeatLibraryBeatIds.includes(id)
+                      );
+                      await moveBeatsToLibraryContainer(orderedSelectedIds, nextContainer.id);
+                      clearBeatLibraryBeatSelection();
+                      return;
+                    }
+                  }}
+                  className="flex h-7 flex-1 items-center justify-center rounded border border-neutral-800 bg-neutral-900/40 px-2 text-sm text-neutral-400 hover:bg-neutral-800/60"
+                >
+                  + Folder
+                </button>
+                <button
+                  type="button"
+                  onClick={saveCurrentBeatLocal}
+                  className="h-7 rounded border border-neutral-800 bg-neutral-900/60 px-2.5 text-sm text-neutral-400 hover:bg-neutral-800/60"
+                  title="Save as new beat"
+                >
+                  Save as new
+                </button>
+                {isAdminUser && (
+                  <div className="relative">
+                    <button
+                      ref={beatLibraryActionsMenuButtonRef}
+                      type="button"
+                      onClick={() => setIsBeatLibraryActionsMenuOpen((v) => !v)}
+                      className={`h-7 rounded border px-2 text-sm leading-none ${
+                        isBeatLibraryActionsMenuOpen
+                          ? "border-neutral-700 text-white bg-neutral-800"
+                          : "border-neutral-800 text-neutral-400 bg-neutral-900/60 hover:bg-neutral-800/60"
+                      }`}
+                      title="More beat library actions"
+                    >
+                      ...
+                    </button>
+                    {isBeatLibraryActionsMenuOpen && beatLibraryActionsMenuStyle
+                      ? createPortal(
+                          <div
+                            ref={beatLibraryActionsMenuRef}
+                            style={beatLibraryActionsMenuStyle}
+                            className="min-w-[11rem] rounded-lg border border-neutral-700 bg-neutral-900 p-2 shadow-xl"
+                          >
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setIsBeatLibraryActionsMenuOpen(false);
+                                openPublicSubmitDialog();
+                              }}
+                              className="w-full rounded px-3 py-2 text-left text-sm text-white hover:bg-neutral-800/60"
+                              title="Publish to public beat library"
+                            >
+                              Publish public
+                            </button>
+                          </div>,
+                          document.body
+                        )
+                      : null}
+                  </div>
+                )}
+                <BeatLibraryDropTarget id="__trash__">
+                  <button
+                    ref={beatLibraryTrashTargetRef}
+                    type="button"
+                    onClick={async () => {
+                      if (selectedBeatLibraryBeatIds.length > 0) {
+                        const orderedSelectedIds = visibleLocalBeatIdsInLibraryOrder.filter((id) =>
+                          selectedBeatLibraryBeatIds.includes(id)
+                        );
+                        if (!orderedSelectedIds.length) return;
+                        const confirmLabel =
+                          orderedSelectedIds.length === 1
+                            ? `"${String(
+                                localBeats.find((beat) => String(beat?.id || "") === orderedSelectedIds[0])?.name ||
+                                  "this beat"
+                              )}"`
+                            : `${orderedSelectedIds.length} selected beats`;
+                        if (!window.confirm(`Delete ${confirmLabel}?`)) return;
+                        await deleteLocalBeatsByIds(orderedSelectedIds);
+                        clearBeatLibraryBeatSelection();
+                        return;
+                      }
+                      if (selectedLocalBeatForTrash?.id) {
+                        const beatName = String(selectedLocalBeatForTrash.name || "this beat");
+                        if (!window.confirm(`Delete "${beatName}"?`)) return;
+                        await deleteLocalBeatById(selectedLocalBeatForTrash.id);
+                        return;
+                      }
+                      const currentContainerId = selectedBeatLibraryContainerIdRef.current || "all";
+                      if (currentContainerId !== "all") {
+                        const folderName =
+                          beatLibraryContainers.find(
+                            (entry) => String(entry.id) === String(currentContainerId)
+                          )?.name || "this folder";
+                        if (!window.confirm(`Delete "${folderName}"?`)) return;
+                        deleteBeatLibraryContainer(currentContainerId);
+                      }
+                    }}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      setBeatLibraryDropTargetId("__trash__");
+                      if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+                    }}
+                    onDragLeave={() =>
+                      setBeatLibraryDropTargetId((prev) => (prev === "__trash__" ? null : prev))
+                    }
+                    onDrop={async (e) => {
+                      e.preventDefault();
+                      await handleBeatLibraryTrashDrop();
+                    }}
+                    className={`inline-flex h-7 items-center justify-center rounded border px-2 text-sm ${
+                      beatLibraryDropTargetId === "__trash__"
+                        ? "border-red-500/80 bg-red-900/25 text-red-100 shadow-[0_0_0_1px_rgba(239,68,68,0.35)]"
+                        : selectedBeatLibraryContainerId !== "all"
+                          ? "border-red-900 text-red-200 hover:bg-red-900/30"
+                          : "border-neutral-800 text-neutral-500 bg-neutral-900/60"
+                    }`}
+                    title={
+                      selectedLocalBeatForTrash?.id
+                        ? "Delete selected beat or drop beats/folders here"
+                        : selectedBeatLibraryContainerId !== "all"
+                          ? "Delete selected folder or drop beats/folders here"
+                          : "Drop beats/folders here to delete"
+                    }
+                  >
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      viewBox="0 0 16 16"
+                      className="h-4 w-4"
+                      fill="currentColor"
+                      aria-hidden="true"
+                    >
+                      <path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0z" />
+                      <path d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4zM2.5 3h11V2h-11z" />
+                    </svg>
+                  </button>
+                </BeatLibraryDropTarget>
+              </div>
+            </div>
+          </div>
+        ) : arrangementSourceTab === "presets" ? (
+          <div className="mt-0.5 flex min-h-0 flex-1 flex-col">
+            <div ref={arrangementSourceListRef} className="dg-slim-scrollbar max-h-[52vh] flex-1 overflow-auto pr-1 dg-scroll-follow-list">
+              <DndContext
+                sensors={beatLibraryOrderSensors}
+                collisionDetection={detectGridSettingsPresetDropCollision}
+                onDragStart={handleGridSettingsPresetDragStart}
+                onDragOver={handleGridSettingsPresetDragOver}
+                onDragEnd={handleGridSettingsPresetDragEnd}
+                onDragCancel={handleGridSettingsPresetDragCancel}
+                modifiers={[restrictBeatLibraryDragToList]}
+              >
+                <div className="space-y-2.5">
+                  <BeatLibraryDropTarget id="__trash__" className="absolute h-0 w-0 overflow-hidden opacity-0 pointer-events-none" />
+                  <SortableContext
+                    items={gridSettingsPresets.map((preset) => `preset:${String(preset.id)}`)}
+                    strategy={verticalListSortingStrategy}
+                  >
+                    {(() => {
+                      const shouldShowCrossTargetPlaceholder =
+                        !!activeGridSettingsPresetDragId &&
+                        !!presetLibraryDropTargetId &&
+                        !String(presetLibraryDropTargetId).startsWith("preset:") &&
+                        gridSettingsPresets.some(
+                          (preset) =>
+                            String(preset?.id || "") ===
+                            String(activeGridSettingsPresetDragId || "")
+                        );
+                      const visiblePresets = shouldShowCrossTargetPlaceholder
+                        ? gridSettingsPresets.filter(
+                            (preset) =>
+                              String(preset?.id || "") !==
+                              String(activeGridSettingsPresetDragId || "")
+                          )
+                        : gridSettingsPresets;
+                      const originalIndex = gridSettingsPresets.findIndex(
+                        (preset) =>
+                          String(preset?.id || "") ===
+                          String(activeGridSettingsPresetDragId || "")
+                      );
+                      const lastOverPresetId = String(
+                        gridSettingsPresetLastOverIdRef.current || ""
+                      );
+                      const targetIndex = gridSettingsPresets.findIndex(
+                        (preset) => String(preset?.id || "") === lastOverPresetId
+                      );
+                      const placeholderIndex = shouldShowCrossTargetPlaceholder
+                        ? Math.max(
+                            0,
+                            Math.min(
+                              visiblePresets.length,
+                              targetIndex >= 0 ? targetIndex : originalIndex
+                            )
+                          )
+                        : -1;
+                      return (
+                        <>
+                          {visiblePresets.map((preset, index) => (
+                            <React.Fragment key={`grid-preset-docked-node-${preset.id}`}>
+                              {shouldShowCrossTargetPlaceholder &&
+                              index === placeholderIndex ? (
+                                <GridSettingsPresetReservedRowSlot />
+                              ) : null}
+                              <SortableGridSettingsPresetRow
+                                preset={preset}
+                                isActive={activeGridSettingsPreset?.id === preset.id}
+                                isEditing={
+                                  String(editingGridSettingsPresetId || "") ===
+                                  String(preset.id)
+                                }
+                                editingName={editingGridSettingsPresetName}
+                                setEditingName={setEditingGridSettingsPresetName}
+                                commitEditing={commitEditingGridSettingsPreset}
+                                cancelEditing={cancelEditingGridSettingsPreset}
+                                startEditing={startEditingGridSettingsPreset}
+                                pendingPresetRenameExitRef={
+                                  gridSettingsPresetPendingRenameExitRef
+                                }
+                                disableTransition={
+                                  !!activeGridSettingsPresetDragId
+                                }
+                                onApply={() => {
+                                  setSelectedGridSettingsPresetId(String(preset.id));
+                                  applyGridSettingsPreset(preset);
+                                }}
+                              />
+                            </React.Fragment>
+                          ))}
+                          {shouldShowCrossTargetPlaceholder &&
+                          placeholderIndex === visiblePresets.length ? (
+                            <GridSettingsPresetReservedRowSlot />
+                          ) : null}
+                        </>
+                      );
+                    })()}
+                  </SortableContext>
+                </div>
+                <div className="mt-3 border-t border-neutral-800 pt-3">
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={saveCurrentGridSettingsPreset}
+                      className="h-7 rounded border border-neutral-800 bg-neutral-900/60 px-2.5 text-sm text-neutral-400 hover:bg-neutral-800/60"
+                      title="Save current grid settings as a new preset"
+                    >
+                      Save as new
+                    </button>
+                    <BeatLibraryDropTarget id="__trash__">
+                      <button
+                        ref={beatLibraryTrashTargetRef}
+                        type="button"
+                        onClick={deleteSelectedGridSettingsPreset}
+                        className={`inline-flex h-7 items-center justify-center rounded border px-2 text-sm ${
+                          presetLibraryDropTargetId === "__trash__"
+                            ? "border-red-500/80 bg-red-900/25 text-red-100 shadow-[0_0_0_1px_rgba(239,68,68,0.35)]"
+                            : "border-neutral-800 text-neutral-500 bg-neutral-900/60"
+                        }`}
+                        title="Delete selected preset"
+                      >
+                        <svg
+                          xmlns="http://www.w3.org/2000/svg"
+                          viewBox="0 0 16 16"
+                          className="h-4 w-4"
+                          fill="currentColor"
+                          aria-hidden="true"
+                        >
+                          <path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0z" />
+                          <path d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4zM2.5 3h11V2h-11z" />
+                        </svg>
+                      </button>
+                    </BeatLibraryDropTarget>
+                  </div>
+                </div>
+                <DragOverlay>
+                  <GridSettingsPresetDragOverlayCard preset={activeGridSettingsPresetDrag} />
+                </DragOverlay>
+              </DndContext>
+            </div>
+          </div>
+        ) : (
+          <div className="dg-slim-scrollbar mt-3 max-h-[52vh] overflow-auto space-y-2.5 pr-1 dg-scroll-follow-list">
+            {arrangementSourceBeats.map((beat) => {
+              const beatBpm = getBeatBpm(beat);
+              const sourceLabel = "public";
+              const beatRowKey = `${sourceLabel}:${String(beat.id)}`;
+              const isSelectedArrangementSourceBeat = selectedArrangementSourceBeatKey === beatRowKey;
+              return (
+                <div
+                  key={`arr-docked-src-${sourceLabel}-${beat.id}`}
+                  data-beat-row-id={beatRowKey}
+                  role="button"
+                  tabIndex={0}
+                  draggable
+                  onDragStart={(e) => {
+                    beginArrangementBeatDrag("public", beat.id);
+                    try {
+                      e.dataTransfer.effectAllowed = "copy";
+                      e.dataTransfer.setData(
+                        "text/plain",
+                        JSON.stringify({
+                          source: "public",
+                          beatId: beat.id,
+                        })
+                      );
+                    } catch (_) {}
+                  }}
+                  onDragEnd={clearArrangementBeatDrag}
+                  onClick={() => loadBeatIntoEditor("public", beat)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      loadBeatIntoEditor("public", beat);
+                    }
+                  }}
+                  className={`rounded border px-2 py-2 cursor-pointer outline-none focus:outline-none focus-visible:outline-none ${
+                    isSelectedArrangementSourceBeat
+                      ? normalizedArrangementSelection
+                        ? "border-sky-500/35 bg-sky-950/10 shadow-[0_0_0_1px_rgba(14,165,233,0.14)]"
+                        : "border-sky-500/70 bg-sky-900/20 shadow-[0_0_0_1px_rgba(14,165,233,0.35)]"
+                      : "border-neutral-800 bg-neutral-900/40 hover:bg-neutral-800/60"
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="text-sm text-white truncate">{beat.name || "Untitled Beat"}</div>
+                      <div className="text-[11px] leading-tight text-neutral-400 truncate">
+                        {(() => {
+                          const beatBars = Math.max(1, Number(beat?.payload?.bars) || 1);
+                          return (beat.timeSigCategory || "4/4") +
+                            (Number.isFinite(beatBpm) ? ` · ${beatBpm} BPM` : "") +
+                            ` · ${beatBars} ${beatBars === 1 ? "bar" : "bars"}`;
+                        })()}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          arrangementAddBeat("public", beat.id);
+                        }}
+                        className="px-1.5 py-1 rounded border border-neutral-700 text-[11px] text-white bg-neutral-800 hover:bg-neutral-700/60"
+                      >
+                        Add
+                      </button>
+                      {isAdminUser && (
+                        <button
+                          type="button"
+                          onClick={(e) => handleDeletePublicBeatClick(e, beat.publishedShareId || beat.id)}
+                          className="px-2 py-1 rounded border border-red-900 text-xs text-red-200 hover:bg-red-900/30"
+                          aria-label="Delete public beat"
+                          title="Delete public beat"
+                        >
+                          ×
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+            {publicLibraryLoading && (
+              <div className="text-xs text-neutral-400">Loading public library…</div>
+            )}
+            {arrangementSourceBeats.length === 0 && (
+              <div className="text-xs text-neutral-500">No beats in this source with current filters.</div>
+            )}
+          </div>
+        )}
+      </div>
+    </aside>
+  ) : null;
+
+  const desktopSettingsSidebar = showDesktopSettingsSidebar && !settingsSidebarCollapsed ? (
+    <aside
+      className="sticky top-6 z-20 self-start w-[15.5rem] shrink-0 overflow-visible rounded-xl border border-neutral-700 bg-neutral-900 p-4"
+      data-loopui="1"
+    >
+      <div className="mb-4 flex items-center justify-between gap-2">
+        <div className="text-sm text-neutral-200">Settings</div>
+        <button
+          type="button"
+          onClick={() => setSettingsSidebarCollapsed(true)}
+          className="inline-flex h-[1.625rem] w-[1.625rem] items-center justify-center rounded border border-neutral-800 bg-neutral-900/60 text-xs leading-none text-neutral-400 hover:bg-neutral-800/60"
+          title="Collapse sidebar"
+          aria-label="Collapse sidebar"
+        >
+          ×
+        </button>
+      </div>
+      <div className="space-y-5">
+        <div>
+          <div className="flex flex-col gap-3">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-sm text-neutral-300 whitespace-nowrap">Resolution</span>
+              <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-800 bg-neutral-900/60">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const order = [4, 8, 16, 32];
+                    const idx = order.indexOf(resolution);
+                    const next = order[(idx - 1 + order.length) % order.length];
+                    handleResolutionChange(next);
+                  }}
+                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                >
+                  −
+                </button>
+                <div className="min-w-[60px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-900/60 border-l border-r border-neutral-800">
+                  {resolution === 4 ? "4th" : resolution === 8 ? "8th" : resolution === 16 ? "16th" : "32th"}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const order = [4, 8, 16, 32];
+                    const idx = order.indexOf(resolution);
+                    const next = order[(idx + 1) % order.length];
+                    handleResolutionChange(next);
+                  }}
+                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-sm text-neutral-300">Bars</span>
+              <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-800 bg-neutral-900/60">
+                <button
+                  type="button"
+                  onClick={() => setBars((b) => Math.max(1, b - 1))}
+                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                  aria-label="Decrease bars"
+                >
+                  −
+                </button>
+                <div className="min-w-[44px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-900/60 border-l border-r border-neutral-800">
+                  {bars}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setBars((b) => Math.min(8, b + 1))}
+                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                  aria-label="Increase bars"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-sm text-neutral-300 whitespace-nowrap">Time</span>
+              <div className="grid h-10 grid-cols-[1.5rem_3.5rem_1.5rem] grid-rows-2 overflow-hidden rounded-md border border-neutral-800 bg-neutral-900/60">
+                <div className="row-span-2 grid grid-rows-2 border-r border-neutral-800">
+                  <button
+                    type="button"
+                    onClick={() => stepTimeSigNumerator(1)}
+                    className="flex items-center justify-center text-xs leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                    aria-label="Increase time signature numerator"
+                  >
+                    +
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => stepTimeSigNumerator(-1)}
+                    className="flex items-center justify-center border-t border-neutral-800 text-xs leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                    aria-label="Decrease time signature numerator"
+                  >
+                    −
+                  </button>
+                </div>
+                <div className="row-span-2 flex items-center justify-center px-2 text-sm text-white tabular-nums">
+                  {Math.max(2, Math.min(15, Number(timeSig.n) || 4))}
+                  <span className="mx-1 text-neutral-500">/</span>
+                  {timeSig.d === 8 ? 8 : 4}
+                </div>
+                <div className="row-span-2 grid grid-rows-2 border-l border-neutral-800">
+                  <button
+                    type="button"
+                    onClick={() => stepTimeSigDenominator(1)}
+                    className="flex items-center justify-center text-xs leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                    aria-label="Next time signature denominator"
+                  >
+                    +
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => stepTimeSigDenominator(-1)}
+                    className="flex items-center justify-center border-t border-neutral-800 text-xs leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                    aria-label="Previous time signature denominator"
+                  >
+                    −
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-sm text-neutral-300 whitespace-nowrap">Tuplets</span>
+              <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-800 bg-neutral-900/60">
+                <button
+                  type="button"
+                  onClick={() => stepGlobalTupletValue(-1)}
+                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                >
+                  −
+                </button>
+                <button
+                  type="button"
+                  onClick={toggleGlobalTupletOffLast}
+                  className="min-w-[64px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-900/60 border-l border-r border-neutral-800 hover:bg-neutral-800/50"
+                  title="Toggle off / last tuplet"
+                >
+                  {globalTupletValue === "mixed"
+                    ? "Mixed"
+                    : globalTupletValue == null
+                      ? "Off"
+                      : String(globalTupletValue)}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => stepGlobalTupletValue(1)}
+                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-sm text-neutral-300">Drumkit</span>
+              <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-800 bg-neutral-900/60">
+                <button
+                  type="button"
+                  onClick={() => stepPreset(-1)}
+                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                  aria-label="Previous preset"
+                >
+                  −
+                </button>
+                <div
+                  onClick={() => setIsKitEditorOpen(true)}
+                  className="min-w-[88px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-900/60 border-l border-r border-neutral-800 cursor-pointer hover:bg-neutral-800/60"
+                  title="Open drumkit editor"
+                >
+                  {selectedPresetLabel}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => stepPreset(1)}
+                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                  aria-label="Next preset"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="border-t border-neutral-800 pt-4">
+          <div className="flex flex-col gap-3">
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() =>
+                  setStickingEditModeEnabled((v) => {
+                    const next = !v;
+                    if (next) {
+                      setStickingGuideEnabled(true);
+                    } else {
+                      setNotationStickingSelectionModeEnabled(false);
+                    }
+                    return next;
+                  })
+                }
+                className={`w-fit touch-none select-none px-3 py-[5px] rounded border text-sm ${
+                  stickingEditModeEnabled
+                    ? "bg-neutral-800 border-neutral-700 text-white"
+                    : "bg-neutral-900 border-neutral-800 text-neutral-600"
+                }`}
+                title="When enabled, clicking active hand-hit cells edits R/L sticking instead of toggling notes"
+              >
+                Sticking edit mode
+              </button>
+              <div className="relative">
+                <button
+                  ref={editingAdvancedMenuButtonRef}
+                  type="button"
+                  onClick={() => setIsEditingAdvancedMenuOpen((v) => !v)}
+                  className={`touch-none select-none px-3 py-[5px] rounded border text-sm ${
+                    isEditingAdvancedMenuOpen
+                      ? "bg-neutral-800 border-neutral-700 text-white"
+                      : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
+                  }`}
+                  title="Sticking display options"
+                  aria-label="Sticking display options"
+                >
+                  ...
+                </button>
+                {isEditingAdvancedMenuOpen && (
+                  <div
+                    ref={editingAdvancedMenuRef}
+                    className="absolute left-full top-0 z-[140] ml-2 min-w-[10.5rem] rounded-lg border border-neutral-700 bg-neutral-900 p-3 shadow-xl"
+                  >
+                    <div className="flex flex-col gap-3">
+                      <div className="space-y-1">
+                        <span className="text-sm text-neutral-300">Sticking display</span>
+                        <div className="flex w-fit items-stretch overflow-hidden rounded-md border border-neutral-800 bg-neutral-900/60">
+                          <button
+                            type="button"
+                            onClick={() => setNotationStickingView("above")}
+                            className={`whitespace-nowrap px-3 py-1 text-sm ${
+                              notationStickingView === "above"
+                                ? "bg-neutral-800 text-white"
+                                : "bg-neutral-900 text-neutral-600"
+                            }`}
+                            title="Show sticking above notation"
+                          >
+                            Above
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setNotationStickingView("split-rows")}
+                            className={`whitespace-nowrap border-l border-neutral-800 px-3 py-1 text-sm ${
+                              notationStickingView === "split-rows"
+                                ? "bg-neutral-800 text-white"
+                                : "bg-neutral-900 text-neutral-600"
+                            }`}
+                            title="Change sticking display"
+                          >
+                            Split rows
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() =>
+                  setNotationStickingSelectionModeEnabled((v) => {
+                    const next = !v;
+                    if (next) {
+                      setStickingGuideEnabled(true);
+                      setShowNotationSticking(true);
+                    }
+                    return next;
+                  })
+                }
+                disabled={!stickingEditModeEnabled}
+                className={`w-fit touch-none select-none px-3 py-[5px] rounded border text-sm ${
+                  !stickingEditModeEnabled
+                    ? "bg-neutral-900 border-neutral-800 text-neutral-600 opacity-50 cursor-not-allowed"
+                    : notationStickingSelectionModeEnabled
+                      ? "bg-neutral-800 border-neutral-700 text-white"
+                      : "bg-neutral-900 border-neutral-800 text-neutral-600"
+                }`}
+                title="When enabled, clicking or selecting active hand-hit cells toggles whether their sticking prints in notation"
+              >
+                Print sticking
+              </button>
+              <div className="relative">
+                <button
+                  ref={notationStickingMenuButtonRef}
+                  type="button"
+                  onClick={() => setIsNotationStickingMenuOpen((v) => !v)}
+                  disabled={!stickingEditModeEnabled}
+                  className={`touch-none select-none px-3 py-[5px] rounded border text-sm ${
+                    !stickingEditModeEnabled
+                      ? "bg-neutral-900 border-neutral-800 text-neutral-600 opacity-50 cursor-not-allowed"
+                      : isNotationStickingMenuOpen
+                        ? "bg-neutral-800 border-neutral-700 text-white"
+                        : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
+                  }`}
+                  title="Notation sticking selection actions"
+                  aria-label="Notation sticking selection actions"
+                >
+                  ...
+                </button>
+                {isNotationStickingMenuOpen && stickingEditModeEnabled && (
+                  <div
+                    ref={notationStickingMenuRef}
+                    className="absolute left-full top-0 z-30 ml-2 min-w-[9rem] rounded-lg border border-neutral-700 bg-neutral-900 p-3 shadow-xl"
+                  >
+                    <div className="flex flex-col gap-3">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          selectAllNotationSticking();
+                          setNotationStickingSelectionModeEnabled(true);
+                          setIsNotationStickingMenuOpen(false);
+                        }}
+                        className="w-fit whitespace-nowrap touch-none select-none px-3 py-[5px] rounded border border-neutral-800 bg-neutral-900 text-neutral-300 hover:bg-neutral-800/60"
+                        title="Select all active hand hits for notation"
+                      >
+                        All
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          clearNotationStickingSelection();
+                          setIsNotationStickingMenuOpen(false);
+                        }}
+                        className="w-fit whitespace-nowrap touch-none select-none px-3 py-[5px] rounded border border-neutral-800 bg-neutral-900 text-neutral-300 hover:bg-neutral-800/60"
+                        title="Clear the current notation sticking selection"
+                      >
+                        None
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setBeatAutoUpdateEnabled((v) => !v)}
+                className={`w-fit touch-none select-none px-3 py-[5px] rounded border text-sm ${
+                  beatAutoUpdateEnabled
+                    ? "bg-neutral-800 border-neutral-700 text-white"
+                    : "bg-neutral-900 border-neutral-800 text-neutral-600"
+                }`}
+                title="Automatically update the loaded local beat after beat changes. Notation sticking selection always auto-updates."
+              >
+                Auto update
+              </button>
+              <button
+                type="button"
+                onClick={handleMainTrashClick}
+                className={`touch-none select-none inline-flex h-8 w-8 items-center justify-center rounded border ${
+                  canClearSelection
+                    ? "bg-neutral-800 border-neutral-700 text-white"
+                    : "bg-neutral-900 border-neutral-800 text-neutral-500 hover:bg-neutral-800/40"
+                }`}
+                title={canClearSelection ? "Clear selection (Cmd/Ctrl+click: reset defaults + delete library)" : "Clear all notes (Cmd/Ctrl+click: reset defaults + delete library)"}
+                aria-label={canClearSelection ? "Clear selection" : "Clear all notes"}
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 16 16"
+                  className="-translate-y-px h-[0.95rem] w-[0.95rem]"
+                  fill="currentColor"
+                  aria-hidden="true"
+                >
+                  <path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0z" />
+                  <path d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4zM2.5 3h11V2h-11z" />
+                </svg>
+              </button>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-neutral-300">Looping</span>
+              <div
+                className={`flex items-stretch overflow-hidden rounded-md border ${
+                  loopRepeats === "off"
+                    ? "border-neutral-800 bg-neutral-900/60"
+                    : "border-neutral-800 bg-neutral-900/60"
+                }`}
+              >
+                <button
+                  type="button"
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    const order = ["all", "off", "1", "2", "3", "4", "5", "6", "7", "8"];
+                    const stepOnce = () => {
+                      setLoopRepeats((prev) => {
+                        const i = Math.max(0, order.indexOf(String(prev)));
+                        return order[(i - 1 + order.length) % order.length];
+                      });
+                    };
+                    stepOnce();
+                    let interval = null;
+                    let timeout = window.setTimeout(() => {
+                      interval = window.setInterval(stepOnce, 160);
+                    }, 130);
+                    const stop = () => {
+                      if (timeout) window.clearTimeout(timeout);
+                      timeout = null;
+                      if (interval) window.clearInterval(interval);
+                      interval = null;
+                      window.removeEventListener("mouseup", stop);
+                      window.removeEventListener("touchend", stop);
+                      window.removeEventListener("touchcancel", stop);
+                    };
+                    window.addEventListener("mouseup", stop);
+                    window.addEventListener("touchend", stop, { passive: true });
+                    window.addEventListener("touchcancel", stop, { passive: true });
+                  }}
+                  className={`px-2 text-base leading-none ${
+                    loopRepeats === "off"
+                      ? "text-neutral-500 hover:bg-neutral-800/50 active:bg-neutral-800"
+                      : "text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                  }`}
+                  title="Decrease loop repeats"
+                >
+                  –
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLoopRepeats((prev) => {
+                      if (prev === "all") {
+                        return lastNonAllLoopRepeats.current || "1";
+                      }
+                      return "all";
+                    });
+                  }}
+                  className={`min-w-[44px] px-3 py-1 flex items-center justify-center text-sm border-l border-r capitalize ${
+                    loopRepeats === "off"
+                      ? "text-neutral-500 bg-neutral-900/60 hover:bg-neutral-800/50 border-neutral-800"
+                      : "text-white bg-neutral-900/60 hover:bg-neutral-800/50 border-neutral-800"
+                  }`}
+                  title="How many times the selection repeats"
+                >
+                  {loopRepeats}
+                </button>
+                <button
+                  type="button"
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    const order = ["all", "off", "1", "2", "3", "4", "5", "6", "7", "8"];
+                    const stepOnce = () => {
+                      setLoopRepeats((prev) => {
+                        const i = Math.max(0, order.indexOf(String(prev)));
+                        return order[(i + 1) % order.length];
+                      });
+                    };
+                    stepOnce();
+                    let interval = null;
+                    let timeout = window.setTimeout(() => {
+                      interval = window.setInterval(stepOnce, 160);
+                    }, 130);
+                    const stop = () => {
+                      if (timeout) window.clearTimeout(timeout);
+                      timeout = null;
+                      if (interval) window.clearInterval(interval);
+                      interval = null;
+                      window.removeEventListener("mouseup", stop);
+                      window.removeEventListener("touchend", stop);
+                      window.removeEventListener("touchcancel", stop);
+                    };
+                    window.addEventListener("mouseup", stop);
+                    window.addEventListener("touchend", stop, { passive: true });
+                    window.addEventListener("touchcancel", stop, { passive: true });
+                  }}
+                  className={`px-2 text-base leading-none ${
+                    loopRepeats === "off"
+                      ? "text-neutral-500 hover:bg-neutral-800/50 active:bg-neutral-800"
+                      : "text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                  }`}
+                  title="Increase loop repeats"
+                >
+                  +
+                </button>
+              </div>
+              <div className="relative">
+                <button
+                  ref={loopAdvancedMenuButtonRef}
+                  type="button"
+                  onClick={() => setIsLoopAdvancedMenuOpen((v) => !v)}
+                  className={`touch-none select-none px-3 py-[5px] rounded border text-sm ${
+                    isLoopAdvancedMenuOpen
+                      ? "bg-neutral-800 border-neutral-700 text-white"
+                      : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
+                  }`}
+                  title="Loop overlap options"
+                  aria-label="Loop overlap options"
+                >
+                  ...
+                </button>
+                {isLoopAdvancedMenuOpen && (
+                  <div
+                    ref={loopAdvancedMenuRef}
+                    className="absolute left-full top-0 z-30 ml-2 w-fit rounded-lg border border-neutral-700 bg-neutral-900 p-3 shadow-xl"
+                  >
+                    <div className="flex flex-col gap-3">
+                      <div className="space-y-1">
+                        <span className="text-sm text-neutral-300">Loop overlap</span>
+                        <div className="flex w-fit max-w-full items-stretch overflow-hidden rounded-md border border-neutral-800 bg-neutral-900/60">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setLoopOverlapMode((prev) => {
+                                const idx = Math.max(0, MOVE_OVERLAP_MODES.findIndex((m) => m.id === prev));
+                                return MOVE_OVERLAP_MODES[(idx - 1 + MOVE_OVERLAP_MODES.length) % MOVE_OVERLAP_MODES.length].id;
+                              })
+                            }
+                            className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                          >
+                            −
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setLoopOverlapMode((prev) => (prev === "all-to-all" ? "active-to-empty" : "all-to-all"))
+                            }
+                            className="min-w-[126px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-900/60 border-l border-r border-neutral-800 hover:bg-neutral-800/50"
+                            title={getOverlapModeDescription(loopOverlapMode)}
+                          >
+                            {MOVE_OVERLAP_MODES.find((m) => m.id === loopOverlapMode)?.label || "Fill in gaps"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setLoopOverlapMode((prev) => {
+                                const idx = Math.max(0, MOVE_OVERLAP_MODES.findIndex((m) => m.id === prev));
+                                return MOVE_OVERLAP_MODES[(idx + 1) % MOVE_OVERLAP_MODES.length].id;
+                              })
+                            }
+                            className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                          >
+                            +
+                          </button>
+                        </div>
+                      </div>
+                      <div className="space-y-1">
+                        <span className="text-sm text-neutral-300">Move overlap</span>
+                        <div className="flex w-fit max-w-full items-stretch overflow-hidden rounded-md border border-neutral-800 bg-neutral-900/60">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setMoveOverlapMode((prev) => {
+                                const idx = Math.max(0, MOVE_OVERLAP_MODES.findIndex((m) => m.id === prev));
+                                return MOVE_OVERLAP_MODES[(idx - 1 + MOVE_OVERLAP_MODES.length) % MOVE_OVERLAP_MODES.length].id;
+                              })
+                            }
+                            className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                          >
+                            −
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setMoveOverlapMode((prev) => (prev === "all-to-all" ? "active-to-empty" : "all-to-all"))
+                            }
+                            className="min-w-[126px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-900/60 border-l border-r border-neutral-800 hover:bg-neutral-800/50"
+                            title={getOverlapModeDescription(moveOverlapMode)}
+                          >
+                            {MOVE_OVERLAP_MODES.find((m) => m.id === moveOverlapMode)?.label || "All overrides all"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setMoveOverlapMode((prev) => {
+                                const idx = Math.max(0, MOVE_OVERLAP_MODES.findIndex((m) => m.id === prev));
+                                return MOVE_OVERLAP_MODES[(idx + 1) % MOVE_OVERLAP_MODES.length].id;
+                              })
+                            }
+                            className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                          >
+                            +
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </aside>
+  ) : null;
 
 
   return (
@@ -15089,7 +17654,7 @@ useEffect(() => {
       className={`${
         isEmbedMode
           ? "min-h-full bg-neutral-900 text-white p-3"
-          : `flex min-h-screen flex-col bg-neutral-900 px-6 pt-6 text-white ${useFixedDesktopFooter ? "pb-40 sm:pb-28 md:pb-32" : "pb-0"}`
+          : `flex min-h-screen flex-col bg-neutral-900 px-6 pt-6 text-white ${effectiveUseFixedDesktopFooter ? "pb-40 sm:pb-28 md:pb-32" : "pb-0"}`
       }`}
       onMouseDown={(e) => {
         if (selection) {
@@ -15163,15 +17728,17 @@ useEffect(() => {
                 }
                 togglePlaybackFromBeginning();
               }}
-              className={`touch-none select-none px-3 py-1.5 rounded border text-sm capitalize outline-none focus:outline-none focus-visible:outline-none ${
+              className={`touch-none select-none inline-flex h-[2.125rem] w-[2.125rem] items-center justify-center rounded border text-sm capitalize outline-none focus:outline-none focus-visible:outline-none ${
                 arrangementHeaderUsesArrangementPlayback
                   ? "border-sky-500/70 text-sky-100 bg-sky-900/30 shadow-[0_0_0_1px_rgba(14,165,233,0.35)] hover:bg-sky-900/40"
                   : arrangementHeaderPlaybackActive
                     ? "bg-neutral-800 border-neutral-600 text-white"
                     : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
               }`}
+              title={arrangementHeaderPlaybackActive ? "Stop playback" : "Start playback"}
+              aria-label={arrangementHeaderPlaybackActive ? "Stop playback" : "Start playback"}
             >
-              {arrangementHeaderPlaybackActive ? "stop" : "play"}
+              {arrangementHeaderPlaybackActive ? <StopIcon /> : <PlayIcon />}
             </button>
             <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
               <button
@@ -15234,598 +17801,68 @@ useEffect(() => {
             </button>
           </div>
         )}
-        <div className="flex flex-wrap items-center gap-3">
-          <h1 className="text-lg font-semibold mr-2">Drum Grid → Notation</h1>
-
-          
-          <div className="flex items-center gap-2 order-1" data-loopui='1'>
-            <button
-              onClick={() => {
-                if (arrangementHeaderUsesArrangementPlayback) {
-                  if (arrangementPlaybackUiActive) stopArrangementPlayback();
-                  else startArrangementPlayback();
-                  return;
-                }
-                togglePlaybackFromBeginning();
-              }}
-              className={`touch-none select-none px-3 py-1.5 rounded border text-sm capitalize outline-none focus:outline-none focus-visible:outline-none ${
-                arrangementHeaderUsesArrangementPlayback
-                  ? "border-sky-500/70 text-sky-100 bg-sky-900/30 shadow-[0_0_0_1px_rgba(14,165,233,0.35)] hover:bg-sky-900/40"
-                  : arrangementHeaderPlaybackActive
-                    ? "bg-neutral-800 border-neutral-600 text-white"
-                    : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
-              }`}
-            >
-              {arrangementHeaderPlaybackActive ? "stop" : "play"}
-            </button>
-          </div>
-
-          <div className="flex items-center gap-2 order-2">
-            <button
-              type="button"
-              onClick={handleTopUndo}
-              disabled={!canUndoTop}
-              className={`touch-none select-none px-3 py-1.5 rounded border text-sm bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60 ${
-                !canUndoTop ? "opacity-40 cursor-not-allowed" : ""
-              }`}
-              title={isLibraryHistoryActive ? "Undo library change" : "Undo (grid only)"}
-            >
-              ←
-            </button>
-            <button
-              type="button"
-              onClick={handleTopRedo}
-              disabled={!canRedoTop}
-              className={`touch-none select-none px-3 py-1.5 rounded border text-sm bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60 ${
-                !canRedoTop ? "opacity-40 cursor-not-allowed" : ""
-              }`}
-              title={isLibraryHistoryActive ? "Redo library change" : "Redo (grid only)"}
-            >
-              →
-            </button>
-            <button
-              type="button"
-              onClick={handleMainTrashClick}
-              className={`touch-none select-none inline-flex h-[2.125rem] w-[2.125rem] items-center justify-center rounded border text-sm capitalize ${
-                canClearSelection
-                  ? "bg-neutral-800 border-neutral-600 text-white"
-                  : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
-              }`}
-              title={canClearSelection ? "Clear selection (Cmd/Ctrl+click: reset defaults + delete library)" : "Clear all notes (Cmd/Ctrl+click: reset defaults + delete library)"}
-              aria-label={canClearSelection ? "Clear selection" : "Clear all notes"}
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                viewBox="0 0 16 16"
-                className="h-4 w-4 text-white"
-                fill="currentColor"
-                aria-hidden="true"
-              >
-                <path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0z" />
-                <path d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4zM2.5 3h11V2h-11z" />
-              </svg>
-            </button>
-            <button
-              ref={fileMenuButtonRef}
-              type="button"
-              onClick={() => setIsShareActionsDialogOpen((v) => !v)}
-              className={`touch-none select-none inline-flex h-[2.125rem] w-[2.125rem] items-center justify-center rounded border text-sm ${
-                shareCopied
-                  ? "bg-neutral-800 border-neutral-600 text-white"
-                  : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
-              }`}
-              title="File actions"
-              aria-label="File actions"
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                viewBox="0 0 24 24"
-                className="h-4 w-4"
-                fill="currentColor"
-                aria-hidden="true"
-              >
-                <path d="M18 2A3 3 0 0 0 15 5A3 3 0 0 0 15.054688 5.560547L7.939453 9.710938A3 3 0 0 0 6 9A3 3 0 0 0 3 12A3 3 0 0 0 6 15A3 3 0 0 0 7.935547 14.287109L15.054688 18.439453A3 3 0 0 0 15 19A3 3 0 0 0 18 22A3 3 0 0 0 21 19A3 3 0 0 0 18 16A3 3 0 0 0 16.0625 16.712891L8.945312 12.560547A3 3 0 0 0 9 12A3 3 0 0 0 8.945312 11.439453L16.060547 7.289062A3 3 0 0 0 18 8A3 3 0 0 0 21 5A3 3 0 0 0 18 2Z" />
-              </svg>
-            </button>
-            {hasSupabaseEnabled && (
-              <>
-                <button
-                  type="button"
-                  onClick={openAuthDialog}
-                  disabled={authPending}
-                  className={`touch-none select-none inline-flex h-[2.125rem] w-[2.125rem] items-center justify-center rounded border ${
-                    authPending
-                      ? "bg-neutral-900 border-neutral-800 text-neutral-500 cursor-not-allowed"
-                      : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
-                  }`}
-                  title={authPending ? "Authentication pending" : authUser ? `Open account for ${authUserLabel}` : "Sign in with email"}
-                  aria-label={authPending ? "Authentication pending" : authUser ? `Open account for ${authUserLabel}` : "Sign in with email"}
-                >
-                  {authPending ? "…" : <UserIcon />}
-                </button>
-                {authUser ? (
-                  <span
-                    className={`hidden md:inline-block rounded border px-2 py-1 text-[11px] ${
-                      isAdminUser
-                        ? "border-amber-700/60 bg-amber-950/30 text-amber-200"
-                        : "border-sky-700/50 bg-sky-950/20 text-sky-200"
-                    }`}
-                  >
-                    {isAdminUser ? "Admin" : "Signed in"}
-                  </span>
-                ) : null}
-                {authUserEmail && isAdminUser ? (
-                  <span
-                    className="hidden md:inline-block max-w-[170px] truncate text-xs text-neutral-500"
-                    title={authUserEmail}
-                  >
-                    {authUserEmail}
-                  </span>
-                ) : null}
-              </>
-            )}
-          </div>
-
-        </div>
-
-        <div className="relative flex flex-wrap items-center gap-2">
-            <button
-              ref={gridMenuButtonRef}
-              onClick={(e) => {
-                if (e.shiftKey) {
-                  setShowAppVersion((v) => !v);
-                  return;
-                }
-                setActiveTab((t) => (t === "timing" ? "none" : "timing"));
-              }}
-              className={`touch-none select-none px-3 py-1.5 rounded border text-sm capitalize outline-none focus:outline-none focus-visible:outline-none ${
-                activeTab === "timing"
+        <div className="flex flex-wrap items-center gap-2">
+          <h1 className="mr-4 text-lg font-semibold">Drum Grid → Notation</h1>
+          <button
+            onClick={() => {
+              if (arrangementHeaderUsesArrangementPlayback) {
+                if (arrangementPlaybackUiActive) stopArrangementPlayback();
+                else startArrangementPlayback();
+                return;
+              }
+              togglePlaybackFromBeginning();
+            }}
+            className={`touch-none select-none inline-flex h-[2.125rem] w-[2.125rem] items-center justify-center rounded border text-sm capitalize outline-none focus:outline-none focus-visible:outline-none ${
+              arrangementHeaderUsesArrangementPlayback
+                ? "border-sky-500/70 text-sky-100 bg-sky-900/30 shadow-[0_0_0_1px_rgba(14,165,233,0.35)] hover:bg-sky-900/40"
+                : arrangementHeaderPlaybackActive
                   ? "bg-neutral-800 border-neutral-600 text-white"
                   : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
             }`}
+            title={arrangementHeaderPlaybackActive ? "Stop playback" : "Start playback"}
+            aria-label={arrangementHeaderPlaybackActive ? "Stop playback" : "Start playback"}
           >
-            Settings
+            {arrangementHeaderPlaybackActive ? <StopIcon /> : <PlayIcon />}
           </button>
-          {showAppVersion ? (
-            <span
-              className="select-none whitespace-nowrap text-[11px] text-neutral-500"
-              title={`Version ${APP_VERSION}`}
-            >
-              v{APP_VERSION}
-            </span>
-          ) : null}
+          <button
+            ref={transportMenuButtonRef}
+            type="button"
+            onPointerDown={handleBpmScrubPointerDown}
+            onClick={() => {
+              if (performance.now() < bpmButtonScrubSuppressUntilRef.current) return;
+              setIsTransportMenuOpen((v) => !v);
+            }}
+            className="touch-none select-none whitespace-nowrap rounded border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-sm text-neutral-400 outline-none hover:bg-neutral-800/60 hover:text-neutral-300 focus:outline-none focus-visible:outline-none cursor-ns-resize"
+            title="Open tempo controls or drag up/down to change BPM"
+            aria-label={`Open tempo controls or drag to change BPM (${bpm} BPM)`}
+          >
+            {`${bpm} BPM`}
+          </button>
           <div className="relative">
             <button
-              onClick={() => {
-                setActiveTab((t) => (t === "selection" ? "none" : "selection"));
-              }}
-              className={`touch-none select-none px-3 py-1.5 rounded border text-sm capitalize outline-none focus:outline-none focus-visible:outline-none ${
-                activeTab === "selection"
-                  ? "bg-neutral-800 border-neutral-600 text-white"
-                  : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
-              }`}
-            >
-              Tools
-            </button>
-            {activeTab === "selection" && (
-              <div
-                ref={selectionMenuRowRef}
-                className="absolute left-0 top-full z-20 mt-2 min-w-[14.75rem] max-w-[min(100vw-2rem,980px)] rounded-lg border border-neutral-700 bg-neutral-900 p-3 shadow-xl"
-              >
-                <div className="flex flex-col gap-3">
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setStickingEditModeEnabled((v) => {
-                          const next = !v;
-                          if (next) {
-                            setStickingGuideEnabled(true);
-                          } else {
-                            setNotationStickingSelectionModeEnabled(false);
-                          }
-                          return next;
-                        })
-                      }
-                      className={`w-fit touch-none select-none px-3 py-[5px] rounded border text-sm ${
-                        stickingEditModeEnabled
-                          ? "bg-neutral-800 border-neutral-700 text-white"
-                          : "bg-neutral-900 border-neutral-800 text-neutral-600"
-                      }`}
-                      title="When enabled, clicking active hand-hit cells edits R/L sticking instead of toggling notes"
-                    >
-                      Sticking edit mode
-                    </button>
-                    <div className="relative">
-                      <button
-                        ref={editingAdvancedMenuButtonRef}
-                        type="button"
-                        onClick={() => setIsEditingAdvancedMenuOpen((v) => !v)}
-                        className={`touch-none select-none px-3 py-[5px] rounded border text-sm ${
-                          isEditingAdvancedMenuOpen
-                            ? "bg-neutral-800 border-neutral-700 text-white"
-                            : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
-                        }`}
-                        title="Sticking display options"
-                        aria-label="Sticking display options"
-                      >
-                        ...
-                      </button>
-                      {isEditingAdvancedMenuOpen && (
-                        <div
-                          ref={editingAdvancedMenuRef}
-                          className="absolute left-full top-0 z-30 ml-2 min-w-[10.5rem] rounded-lg border border-neutral-700 bg-neutral-900 p-3 shadow-xl"
-                        >
-                          <div className="flex flex-col gap-3">
-                            <button
-                              type="button"
-                              onClick={() => setShowNotationSticking((v) => !v)}
-                              className={`w-fit whitespace-nowrap touch-none select-none px-3 py-[5px] rounded border text-sm ${
-                                showNotationSticking
-                                  ? "bg-neutral-800 border-neutral-700 text-white"
-                                  : "bg-neutral-900 border-neutral-800 text-neutral-600"
-                              }`}
-                              title="Show inferred sticking (R/L) beneath notes in notation"
-                            >
-                              Show sticking
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setNotationStickingView((v) => (v === "stacked" ? "split-rows" : "stacked"))
-                              }
-                              className={`w-fit whitespace-nowrap touch-none select-none px-3 py-[5px] rounded border text-sm ${
-                                notationStickingView === "split-rows"
-                                  ? "bg-neutral-800 border-neutral-700 text-white"
-                                  : "bg-neutral-900 border-neutral-800 text-neutral-600"
-                              }`}
-                              title="Change sticking display"
-                            >
-                              Split rows
-                            </button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setNotationStickingSelectionModeEnabled((v) => {
-                          const next = !v;
-                          if (next) {
-                            setStickingGuideEnabled(true);
-                            setShowNotationSticking(true);
-                          }
-                          return next;
-                        })
-                      }
-                      disabled={!stickingEditModeEnabled}
-                      className={`w-fit touch-none select-none px-3 py-[5px] rounded border text-sm ${
-                        !stickingEditModeEnabled
-                          ? "bg-neutral-900 border-neutral-800 text-neutral-600 opacity-50 cursor-not-allowed"
-                          : notationStickingSelectionModeEnabled
-                          ? "bg-neutral-800 border-neutral-700 text-white"
-                          : "bg-neutral-900 border-neutral-800 text-neutral-600"
-                      }`}
-                      title="When enabled, clicking or selecting active hand-hit cells toggles whether their sticking prints in notation"
-                    >
-                      Select sticking for notation
-                    </button>
-                    <div className="relative">
-                      <button
-                        ref={notationStickingMenuButtonRef}
-                        type="button"
-                        onClick={() => setIsNotationStickingMenuOpen((v) => !v)}
-                        disabled={!stickingEditModeEnabled}
-                        className={`touch-none select-none px-3 py-[5px] rounded border text-sm ${
-                          !stickingEditModeEnabled
-                            ? "bg-neutral-900 border-neutral-800 text-neutral-600 opacity-50 cursor-not-allowed"
-                            : isNotationStickingMenuOpen
-                            ? "bg-neutral-800 border-neutral-700 text-white"
-                            : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
-                        }`}
-                        title="Notation sticking selection actions"
-                        aria-label="Notation sticking selection actions"
-                      >
-                        ...
-                      </button>
-                      {isNotationStickingMenuOpen && stickingEditModeEnabled && (
-                        <div
-                          ref={notationStickingMenuRef}
-                          className="absolute left-full top-0 z-30 ml-2 min-w-[9rem] rounded-lg border border-neutral-700 bg-neutral-900 p-3 shadow-xl"
-                        >
-                          <div className="flex flex-col gap-3">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                selectAllNotationSticking();
-                                setNotationStickingSelectionModeEnabled(true);
-                                setIsNotationStickingMenuOpen(false);
-                              }}
-                              className="w-fit whitespace-nowrap touch-none select-none px-3 py-[5px] rounded border border-neutral-800 bg-neutral-900 text-neutral-300 hover:bg-neutral-800/60"
-                              title="Select all active hand hits for notation"
-                            >
-                              All
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                clearNotationStickingSelection();
-                                setIsNotationStickingMenuOpen(false);
-                              }}
-                              className="w-fit whitespace-nowrap touch-none select-none px-3 py-[5px] rounded border border-neutral-800 bg-neutral-900 text-neutral-300 hover:bg-neutral-800/60"
-                              title="Clear the current notation sticking selection"
-                            >
-                              None
-                            </button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setBeatAutoUpdateEnabled((v) => !v)}
-                      className={`w-fit touch-none select-none px-3 py-[5px] rounded border text-sm ${
-                        beatAutoUpdateEnabled
-                          ? "bg-neutral-800 border-neutral-700 text-white"
-                          : "bg-neutral-900 border-neutral-800 text-neutral-600"
-                      }`}
-                      title="Automatically update the loaded local beat after beat changes. Notation sticking selection always auto-updates."
-                    >
-                      Auto update
-                    </button>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm text-neutral-300">Looping</span>
-                    <div
-                      className={`flex items-stretch overflow-hidden rounded-md border ${
-                        loopRepeats === "off"
-                          ? "border-neutral-800 bg-neutral-900/60"
-                          : "border-neutral-700 bg-neutral-800"
-                      }`}
-                    >
-                      <button
-                        type="button"
-                        onMouseDown={(e) => {
-                          e.preventDefault();
-                          const order = ["all", "off", "1", "2", "3", "4", "5", "6", "7", "8"];
-                          const stepOnce = () => {
-                            setLoopRepeats((prev) => {
-                              const i = Math.max(0, order.indexOf(String(prev)));
-                              return order[(i - 1 + order.length) % order.length];
-                            });
-                          };
-                          stepOnce();
-                          let interval = null;
-                          let timeout = window.setTimeout(() => {
-                            interval = window.setInterval(stepOnce, 160);
-                          }, 130);
-                          const stop = () => {
-                            if (timeout) window.clearTimeout(timeout);
-                            timeout = null;
-                            if (interval) window.clearInterval(interval);
-                            interval = null;
-                            window.removeEventListener("mouseup", stop);
-                            window.removeEventListener("touchend", stop);
-                            window.removeEventListener("touchcancel", stop);
-                          };
-                          window.addEventListener("mouseup", stop);
-                          window.addEventListener("touchend", stop, { passive: true });
-                          window.addEventListener("touchcancel", stop, { passive: true });
-                        }}
-                        className={`px-2 text-base leading-none ${
-                          loopRepeats === "off"
-                            ? "text-neutral-500 hover:bg-neutral-800/50 active:bg-neutral-800"
-                            : "text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                        }`}
-                        title="Decrease loop repeats"
-                      >
-                        –
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setLoopRepeats((prev) => {
-                            if (prev === "all") {
-                              return lastNonAllLoopRepeats.current || "1";
-                            }
-                            return "all";
-                          });
-                        }}
-                        className={`min-w-[44px] px-3 py-1 flex items-center justify-center text-sm border-l border-r capitalize ${
-                          loopRepeats === "off"
-                            ? "text-neutral-500 bg-neutral-900/60 hover:bg-neutral-800/50 border-neutral-800"
-                            : "text-white bg-neutral-800 hover:bg-neutral-700/50 border-neutral-700"
-                        }`}
-                        title="How many times the selection repeats"
-                      >
-                        {loopRepeats}
-                      </button>
-
-                      <button
-                        type="button"
-                        onMouseDown={(e) => {
-                          e.preventDefault();
-                          const order = ["all", "off", "1", "2", "3", "4", "5", "6", "7", "8"];
-                          const stepOnce = () => {
-                            setLoopRepeats((prev) => {
-                              const i = Math.max(0, order.indexOf(String(prev)));
-                              return order[(i + 1) % order.length];
-                            });
-                          };
-                          stepOnce();
-                          let interval = null;
-                          let timeout = window.setTimeout(() => {
-                            interval = window.setInterval(stepOnce, 160);
-                          }, 130);
-                          const stop = () => {
-                            if (timeout) window.clearTimeout(timeout);
-                            timeout = null;
-                            if (interval) window.clearInterval(interval);
-                            interval = null;
-                            window.removeEventListener("mouseup", stop);
-                            window.removeEventListener("touchend", stop);
-                            window.removeEventListener("touchcancel", stop);
-                          };
-                          window.addEventListener("mouseup", stop);
-                          window.addEventListener("touchend", stop, { passive: true });
-                          window.addEventListener("touchcancel", stop, { passive: true });
-                        }}
-                        className={`px-2 text-base leading-none ${
-                          loopRepeats === "off"
-                            ? "text-neutral-500 hover:bg-neutral-800/50 active:bg-neutral-800"
-                            : "text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                        }`}
-                        title="Increase loop repeats"
-                      >
-                        +
-                      </button>
-                    </div>
-                    <div className="relative">
-                      <button
-                        ref={loopAdvancedMenuButtonRef}
-                        type="button"
-                        onClick={() => setIsLoopAdvancedMenuOpen((v) => !v)}
-                        className={`touch-none select-none px-3 py-[5px] rounded border text-sm ${
-                          isLoopAdvancedMenuOpen
-                            ? "bg-neutral-800 border-neutral-700 text-white"
-                            : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
-                        }`}
-                        title="Loop overlap options"
-                        aria-label="Loop overlap options"
-                      >
-                        ...
-                      </button>
-                      {isLoopAdvancedMenuOpen && (
-                        <div
-                          ref={loopAdvancedMenuRef}
-                          className="absolute left-full top-0 z-30 ml-2 w-fit rounded-lg border border-neutral-700 bg-neutral-900 p-3 shadow-xl"
-                        >
-                          <div className="flex flex-col gap-3">
-                            <div className="space-y-1">
-                              <span className="text-sm text-neutral-300">Loop overlap</span>
-                              <div className="flex w-fit max-w-full items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    setLoopOverlapMode((prev) => {
-                                      const idx = Math.max(0, MOVE_OVERLAP_MODES.findIndex((m) => m.id === prev));
-                                      return MOVE_OVERLAP_MODES[(idx - 1 + MOVE_OVERLAP_MODES.length) % MOVE_OVERLAP_MODES.length].id;
-                                    })
-                                  }
-                                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                                  aria-label="Previous loop overlap mode"
-                                >
-                                  −
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    setLoopOverlapMode((prev) => (prev === "all-to-all" ? "active-to-empty" : "all-to-all"))
-                                  }
-                                  className="min-w-[126px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700 hover:bg-neutral-700/50"
-                                  title={getOverlapModeDescription(loopOverlapMode)}
-                                  aria-label={getOverlapModeDescription(loopOverlapMode)}
-                                >
-                                  {MOVE_OVERLAP_MODES.find((m) => m.id === loopOverlapMode)?.label || "Fill in gaps"}
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    setLoopOverlapMode((prev) => {
-                                      const idx = Math.max(0, MOVE_OVERLAP_MODES.findIndex((m) => m.id === prev));
-                                      return MOVE_OVERLAP_MODES[(idx + 1) % MOVE_OVERLAP_MODES.length].id;
-                                    })
-                                  }
-                                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                                  aria-label="Next loop overlap mode"
-                                >
-                                  +
-                                </button>
-                              </div>
-                            </div>
-                            <div className="space-y-1">
-                              <span className="text-sm text-neutral-300">Move overlap</span>
-                              <div className="flex w-fit max-w-full items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    setMoveOverlapMode((prev) => {
-                                      const idx = Math.max(0, MOVE_OVERLAP_MODES.findIndex((m) => m.id === prev));
-                                      return MOVE_OVERLAP_MODES[(idx - 1 + MOVE_OVERLAP_MODES.length) % MOVE_OVERLAP_MODES.length].id;
-                                    })
-                                  }
-                                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                                  aria-label="Previous move overlap mode"
-                                >
-                                  −
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    setMoveOverlapMode((prev) => (prev === "all-to-all" ? "active-to-empty" : "all-to-all"))
-                                  }
-                                  className="min-w-[126px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700 hover:bg-neutral-700/50"
-                                  title={getOverlapModeDescription(moveOverlapMode)}
-                                  aria-label={getOverlapModeDescription(moveOverlapMode)}
-                                >
-                                  {MOVE_OVERLAP_MODES.find((m) => m.id === moveOverlapMode)?.label || "All overrides all"}
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    setMoveOverlapMode((prev) => {
-                                      const idx = Math.max(0, MOVE_OVERLAP_MODES.findIndex((m) => m.id === prev));
-                                      return MOVE_OVERLAP_MODES[(idx + 1) % MOVE_OVERLAP_MODES.length].id;
-                                    })
-                                  }
-                                  className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                                  aria-label="Next move overlap mode"
-                                >
-                                  +
-                                </button>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-          <div className="relative">
-	            <button
-	              type="button"
-	              onClick={(e) => {
-	                setActiveTab("none");
-	                if (isMobileFloatingPanels) {
-	                  if (!isArrangementOpen) {
-	                    setArrangementSourcesCollapsed(false);
-	                    setArrangementDetailsCollapsed(true);
-	                    setArrangementSourceTab("local");
-	                    setIsArrangementOpen(true);
-	                    return;
-	                  }
-	                  if (!arrangementSourcesCollapsed && arrangementDetailsCollapsed) {
-	                    setIsArrangementOpen(false);
-	                    return;
-	                  }
-	                  setArrangementSourcesCollapsed(false);
-	                  setArrangementDetailsCollapsed(true);
-	                  setArrangementSourceTab("local");
-	                  return;
-	                }
-	                if (e.shiftKey) {
-	                  if (!isArrangementOpen) {
-	                    setArrangementSourcesCollapsed(false);
+              type="button"
+              onClick={(e) => {
+                setActiveTab("none");
+                if (isMobileFloatingPanels) {
+                  if (!isArrangementOpen) {
+                    setArrangementSourcesCollapsed(false);
+                    setArrangementDetailsCollapsed(true);
+                    setArrangementSourceTab("local");
+                    setIsArrangementOpen(true);
+                    return;
+                  }
+                  if (!arrangementSourcesCollapsed && arrangementDetailsCollapsed) {
+                    setIsArrangementOpen(false);
+                    return;
+                  }
+                  setArrangementSourcesCollapsed(false);
+                  setArrangementDetailsCollapsed(true);
+                  setArrangementSourceTab("local");
+                  return;
+                }
+                if (e.shiftKey) {
+                  if (!isArrangementOpen) {
+                    setArrangementSourcesCollapsed(false);
                     setArrangementDetailsCollapsed(true);
                     setArrangementSourceTab("local");
                     setIsArrangementOpen(true);
@@ -15865,227 +17902,92 @@ useEffect(() => {
               Library
             </button>
           </div>
-          {arrangementHeaderUsesArrangementPlayback ? (
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => stepArrangementSelection(-1)}
-                disabled={!canStepArrangementSelectionBackward}
-                className={`touch-none select-none px-3 py-1.5 rounded border text-sm outline-none focus:outline-none focus-visible:outline-none ${
-                  canStepArrangementSelectionBackward
-                    ? "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
-                    : "bg-neutral-900 border-neutral-800 text-neutral-500 opacity-50 cursor-not-allowed"
-                }`}
-                title="Previous arrangement beat"
-                aria-label="Previous arrangement beat"
-              >
-                ←
-              </button>
-              <button
-                type="button"
-                onClick={() => stepArrangementSelection(1)}
-                disabled={!canStepArrangementSelectionForward}
-                className={`touch-none select-none px-3 py-1.5 rounded border text-sm outline-none focus:outline-none focus-visible:outline-none ${
-                  canStepArrangementSelectionForward
-                    ? "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
-                    : "bg-neutral-900 border-neutral-800 text-neutral-500 opacity-50 cursor-not-allowed"
-                }`}
-                title="Next arrangement beat"
-                aria-label="Next arrangement beat"
-              >
-                →
-              </button>
-            </div>
-          ) : null}
-          {playabilityWarningsEnabled && playabilityWarningSteps.length > 0 && (
-            <span className="text-[11px] text-red-500 whitespace-nowrap">
-              {playabilityWarningSteps.length} playability warning{playabilityWarningSteps.length === 1 ? "" : "s"}
-            </span>
-          )}
-          {stickingEditModeEnabled && stickingConflictSteps.length > 0 && (
-            <span className="text-[11px] text-red-500 whitespace-nowrap">
-              {stickingConflictSteps.length} sticking warning{stickingConflictSteps.length === 1 ? "" : "s"}
-            </span>
-          )}
-          {activeTab === "timing" && (
-            <div
-              ref={gridMenuPopupRef}
-              className="absolute left-0 top-full z-20 mt-2 w-fit max-w-[min(100vw-2rem,980px)] rounded-lg border border-neutral-700 bg-neutral-900 p-3 shadow-xl"
+          <div className="min-w-4 flex-1" />
+          <button
+            type="button"
+            onClick={handleTopUndo}
+            disabled={!canUndoTop}
+            className={`touch-none select-none inline-flex h-[2.125rem] w-[2.125rem] items-center justify-center rounded border text-sm bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60 ${
+              !canUndoTop ? "opacity-40 cursor-not-allowed" : ""
+            }`}
+            title={isLibraryHistoryActive ? "Undo library change" : "Undo (grid only)"}
+          >
+            ←
+          </button>
+          <button
+            type="button"
+            onClick={handleTopRedo}
+            disabled={!canRedoTop}
+            className={`touch-none select-none inline-flex h-[2.125rem] w-[2.125rem] items-center justify-center rounded border text-sm bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60 ${
+              !canRedoTop ? "opacity-40 cursor-not-allowed" : ""
+            }`}
+            title={isLibraryHistoryActive ? "Redo library change" : "Redo (grid only)"}
+          >
+            →
+          </button>
+          <button
+            ref={fileMenuButtonRef}
+            type="button"
+            onClick={() => setIsShareActionsDialogOpen((v) => !v)}
+            className={`touch-none select-none inline-flex h-[2.125rem] w-[2.125rem] items-center justify-center rounded border text-sm ${
+              shareCopied
+                ? "bg-neutral-800 border-neutral-600 text-white"
+                : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
+            }`}
+            title="File actions"
+            aria-label="File actions"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 24 24"
+              className="h-4 w-4"
+              fill="currentColor"
+              aria-hidden="true"
             >
-              <div className="flex flex-col gap-3">
-                <div className="flex items-center gap-2">
-                    <span className="text-sm text-neutral-300 whitespace-nowrap">Resolution</span>
-                    <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const order = [4, 8, 16, 32];
-                          const idx = order.indexOf(resolution);
-                          const next = order[(idx - 1 + order.length) % order.length];
-                          handleResolutionChange(next);
-                        }}
-                        className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                      >
-                        −
-                      </button>
-                      <div className="min-w-[60px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700">
-                        {resolution === 4 ? "4th" : resolution === 8 ? "8th" : resolution === 16 ? "16th" : "32th"}
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const order = [4, 8, 16, 32];
-                          const idx = order.indexOf(resolution);
-                          const next = order[(idx + 1) % order.length];
-                          handleResolutionChange(next);
-                        }}
-                        className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                      >
-                        +
-                      </button>
-                    </div>
-                </div>
-
-                <div className="flex items-center gap-2">
-                    <span className="text-sm text-neutral-300">Bars</span>
-                    <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
-                      <button
-                        type="button"
-                        onClick={() => setBars((b) => Math.max(1, b - 1))}
-                        className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                        aria-label="Decrease bars"
-                      >
-                        −
-                      </button>
-                      <div className="min-w-[44px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700">
-                        {bars}
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => setBars((b) => Math.min(8, b + 1))}
-                        className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                        aria-label="Increase bars"
-                      >
-                        +
-                      </button>
-                    </div>
-                </div>
-
-                <div className="flex items-center gap-2">
-                    <span className="text-sm text-neutral-300 whitespace-nowrap">Time</span>
-                    <div className="flex items-center gap-1.5">
-                      <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
-                        <button
-                          type="button"
-                          onClick={() => stepTimeSigNumerator(-1)}
-                          className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                          aria-label="Decrease time signature numerator"
-                        >
-                          −
-                        </button>
-                        <div className="min-w-[36px] px-2.5 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700 tabular-nums">
-                          {Math.max(2, Math.min(15, Number(timeSig.n) || 4))}
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => stepTimeSigNumerator(1)}
-                          className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                          aria-label="Increase time signature numerator"
-                        >
-                          +
-                        </button>
-                      </div>
-                      <div className="text-sm text-neutral-400 select-none">/</div>
-                      <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
-                        <button
-                          type="button"
-                          onClick={() => stepTimeSigDenominator(-1)}
-                          className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                          aria-label="Previous time signature denominator"
-                        >
-                          −
-                        </button>
-                        <div className="min-w-[36px] px-2.5 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700 tabular-nums">
-                          {timeSig.d === 8 ? 8 : 4}
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => stepTimeSigDenominator(1)}
-                          className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                          aria-label="Next time signature denominator"
-                        >
-                          +
-                        </button>
-                      </div>
-                    </div>
-                </div>
-
-                <div className="flex items-center gap-2">
-                    <span className="text-sm text-neutral-300 whitespace-nowrap">Tuplets</span>
-                    <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
-                      <button
-                        type="button"
-                        onClick={() => stepGlobalTupletValue(-1)}
-                        className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                        aria-label="Previous global tuplet value"
-                      >
-                        −
-                      </button>
-                      <button
-                        type="button"
-                        onClick={toggleGlobalTupletOffLast}
-                        className="min-w-[64px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700 hover:bg-neutral-700/50"
-                        title="Toggle off / last tuplet"
-                      >
-                        {globalTupletValue === "mixed"
-                          ? "Mixed"
-                          : globalTupletValue == null
-                            ? "Off"
-                            : String(globalTupletValue)}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => stepGlobalTupletValue(1)}
-                        className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                        aria-label="Next global tuplet value"
-                      >
-                        +
-                      </button>
-                    </div>
-                </div>
-
-                <div className="flex items-center gap-2">
-                    <span className="text-sm text-neutral-300">Drumkit</span>
-                    <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
-                      <button
-                        type="button"
-                        onClick={() => stepPreset(-1)}
-                        className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                        aria-label="Previous preset"
-                      >
-                        −
-                      </button>
-                      <div
-                        onClick={() => setIsKitEditorOpen(true)}
-                        className="min-w-[88px] px-3 py-1 flex items-center justify-center text-sm text-white bg-neutral-800 border-l border-r border-neutral-700 cursor-pointer hover:bg-neutral-700/60"
-                        title="Open drumkit editor"
-                      >
-                        {selectedPresetLabel}
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => stepPreset(1)}
-                        className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
-                        aria-label="Next preset"
-                      >
-                        +
-                      </button>
-                    </div>
-                </div>
-
-              </div>
-            </div>
+              <path d="M18 2A3 3 0 0 0 15 5A3 3 0 0 0 15.054688 5.560547L7.939453 9.710938A3 3 0 0 0 6 9A3 3 0 0 0 3 12A3 3 0 0 0 6 15A3 3 0 0 0 7.935547 14.287109L15.054688 18.439453A3 3 0 0 0 15 19A3 3 0 0 0 18 22A3 3 0 0 0 21 19A3 3 0 0 0 18 16A3 3 0 0 0 16.0625 16.712891L8.945312 12.560547A3 3 0 0 0 9 12A3 3 0 0 0 8.945312 11.439453L16.060547 7.289062A3 3 0 0 0 18 8A3 3 0 0 0 21 5A3 3 0 0 0 18 2Z" />
+            </svg>
+          </button>
+          {authUser ? (
+            <>
+              <span
+                className={`hidden md:inline-block rounded border px-2 py-1 text-[11px] ${
+                  isAdminUser
+                    ? "border-amber-700/60 bg-amber-950/30 text-amber-200"
+                    : "border-sky-700/50 bg-sky-950/20 text-sky-200"
+                }`}
+              >
+                {isAdminUser ? "Admin" : "Signed in"}
+              </span>
+              {authUserEmail && isAdminUser ? (
+                <span
+                  className="hidden md:inline-block max-w-[170px] truncate text-xs text-neutral-500"
+                  title={authUserEmail}
+                >
+                  {authUserEmail}
+                </span>
+              ) : null}
+            </>
+          ) : null}
+          {hasSupabaseEnabled && (
+            <button
+              type="button"
+              onClick={openAuthDialog}
+              disabled={authPending}
+              className={`touch-none select-none inline-flex h-[2.125rem] w-[2.125rem] items-center justify-center rounded border ${
+                authPending
+                  ? "bg-neutral-900 border-neutral-800 text-neutral-500 cursor-not-allowed"
+                  : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
+              }`}
+              title={authPending ? "Authentication pending" : authUser ? `Open account for ${authUserLabel}` : "Sign in with email"}
+              aria-label={authPending ? "Authentication pending" : authUser ? `Open account for ${authUserLabel}` : "Sign in with email"}
+            >
+              {authPending ? "…" : <UserIcon />}
+            </button>
           )}
+        </div>
+
+        <div className="min-w-0 max-w-full">
+          {currentBeatEditorStrip}
         </div>
 
       </header>
@@ -16097,15 +17999,25 @@ useEffect(() => {
         className={`select-none ${
           isEmbedMode
             ? "mt-0"
-            : `mt-6 flex-1 ${
+            : hasDesktopSidebarColumn
+              ? `mt-6 flex-1 grid grid-cols-[15.5rem_minmax(0,1fr)] items-start gap-6 ${
+                  effectiveUseFixedDesktopFooter ? "pb-20 sm:pb-12 md:pb-16" : "pb-8"
+                }`
+              : `mt-6 flex-1 ${
                 layout === "grid-right"
-                  ? `grid grid-cols-1 xl:grid-cols-[auto_1fr] gap-6 ${useFixedDesktopFooter ? "pb-20 sm:pb-12 md:pb-16" : "pb-8"}`
+                  ? `grid grid-cols-1 xl:grid-cols-[auto_1fr] gap-6 ${effectiveUseFixedDesktopFooter ? "pb-20 sm:pb-12 md:pb-16" : "pb-8"}`
                   : layout === "notation-right"
-                    ? `grid grid-cols-1 xl:grid-cols-[1fr_auto] gap-6 ${useFixedDesktopFooter ? "pb-20 sm:pb-12 md:pb-16" : "pb-8"}`
-                    : `flex flex-col gap-6 items-start ${useFixedDesktopFooter ? "pb-20 sm:pb-12 md:pb-16" : "pb-8"}`
+                    ? `grid grid-cols-1 xl:grid-cols-[1fr_auto] gap-6 ${effectiveUseFixedDesktopFooter ? "pb-20 sm:pb-12 md:pb-16" : "pb-8"}`
+                    : `flex flex-col gap-6 items-start ${effectiveUseFixedDesktopFooter ? "pb-20 sm:pb-12 md:pb-16" : "pb-8"}`
               }`
         }`}
       >
+        {beatLibraryDockedInSidebar
+          ? dockedBeatLibrarySidebar
+          : showDesktopSettingsSidebar && !settingsSidebarCollapsed
+            ? desktopSettingsSidebar
+            : null}
+        <div className={hasDesktopSidebarColumn ? "min-w-0" : undefined}>
         {isEmbedMode ? (
           <div className="w-full" ref={setNotationExportEl}>
             <Notation
@@ -16275,11 +18187,15 @@ useEffect(() => {
             </div>
           </>
         )}
+        </div>
       </main>
 
-      <footer className={`${isEmbedMode ? "hidden" : "mt-auto pt-1"}`} data-loopui='1'>
+      <footer
+        className={`${isEmbedMode ? "hidden" : "mt-auto pt-1"}`}
+        data-loopui='1'
+      >
         <div className="flex justify-end" />
-        {!isEmbedMode && !useFixedDesktopFooter && (
+        {!isEmbedMode && !effectiveUseFixedDesktopFooter && (
           <>
           <div className="mt-6">
             <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 text-xs text-neutral-500">
@@ -16316,17 +18232,7 @@ useEffect(() => {
                   Buy me a coffee
                 </a>
               </div>
-              <div className="flex justify-end">
-                <button
-                  ref={transportMenuButtonRef}
-                  type="button"
-                  onClick={() => setIsTransportMenuOpen((v) => !v)}
-                  className="rounded border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-sm text-neutral-300 shadow-2xl hover:bg-neutral-800/60"
-                  title="Transport controls"
-                >
-                  Tempo
-                </button>
-              </div>
+              <div />
             </div>
           </div>
           <div className="relative left-1/2 mt-4 w-screen -translate-x-1/2 bg-black/90 py-4">
@@ -16342,9 +18248,9 @@ useEffect(() => {
           </>
         )}
       </footer>
-      {useFixedDesktopFooter &&
+      {effectiveUseFixedDesktopFooter &&
         createPortal(
-          <div className="fixed inset-x-0 bottom-0 z-[83] flex flex-col items-center">
+          <div ref={fixedFooterRef} className="fixed inset-x-0 bottom-0 z-[83] flex flex-col items-center">
             <div className="mb-4 w-full px-6">
               <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 text-xs text-neutral-500">
                 <div />
@@ -16380,17 +18286,7 @@ useEffect(() => {
                     Buy me a coffee
                   </a>
                 </div>
-                <div className="flex justify-end">
-                  <button
-                    ref={transportMenuButtonRef}
-                    type="button"
-                    onClick={() => setIsTransportMenuOpen((v) => !v)}
-                    className="rounded border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-sm text-neutral-300 shadow-2xl hover:bg-neutral-800/60"
-                    title="Transport controls"
-                  >
-                    Tempo
-                  </button>
-                </div>
+                <div />
               </div>
             </div>
             <div className="flex w-full items-center justify-center bg-black/90 px-6 py-3">
@@ -16407,10 +18303,11 @@ useEffect(() => {
       {!isEmbedMode &&
         createPortal(
           <>
-            {isTransportMenuOpen && (
+            {isTransportMenuOpen && transportMenuPosition && (
               <div
                 ref={transportMenuRef}
-                className="fixed bottom-16 right-4 z-[140] w-[18rem] rounded-xl border border-neutral-700 bg-neutral-900 p-3 shadow-2xl"
+                style={transportMenuPosition}
+                className="fixed z-[140] rounded-xl border border-neutral-700 bg-neutral-900 p-3 shadow-2xl"
                 onMouseDown={(e) => e.stopPropagation()}
               >
                 <div className="space-y-3">
@@ -16578,6 +18475,28 @@ useEffect(() => {
 
                   <label className="block">
                     <div className="mb-1 flex items-center justify-between gap-3">
+                      <span className="text-sm text-neutral-300">Drum volume</span>
+                      <span className="text-[11px] text-neutral-500 tabular-nums">
+                        {`${Math.round(drumVolume * 100)}%`}
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      step={1}
+                      value={Math.round(drumVolume * 100)}
+                      onChange={(e) =>
+                        setDrumVolume(
+                          Math.max(0, Math.min(1, (Number(e.target.value) || 0) / 100))
+                        )
+                      }
+                      className="w-full accent-neutral-300"
+                    />
+                  </label>
+
+                  <label className="block">
+                    <div className="mb-1 flex items-center justify-between gap-3">
                       <span className="text-sm text-neutral-300">Metronome volume</span>
                       <span className="text-[11px] text-neutral-500 tabular-nums">
                         {`${Math.round(metronomeVolume * 100)}%`}
@@ -16604,7 +18523,7 @@ useEffect(() => {
           document.body
         )}
 
-      {isArrangementOpen && (
+      {isArrangementOpen && !beatLibraryDockedInSidebar && (
         <div className="fixed inset-0 z-[88] pointer-events-none">
           <div
             ref={arrangementPanelRef}
@@ -17027,7 +18946,7 @@ useEffect(() => {
                 {!arrangementSourcesCollapsed ? (
                   arrangementSourceTab === "local" ? (
                     <div className="mt-3 flex min-h-0 flex-1 flex-col">
-                        <div ref={arrangementSourceListRef} className="max-h-[52vh] flex-1 overflow-auto pr-1">
+                        <div ref={arrangementSourceListRef} className="dg-slim-scrollbar max-h-[52vh] flex-1 overflow-auto pr-1">
                           <DndContext
                             sensors={beatLibraryOrderSensors}
                             collisionDetection={detectBeatLibraryDropCollision}
@@ -17214,7 +19133,7 @@ useEffect(() => {
                     </div>
                   ) : arrangementSourceTab === "presets" ? (
                     <div className="mt-0.5 flex min-h-0 flex-1 flex-col">
-                      <div ref={arrangementSourceListRef} className="max-h-[52vh] flex-1 overflow-auto pr-1 dg-scroll-follow-list">
+                      <div ref={arrangementSourceListRef} className="dg-slim-scrollbar max-h-[52vh] flex-1 overflow-auto pr-1 dg-scroll-follow-list">
                         <DndContext
                           sensors={beatLibraryOrderSensors}
                           collisionDetection={detectGridSettingsPresetDropCollision}
@@ -17352,7 +19271,7 @@ useEffect(() => {
                       </div>
                     </div>
                   ) : (
-                    <div className="mt-3 max-h-[52vh] overflow-auto space-y-2.5 pr-1 dg-scroll-follow-list">
+                    <div className="dg-slim-scrollbar mt-3 max-h-[52vh] overflow-auto space-y-2.5 pr-1 dg-scroll-follow-list">
                       {arrangementSourceBeats.map((beat) => {
                         const beatBpm = getBeatBpm(beat);
                         const sourceLabel = "public";
@@ -17386,7 +19305,7 @@ useEffect(() => {
                                 loadBeatIntoEditor("public", beat);
                               }
                             }}
-                            className={`rounded border px-2.5 py-2 cursor-pointer outline-none focus:outline-none focus-visible:outline-none ${
+                            className={`rounded border px-2 py-2 cursor-pointer outline-none focus:outline-none focus-visible:outline-none ${
                               isSelectedArrangementSourceBeat
                                 ? normalizedArrangementSelection
                                   ? "border-sky-500/35 bg-sky-950/10 shadow-[0_0_0_1px_rgba(14,165,233,0.14)]"
@@ -17397,7 +19316,7 @@ useEffect(() => {
                             <div className="flex items-center justify-between gap-2">
                               <div className="min-w-0">
                                 <div className="text-sm text-white truncate">{beat.name || "Untitled Beat"}</div>
-                                <div className="text-xs text-neutral-400 truncate">
+                                <div className="text-[11px] leading-tight text-neutral-400 truncate">
                                   {(() => {
                                     const beatBars = Math.max(1, Number(beat?.payload?.bars) || 1);
                                     return (beat.timeSigCategory || "4/4") +
@@ -17406,14 +19325,14 @@ useEffect(() => {
                                   })()}
                                 </div>
                               </div>
-                              <div className="flex items-center gap-1.5">
+                              <div className="flex items-center gap-1">
                                 <button
                                   type="button"
                                   onClick={(e) => {
                                     e.stopPropagation();
                                     arrangementAddBeat("public", beat.id);
                                   }}
-                                  className="px-2 py-1 rounded border border-neutral-700 text-xs text-white bg-neutral-800 hover:bg-neutral-700/60"
+                                  className="px-1.5 py-1 rounded border border-neutral-700 text-[11px] text-white bg-neutral-800 hover:bg-neutral-700/60"
                                 >
                                   Add
                                 </button>
@@ -17694,7 +19613,7 @@ useEffect(() => {
                 {arrangementLibraryTab === "public" && (
                 <>
                 <div
-                  className="mt-3 max-h-[52vh] overflow-auto pr-1"
+                  className="dg-slim-scrollbar mt-3 max-h-[52vh] overflow-auto pr-1"
                   onMouseDown={(e) => {
                     if (e.target === e.currentTarget) clearArrangementSelection();
                   }}
@@ -17821,7 +19740,7 @@ useEffect(() => {
                 {arrangementLibraryTab === "local" && (
                 <div
                   ref={arrangementListRef}
-                  className="mt-3 max-h-[52vh] overflow-auto pr-1"
+                  className="dg-slim-scrollbar mt-3 max-h-[52vh] overflow-auto pr-1"
                   onMouseDown={(e) => {
                     if (e.target === e.currentTarget) clearArrangementSelection();
                   }}
@@ -20570,6 +22489,28 @@ useEffect(() => {
                     <div className="mt-2 text-xs text-neutral-500">
                       Sets the default loop repeat mode for new selections.
                     </div>
+                    <div className="my-3 border-t border-neutral-800" />
+                    <div className="flex flex-wrap items-center gap-3">
+                      <span className="text-sm text-neutral-300">Settings sidebar</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSettingsSidebarDefaultOpen((prev) => {
+                            const next = !prev;
+                            setSettingsSidebarCollapsed(!next);
+                            return next;
+                          });
+                        }}
+                        className="px-3 py-1 rounded border border-neutral-700 text-sm text-white bg-neutral-800 hover:bg-neutral-700/60"
+                        title="Choose whether the desktop settings sidebar starts open by default"
+                      >
+                        {settingsSidebarDefaultOpen ? "Open" : "Closed"}
+                      </button>
+                    </div>
+                    <div className="mt-2 text-xs text-neutral-500">
+                      Sets whether the desktop settings sidebar starts open by default.
+                    </div>
+                    <div className="my-3 border-t border-neutral-800" />
                     <div className="mt-4 flex items-center gap-3">
                       <span className="text-sm text-neutral-300">Keyboard shortcuts</span>
                       <button
@@ -20667,13 +22608,13 @@ useEffect(() => {
                       <div className="flex min-w-[180px] items-center gap-2 px-0 py-0">
                         <input
                           type="range"
-                          min={130}
+                          min={300}
                           max={800}
                           step={10}
                           value={gridSelectionHoldDelayMs}
                           onChange={(e) =>
                             setGridSelectionHoldDelayMs(
-                              Math.max(130, Math.min(800, Math.round(Number(e.target.value) || 130)))
+                              Math.max(300, Math.min(800, Math.round(Number(e.target.value) || 300)))
                             )
                           }
                           className="w-28 accent-neutral-700 opacity-80"
@@ -20685,7 +22626,7 @@ useEffect(() => {
                       </div>
                     </div>
                     <div className="mt-2 text-xs text-neutral-500">
-                      Controls how long you need to hold before grid selection mode arms. Range: 130ms to 800ms.
+                      Controls how long you need to hold before grid selection mode arms. Range: 300ms to 800ms.
                     </div>
                     <div className="my-3 border-t border-neutral-800" />
                     <div className="flex items-center justify-between gap-2">
