@@ -254,8 +254,8 @@ function LibraryIcon() {
       aria-hidden="true"
       className="block h-3.5 w-3.5 bg-current"
       style={{
-        WebkitMaskImage: 'url("/open-book.png")',
-        maskImage: 'url("/open-book.png")',
+        WebkitMaskImage: 'url("/menu-list-square.png")',
+        maskImage: 'url("/menu-list-square.png")',
         WebkitMaskSize: "contain",
         maskSize: "contain",
         WebkitMaskRepeat: "no-repeat",
@@ -715,6 +715,7 @@ const ARRANGEMENT_ADAPTIVE_COMP_ENABLED_STORAGE_KEY = "drum-grid-arrangement-ada
 const PLAYBACK_RATE_STORAGE_KEY = "drum-grid-playback-rate-v1";
 const METRONOME_ENABLED_STORAGE_KEY = "drum-grid-metronome-enabled-v1";
 const METRONOME_VOLUME_STORAGE_KEY = "drum-grid-metronome-volume-v1";
+const DEFAULT_METRONOME_VOLUME_STORAGE_KEY = "drum-grid-default-metronome-volume-v1";
 const METRONOME_COUNT_IN_ENABLED_STORAGE_KEY = "drum-grid-metronome-count-in-enabled-v1";
 const MIDI_IMPORT_SNARE_GHOST_MAX_STORAGE_KEY = "drum-grid-midi-import-snare-ghost-max-v1";
 const MIDI_IMPORT_TOM_GHOST_MAX_STORAGE_KEY = "drum-grid-midi-import-tom-ghost-max-v1";
@@ -760,7 +761,7 @@ const PERSONAL_LIBRARY_STATE_SHARE_LINK_KIND = "arrangement";
 const BEAT_LIBRARY_SELECTED_CONTAINER_STORAGE_KEY = "drum-grid-beat-library-selected-container-v1";
 const BEAT_LIBRARY_ROOT_COLLAPSED_STORAGE_KEY = "drum-grid-beat-library-root-collapsed-v1";
 const GRID_SETTINGS_PRESET_LIBRARY_STORAGE_KEY = "drum-grid-grid-settings-presets-v1";
-const APP_VERSION = "0.1.151";
+const APP_VERSION = "0.1.197";
 const BEAT_CATEGORY_OPTIONS = [
   "Groove",
   "Fill",
@@ -2922,6 +2923,13 @@ export default function App() {
     () => kitInstrumentIds.map((id) => INSTRUMENT_BY_ID[id]).filter(Boolean),
     [kitInstrumentIds]
   );
+  const currentGridLabelGutterWidth = React.useMemo(() => {
+    const longestInstrumentLabelLength = Math.max(
+      0,
+      ...instruments.map((inst) => String(inst?.label || "").length)
+    );
+    return `calc(${longestInstrumentLabelLength}ch + 0.75rem)`;
+  }, [instruments]);
   const [isKitEditorOpen, setIsKitEditorOpen] = useState(false);
   const [pendingRemoval, setPendingRemoval] = useState(null); // { instId, moveTargetId }
   const [pendingPresetChange, setPendingPresetChange] = useState(null); // { presetName, targetIds, removedWithNotes }
@@ -3326,12 +3334,17 @@ export default function App() {
   const [arrangementSourceTab, setArrangementSourceTab] = useState("local"); // presets | local | public
   const [arrangementSourcesCollapsed, setArrangementSourcesCollapsed] = useState(false);
   const [arrangementDetailsCollapsed, setArrangementDetailsCollapsed] = useState(true);
+  const [keepBeatLibrarySidebarOpen, setKeepBeatLibrarySidebarOpen] = useState(false);
+  const sharedArrangementSourcePanelWidthRem = 16.25;
+  const sharedArrangementDetailsPanelWidthRem = 27;
+  const sharedArrangementPanelWidthRem =
+    sharedArrangementSourcePanelWidthRem + sharedArrangementDetailsPanelWidthRem;
   const arrangementPanelWidth =
-    arrangementDetailsCollapsed && !arrangementSourcesCollapsed
+  arrangementDetailsCollapsed && !arrangementSourcesCollapsed
       ? 368 // max-w-[23rem]
-      : arrangementSourcesCollapsed || arrangementDetailsCollapsed
+  : arrangementSourcesCollapsed || arrangementDetailsCollapsed
         ? 432 // max-w-[27rem]
-        : 800; // max-w-[50rem]
+        : sharedArrangementPanelWidthRem * 16;
   const [arrangementItems, setArrangementItems] = useState(() => {
     try {
       const raw = window.localStorage.getItem(SONG_ARRANGEMENT_STORAGE_KEY);
@@ -3488,8 +3501,10 @@ export default function App() {
   const [arrangementLibraryMenuOpen, setArrangementLibraryMenuOpen] = useState(false);
   const [isBeatLibraryActionsMenuOpen, setIsBeatLibraryActionsMenuOpen] = useState(false);
   const [isArrangementActionsMenuOpen, setIsArrangementActionsMenuOpen] = useState(false);
+  const [libraryFiltersAnchor, setLibraryFiltersAnchor] = useState("floating");
   const libraryFiltersRef = useRef(null);
-  const libraryFiltersButtonRef = useRef(null);
+  const floatingLibraryFiltersButtonRef = useRef(null);
+  const dockedLibraryFiltersButtonRef = useRef(null);
   const arrangementLibraryMenuRef = useRef(null);
   const arrangementLibraryMenuButtonRef = useRef(null);
   const beatLibraryActionsMenuRef = useRef(null);
@@ -3651,19 +3666,27 @@ export default function App() {
       return undefined;
     }
     const updatePosition = () => {
-      const button = libraryFiltersButtonRef.current;
+      const button =
+        libraryFiltersAnchor === "docked"
+          ? dockedLibraryFiltersButtonRef.current
+          : floatingLibraryFiltersButtonRef.current;
       if (!(button instanceof HTMLElement)) return;
       const rect = button.getBoundingClientRect();
       const gap = 8;
       const estimatedHeight = 220;
       const shouldOpenUp = window.innerHeight - rect.bottom < estimatedHeight && rect.top > estimatedHeight / 2;
-      setLibraryFiltersMenuStyle({
+      const nextStyle = {
         position: "fixed",
         zIndex: 120,
-        right: Math.max(8, window.innerWidth - rect.right),
         top: shouldOpenUp ? "auto" : rect.bottom + gap,
         bottom: shouldOpenUp ? Math.max(8, window.innerHeight - rect.top + gap) : "auto",
-      });
+      };
+      if (libraryFiltersAnchor === "docked") {
+        nextStyle.left = Math.max(8, Math.min(rect.right - 228, window.innerWidth - 256 - 8));
+      } else {
+        nextStyle.right = Math.max(8, window.innerWidth - rect.right);
+      }
+      setLibraryFiltersMenuStyle(nextStyle);
     };
     updatePosition();
     window.addEventListener("resize", updatePosition);
@@ -3672,7 +3695,7 @@ export default function App() {
       window.removeEventListener("resize", updatePosition);
       window.removeEventListener("scroll", updatePosition, true);
     };
-  }, [libraryFiltersOpen]);
+  }, [libraryFiltersAnchor, libraryFiltersOpen]);
   useEffect(() => {
     if (!isBeatLibraryActionsMenuOpen) return undefined;
     const handlePointerDown = (event) => {
@@ -3792,7 +3815,9 @@ export default function App() {
   const [metronomeVolume, setMetronomeVolume] = useState(() => {
     try {
       const raw = Number(window.localStorage.getItem(METRONOME_VOLUME_STORAGE_KEY));
-      return Number.isFinite(raw) ? Math.max(0, Math.min(1, raw)) : 0.5;
+      if (Number.isFinite(raw)) return Math.max(0, Math.min(1, raw));
+      const defaultRaw = Number(window.localStorage.getItem(DEFAULT_METRONOME_VOLUME_STORAGE_KEY));
+      return Number.isFinite(defaultRaw) ? Math.max(0, Math.min(1, defaultRaw)) : 0.5;
     } catch (_) {
       return 0.5;
     }
@@ -6167,6 +6192,14 @@ useEffect(() => {
       return "off";
     }
   });
+  const [defaultMetronomeVolume, setDefaultMetronomeVolume] = useState(() => {
+    try {
+      const raw = Number(window.localStorage.getItem(DEFAULT_METRONOME_VOLUME_STORAGE_KEY));
+      return Number.isFinite(raw) ? Math.max(0, Math.min(1, raw)) : 0.5;
+    } catch (_) {
+      return 0.5;
+    }
+  });
   const [gridSelectionHoldDelayMs, setGridSelectionHoldDelayMs] = useState(() => {
     try {
       const raw = String(window.localStorage.getItem(GRID_SELECTION_HOLD_SPEED_STORAGE_KEY) || "").toLowerCase();
@@ -6210,6 +6243,14 @@ useEffect(() => {
       window.localStorage.setItem(DEFAULT_LOOP_REPEATS_STORAGE_KEY, defaultLoopRepeats);
     } catch (_) {}
   }, [defaultLoopRepeats]);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        DEFAULT_METRONOME_VOLUME_STORAGE_KEY,
+        String(defaultMetronomeVolume)
+      );
+    } catch (_) {}
+  }, [defaultMetronomeVolume]);
   useEffect(() => {
     try {
       window.localStorage.setItem(GRID_SELECTION_HOLD_SPEED_STORAGE_KEY, String(gridSelectionHoldDelayMs));
@@ -13199,6 +13240,30 @@ useEffect(() => {
     isLoadedLocalBeatDirty &&
     !isLoadedLocalBeatNameChanged &&
     isLoadedLocalBeatCoreDirty;
+  const getUniqueBeatName = React.useCallback(
+    (rawName, options = {}) => {
+      const fallbackName = `Beat ${localBeats.length + 1}`;
+      const baseName = String(rawName || "").trim() || fallbackName;
+      const excludeId = String(options.excludeId || "").trim();
+      const existingNames = new Set(
+        localBeats
+          .filter((beat) => !excludeId || String(beat?.id || "") !== excludeId)
+          .map((beat) => String(beat?.name || "").trim().toLowerCase())
+          .filter(Boolean)
+      );
+      if (!existingNames.has(baseName.toLowerCase())) {
+        return baseName;
+      }
+      let suffix = 2;
+      let nextName = `${baseName} ${suffix}`;
+      while (existingNames.has(nextName.toLowerCase())) {
+        suffix += 1;
+        nextName = `${baseName} ${suffix}`;
+      }
+      return nextName;
+    },
+    [localBeats]
+  );
 
   const applyImportedBeatPayload = React.useCallback(
     (payload, sourceKey) => {
@@ -13501,8 +13566,7 @@ useEffect(() => {
     applyImportedBeatPayload(effectiveSharedState, shareSourceKey);
   }, [requestedSharedState, resolvedSharedState, routeOptions.shared, routeOptions.shareId, applyImportedBeatPayload, applyImportedArrangementPayload]);
   const saveCurrentBeatLocal = React.useCallback(async () => {
-    const fallbackName = `Beat ${localBeats.length + 1}`;
-    const name = beatNameDraft.trim() || fallbackName;
+    const name = getUniqueBeatName(beatNameDraft);
     const now = new Date().toISOString();
     const selectedParentId = selectedBeatLibraryContainerId !== "all" ? selectedBeatLibraryContainerId : null;
     const nextManualOrder =
@@ -13579,7 +13643,8 @@ useEffect(() => {
     timeSig,
     bpm,
     buildCurrentBeatPayload,
-    localBeats.length,
+    localBeats,
+    getUniqueBeatName,
     setLocalBeatsWithUndo,
   ]);
   const updateCurrentLoadedBeatLocal = React.useCallback(async () => {
@@ -13771,11 +13836,28 @@ useEffect(() => {
     showDesktopSettingsSidebar &&
     !isMobileFloatingPanels &&
     isArrangementOpen &&
+    ((!arrangementSourcesCollapsed && arrangementDetailsCollapsed) || keepBeatLibrarySidebarOpen);
+  const hideFloatingArrangementWindow =
+    beatLibraryDockedInSidebar &&
     !arrangementSourcesCollapsed &&
     arrangementDetailsCollapsed;
   const hasDesktopSidebarColumn =
     showDesktopSettingsSidebar &&
     (beatLibraryDockedInSidebar || !settingsSidebarCollapsed);
+  const currentBeatEditorStripOffset = React.useMemo(
+    () => `calc((${currentGridLabelGutterWidth}) * 0.6667)`,
+    [currentGridLabelGutterWidth]
+  );
+  const currentBeatEditorStripPaddingLeft = React.useMemo(() => {
+    if (hasDesktopSidebarColumn) {
+      return `calc(15.5rem + 1.5rem + (${currentBeatEditorStripOffset}))`;
+    }
+    return currentBeatEditorStripOffset;
+  }, [currentBeatEditorStripOffset, hasDesktopSidebarColumn]);
+  const currentBeatEditorStripMainPaddingLeft = React.useMemo(
+    () => `calc((${currentBeatEditorStripPaddingLeft}) - 4.5rem)`,
+    [currentBeatEditorStripPaddingLeft]
+  );
   const isBeatLibraryPanelActive =
     isArrangementOpen && !arrangementSourcesCollapsed && arrangementDetailsCollapsed;
   const canRenameCurrentBeat = Boolean(loadedLocalBeatId);
@@ -13851,7 +13933,11 @@ useEffect(() => {
   }, [loadedLocalBeatId, updateCurrentLoadedBeatLocal]);
   const toggleBeatLibraryPanel = React.useCallback(() => {
     setActiveTab("none");
+    if (showDesktopSettingsSidebar) {
+      setSettingsSidebarCollapsed(true);
+    }
     if (!isArrangementOpen) {
+      setKeepBeatLibrarySidebarOpen(true);
       setArrangementSourcesCollapsed(false);
       setArrangementDetailsCollapsed(true);
       setArrangementSourceTab("local");
@@ -13859,9 +13945,14 @@ useEffect(() => {
       return;
     }
     if (!arrangementSourcesCollapsed && arrangementDetailsCollapsed) {
+      setKeepBeatLibrarySidebarOpen(false);
       setIsArrangementOpen(false);
+      if (showDesktopSettingsSidebar) {
+        setSettingsSidebarCollapsed(true);
+      }
       return;
     }
+    setKeepBeatLibrarySidebarOpen(true);
     setArrangementSourcesCollapsed(false);
     setArrangementDetailsCollapsed(true);
     setArrangementSourceTab("local");
@@ -13870,7 +13961,13 @@ useEffect(() => {
     arrangementDetailsCollapsed,
     arrangementSourcesCollapsed,
     isArrangementOpen,
+    showDesktopSettingsSidebar,
   ]);
+  useEffect(() => {
+    if (!isArrangementOpen) {
+      setKeepBeatLibrarySidebarOpen(false);
+    }
+  }, [isArrangementOpen]);
   const settingsToolbarButton = (
           <div className="relative flex items-center gap-2">
             <button
@@ -13883,6 +13980,7 @@ useEffect(() => {
                 }
                 if (showDesktopSettingsSidebar) {
                   if (beatLibraryDockedInSidebar) {
+                    setKeepBeatLibrarySidebarOpen(false);
                     setIsArrangementOpen(false);
                     setSettingsSidebarCollapsed(false);
                     return;
@@ -13892,10 +13990,11 @@ useEffect(() => {
                 }
                 setActiveTab((t) => (t === "timing" ? "none" : "timing"));
               }}
-              className={`touch-none select-none inline-flex h-[2.125rem] w-[2.125rem] items-center justify-center rounded border text-sm outline-none focus:outline-none focus-visible:outline-none ${
-                !showDesktopSettingsSidebar && activeTab === "timing"
-                  ? "bg-neutral-800 border-neutral-600 text-white"
-                  : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
+              className={`touch-none select-none inline-flex h-7 w-7 items-center justify-center rounded text-sm transition-colors outline-none focus:outline-none focus-visible:outline-none ${
+                (!showDesktopSettingsSidebar && activeTab === "timing") ||
+                (showDesktopSettingsSidebar && !settingsSidebarCollapsed && !beatLibraryDockedInSidebar)
+                  ? "bg-neutral-900/70 text-neutral-200"
+                  : "text-neutral-500 hover:bg-neutral-900/70 hover:text-neutral-200"
               }`}
               title={
                 showDesktopSettingsSidebar
@@ -14504,8 +14603,8 @@ useEffect(() => {
             )}
           </div>
   );
-  const currentBeatEditorStrip = (
-    <div className="inline-flex max-w-full items-center gap-1.5 bg-transparent px-0 py-0.5 align-top">
+  const currentBeatEditorStripLeadingControls = (
+    <div className="inline-flex shrink-0 items-center gap-1.5 bg-transparent px-0 py-0.5 align-top">
       {settingsToolbarButton}
       <button
         type="button"
@@ -14520,34 +14619,40 @@ useEffect(() => {
       >
         <LibraryIcon />
       </button>
-      <button
-        type="button"
-        onClick={() => navigateCurrentBeatInLibrary(-1)}
-        disabled={!canNavigateCurrentBeatBackward}
-        className={`inline-flex h-7 w-7 items-center justify-center rounded text-sm transition-colors ${
-          canNavigateCurrentBeatBackward
-            ? "text-neutral-500 hover:bg-neutral-900/70 hover:text-neutral-200"
-            : "text-neutral-700 opacity-50 cursor-not-allowed"
-        }`}
-        title="Previous beat in current library view"
-        aria-label="Previous beat"
-      >
-        ←
-      </button>
-      <button
-        type="button"
-        onClick={() => navigateCurrentBeatInLibrary(1)}
-        disabled={!canNavigateCurrentBeatForward}
-        className={`inline-flex h-7 w-7 items-center justify-center rounded text-sm transition-colors ${
-          canNavigateCurrentBeatForward
-            ? "text-neutral-500 hover:bg-neutral-900/70 hover:text-neutral-200"
-            : "text-neutral-700 opacity-50 cursor-not-allowed"
-        }`}
-        title="Next beat in current library view"
-        aria-label="Next beat"
-      >
-        →
-      </button>
+    </div>
+  );
+  const currentBeatEditorStripMainControls = (
+    <div className="inline-flex max-w-full items-center gap-1.5 bg-transparent px-0 py-0.5 align-top">
+      <div className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap">
+        <button
+          type="button"
+          onClick={() => navigateCurrentBeatInLibrary(-1)}
+          disabled={!canNavigateCurrentBeatBackward}
+          className={`inline-flex h-7 w-7 items-center justify-center rounded text-sm transition-colors ${
+            canNavigateCurrentBeatBackward
+              ? "text-neutral-500 hover:bg-neutral-900/70 hover:text-neutral-200"
+              : "text-neutral-700 opacity-50 cursor-not-allowed"
+          }`}
+          title="Previous beat in current library view"
+          aria-label="Previous beat"
+        >
+          ←
+        </button>
+        <button
+          type="button"
+          onClick={() => navigateCurrentBeatInLibrary(1)}
+          disabled={!canNavigateCurrentBeatForward}
+          className={`inline-flex h-7 w-7 items-center justify-center rounded text-sm transition-colors ${
+            canNavigateCurrentBeatForward
+              ? "text-neutral-500 hover:bg-neutral-900/70 hover:text-neutral-200"
+              : "text-neutral-700 opacity-50 cursor-not-allowed"
+          }`}
+          title="Next beat in current library view"
+          aria-label="Next beat"
+        >
+          →
+        </button>
+      </div>
       <div className="min-w-0 flex items-center text-sm">
         <div
           className="min-w-0 max-w-[16rem]"
@@ -14608,14 +14713,6 @@ useEffect(() => {
           )}
         </div>
       </div>
-      <button
-        type="button"
-        onClick={saveCurrentBeatLocal}
-        className="rounded px-1.5 py-0.5 text-sm text-neutral-500 transition-colors hover:text-neutral-200"
-        title="Save current beat as new"
-      >
-        Save as
-      </button>
     </div>
   );
   const updateCurrentLoadedBeatNotationSelectionOnly = React.useCallback(async () => {
@@ -16292,7 +16389,7 @@ useEffect(() => {
   );
   const dockedBeatLibrarySidebar = beatLibraryDockedInSidebar ? (
     <aside
-      className="sticky top-6 z-20 self-start w-[15.5rem] shrink-0 overflow-visible rounded-xl border border-neutral-700 bg-neutral-900 p-4"
+      className="sticky top-0 -mt-6 z-20 self-start w-[15.5rem] shrink-0 overflow-visible rounded-xl border border-neutral-800 bg-neutral-900 p-4"
       data-loopui="1"
     >
       <div className="flex h-full flex-col">
@@ -16402,13 +16499,16 @@ useEffect(() => {
           <div className="ml-auto flex items-center gap-2">
             <div className="relative">
               <button
-                ref={libraryFiltersButtonRef}
+                ref={dockedLibraryFiltersButtonRef}
                 type="button"
-                onClick={() => setLibraryFiltersOpen((v) => !v)}
+                onClick={() => {
+                  setLibraryFiltersAnchor("docked");
+                  setLibraryFiltersOpen((v) => !v);
+                }}
                 className={`inline-flex h-[1.625rem] items-center justify-center px-1.5 rounded border text-xs leading-none ${
                   libraryFiltersOpen
                     ? "border-neutral-700 text-white bg-neutral-800"
-                    : "border-neutral-800 text-neutral-400 bg-neutral-900/60"
+                  : "border-neutral-800 text-neutral-400 bg-neutral-900/60"
                 }`}
                 title={libraryFiltersOpen ? "Hide beat filters" : "Show beat filters"}
               >
@@ -16687,7 +16787,7 @@ useEffect(() => {
                   }}
                   className="flex h-7 flex-1 items-center justify-center rounded border border-neutral-800 bg-neutral-900/40 px-2 text-sm text-neutral-400 hover:bg-neutral-800/60"
                 >
-                  + Folder
+                    Folder
                 </button>
                 <button
                   type="button"
@@ -17051,11 +17151,13 @@ useEffect(() => {
 
   const desktopSettingsSidebar = showDesktopSettingsSidebar && !settingsSidebarCollapsed ? (
     <aside
-      className="sticky top-6 z-20 self-start w-[15.5rem] shrink-0 overflow-visible rounded-xl border border-neutral-700 bg-neutral-900 p-4"
+      className="sticky top-0 -mt-6 z-20 self-start w-[15.5rem] shrink-0 overflow-visible rounded-xl border border-neutral-800 bg-neutral-900 p-4"
       data-loopui="1"
     >
       <div className="mb-4 flex items-center justify-between gap-2">
-        <div className="text-sm text-neutral-200">Settings</div>
+        <div className="text-neutral-300">
+          <SettingsIcon />
+        </div>
         <button
           type="button"
           onClick={() => setSettingsSidebarCollapsed(true)}
@@ -17801,8 +17903,8 @@ useEffect(() => {
             </button>
           </div>
         )}
-        <div className="flex flex-wrap items-center gap-2">
-          <h1 className="mr-4 text-lg font-semibold">Drum Grid → Notation</h1>
+        <div className="-mx-6 -mt-6 flex flex-wrap items-center gap-2 bg-black px-6 py-3">
+          <h1 className="mr-4 text-lg font-semibold text-neutral-300">Drum Grid → Notation</h1>
           <button
             onClick={() => {
               if (arrangementHeaderUsesArrangementPlayback) {
@@ -17816,8 +17918,8 @@ useEffect(() => {
               arrangementHeaderUsesArrangementPlayback
                 ? "border-sky-500/70 text-sky-100 bg-sky-900/30 shadow-[0_0_0_1px_rgba(14,165,233,0.35)] hover:bg-sky-900/40"
                 : arrangementHeaderPlaybackActive
-                  ? "bg-neutral-800 border-neutral-600 text-white"
-                  : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
+                  ? "bg-neutral-950 border-neutral-800 text-white"
+                  : "bg-black border-neutral-900 text-neutral-400 hover:bg-neutral-950/80 hover:text-neutral-300"
             }`}
             title={arrangementHeaderPlaybackActive ? "Stop playback" : "Start playback"}
             aria-label={arrangementHeaderPlaybackActive ? "Stop playback" : "Start playback"}
@@ -17832,17 +17934,50 @@ useEffect(() => {
               if (performance.now() < bpmButtonScrubSuppressUntilRef.current) return;
               setIsTransportMenuOpen((v) => !v);
             }}
-            className="touch-none select-none whitespace-nowrap rounded border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-sm text-neutral-400 outline-none hover:bg-neutral-800/60 hover:text-neutral-300 focus:outline-none focus-visible:outline-none cursor-ns-resize"
+            className="touch-none select-none whitespace-nowrap rounded border border-neutral-900 bg-black px-3 py-1.5 text-sm text-neutral-400 outline-none hover:bg-neutral-950/80 hover:text-neutral-300 focus:outline-none focus-visible:outline-none cursor-ns-resize"
             title="Open tempo controls or drag up/down to change BPM"
             aria-label={`Open tempo controls or drag to change BPM (${bpm} BPM)`}
           >
             {`${bpm} BPM`}
           </button>
-          <div className="relative">
+          <div className="min-w-4 flex-1" />
+          <div className="inline-flex shrink-0 items-center gap-2 whitespace-nowrap">
+            <button
+              type="button"
+              onClick={handleTopUndo}
+              disabled={!canUndoTop}
+              className={`touch-none select-none inline-flex h-[2.125rem] w-[2.125rem] items-center justify-center rounded border text-sm bg-black border-neutral-900 text-neutral-400 hover:bg-neutral-950/80 hover:text-neutral-300 ${
+                !canUndoTop ? "opacity-40 cursor-not-allowed" : ""
+              }`}
+              title={isLibraryHistoryActive ? "Undo library change" : "Undo (grid only)"}
+            >
+              ←
+            </button>
+            <button
+              type="button"
+              onClick={handleTopRedo}
+              disabled={!canRedoTop}
+              className={`touch-none select-none inline-flex h-[2.125rem] w-[2.125rem] items-center justify-center rounded border text-sm bg-black border-neutral-900 text-neutral-400 hover:bg-neutral-950/80 hover:text-neutral-300 ${
+                !canRedoTop ? "opacity-40 cursor-not-allowed" : ""
+              }`}
+              title={isLibraryHistoryActive ? "Redo library change" : "Redo (grid only)"}
+            >
+              →
+            </button>
+          </div>
+          {showDesktopSettingsSidebar ? (
             <button
               type="button"
               onClick={(e) => {
                 setActiveTab("none");
+                if (beatLibraryDockedInSidebar) {
+                  setKeepBeatLibrarySidebarOpen(true);
+                  setArrangementSourcesCollapsed(true);
+                  setArrangementDetailsCollapsed(false);
+                  setArrangementSourceTab("local");
+                  setIsArrangementOpen(true);
+                  return;
+                }
                 if (isMobileFloatingPanels) {
                   if (!isArrangementOpen) {
                     setArrangementSourcesCollapsed(false);
@@ -17892,48 +18027,26 @@ useEffect(() => {
                 setArrangementDetailsCollapsed(false);
                 setArrangementSourceTab("local");
               }}
-              className={`touch-none select-none px-3 py-1.5 rounded border text-sm outline-none focus:outline-none focus-visible:outline-none ${
+              className={`touch-none select-none inline-flex h-[2.125rem] w-[2.125rem] items-center justify-center rounded border text-sm ${
                 !arrangementSourcesCollapsed && !arrangementDetailsCollapsed && isArrangementOpen
                   ? "bg-neutral-800 border-neutral-600 text-white"
-                  : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
+                : "bg-black border-neutral-900 text-neutral-400 hover:bg-neutral-950/80 hover:text-neutral-300"
               }`}
               title="Open library"
+              aria-label="Open library"
             >
-              Library
+              <LibraryIcon />
             </button>
-          </div>
-          <div className="min-w-4 flex-1" />
-          <button
-            type="button"
-            onClick={handleTopUndo}
-            disabled={!canUndoTop}
-            className={`touch-none select-none inline-flex h-[2.125rem] w-[2.125rem] items-center justify-center rounded border text-sm bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60 ${
-              !canUndoTop ? "opacity-40 cursor-not-allowed" : ""
-            }`}
-            title={isLibraryHistoryActive ? "Undo library change" : "Undo (grid only)"}
-          >
-            ←
-          </button>
-          <button
-            type="button"
-            onClick={handleTopRedo}
-            disabled={!canRedoTop}
-            className={`touch-none select-none inline-flex h-[2.125rem] w-[2.125rem] items-center justify-center rounded border text-sm bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60 ${
-              !canRedoTop ? "opacity-40 cursor-not-allowed" : ""
-            }`}
-            title={isLibraryHistoryActive ? "Redo library change" : "Redo (grid only)"}
-          >
-            →
-          </button>
+          ) : null}
           <button
             ref={fileMenuButtonRef}
             type="button"
             onClick={() => setIsShareActionsDialogOpen((v) => !v)}
-            className={`touch-none select-none inline-flex h-[2.125rem] w-[2.125rem] items-center justify-center rounded border text-sm ${
-              shareCopied
-                ? "bg-neutral-800 border-neutral-600 text-white"
-                : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
-            }`}
+              className={`touch-none select-none inline-flex h-[2.125rem] w-[2.125rem] items-center justify-center rounded border text-sm ${
+                shareCopied
+                  ? "bg-neutral-800 border-neutral-600 text-white"
+                  : "bg-black border-neutral-900 text-neutral-400 hover:bg-neutral-950/80 hover:text-neutral-300"
+              }`}
             title="File actions"
             aria-label="File actions"
           >
@@ -17975,8 +18088,8 @@ useEffect(() => {
               disabled={authPending}
               className={`touch-none select-none inline-flex h-[2.125rem] w-[2.125rem] items-center justify-center rounded border ${
                 authPending
-                  ? "bg-neutral-900 border-neutral-800 text-neutral-500 cursor-not-allowed"
-                  : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
+                  ? "bg-black border-neutral-900 text-neutral-500 cursor-not-allowed"
+                  : "bg-black border-neutral-900 text-neutral-400 hover:bg-neutral-950/80 hover:text-neutral-300"
               }`}
               title={authPending ? "Authentication pending" : authUser ? `Open account for ${authUserLabel}` : "Sign in with email"}
               aria-label={authPending ? "Authentication pending" : authUser ? `Open account for ${authUserLabel}` : "Sign in with email"}
@@ -17986,8 +18099,13 @@ useEffect(() => {
           )}
         </div>
 
-        <div className="min-w-0 max-w-full">
-          {currentBeatEditorStrip}
+        <div className="flex max-w-full items-center gap-4">
+          <div className="-ml-2 -mt-2 shrink-0">
+            {currentBeatEditorStripLeadingControls}
+          </div>
+          <div className="min-w-0 max-w-full" style={{ paddingLeft: currentBeatEditorStripMainPaddingLeft }}>
+            {currentBeatEditorStripMainControls}
+          </div>
         </div>
 
       </header>
@@ -18235,7 +18353,7 @@ useEffect(() => {
               <div />
             </div>
           </div>
-          <div className="relative left-1/2 mt-4 w-screen -translate-x-1/2 bg-black/90 py-4">
+          <div className="relative left-1/2 mt-4 w-screen -translate-x-1/2 bg-black py-4">
             <div className="flex items-center justify-center px-4">
               <img
                 src="/arnehertstein-logo-text-white.png"
@@ -18289,7 +18407,7 @@ useEffect(() => {
                 <div />
               </div>
             </div>
-            <div className="flex w-full items-center justify-center bg-black/90 px-6 py-3">
+            <div className="flex w-full items-center justify-center bg-black px-6 py-3">
               <img
                 src="/arnehertstein-logo-text-white.png"
                 alt="Arne Hertstein"
@@ -18523,7 +18641,7 @@ useEffect(() => {
           document.body
         )}
 
-      {isArrangementOpen && !beatLibraryDockedInSidebar && (
+      {isArrangementOpen && !hideFloatingArrangementWindow && (
         <div className="fixed inset-0 z-[88] pointer-events-none">
           <div
             ref={arrangementPanelRef}
@@ -18534,7 +18652,7 @@ useEffect(() => {
                   ? "w-full max-w-[23rem]"
                   : arrangementSourcesCollapsed || arrangementDetailsCollapsed
                     ? "w-full max-w-[27rem]"
-                    : "w-[50rem] max-w-none min-w-[50rem]"
+                    : "max-w-none"
             } max-h-[94vh] overflow-auto pointer-events-auto ${
               !arrangementSourcesCollapsed && !arrangementDetailsCollapsed
                 ? "rounded-xl border border-neutral-700 bg-neutral-900 p-0 shadow-2xl overflow-hidden"
@@ -18545,13 +18663,30 @@ useEffect(() => {
               left: isMobileFloatingPanels ? 8 : arrangementPos.x,
               top: isMobileFloatingPanels ? 8 : arrangementPos.y,
               maxHeight: isMobileFloatingPanels ? "calc(100vh - 16px)" : undefined,
+              width:
+                !isMobileFloatingPanels && !arrangementSourcesCollapsed && !arrangementDetailsCollapsed
+                  ? `${sharedArrangementPanelWidthRem}rem`
+                  : undefined,
+              minWidth:
+                !isMobileFloatingPanels && !arrangementSourcesCollapsed && !arrangementDetailsCollapsed
+                  ? `${sharedArrangementPanelWidthRem}rem`
+                  : undefined,
             }}
             onMouseDown={(e) => {
               if (isMobileFloatingPanels) return;
               beginFloatingPanelDrag(e, arrangementPanelRef, arrangementDragRef);
             }}
           >
-            <div className={`grid ${!arrangementSourcesCollapsed && !arrangementDetailsCollapsed ? "grid-cols-[23rem_27rem]" : "grid-cols-1"} gap-0`}>
+            <div
+              className={`grid ${!arrangementSourcesCollapsed && !arrangementDetailsCollapsed ? "grid-cols-2" : "grid-cols-1"} gap-0`}
+              style={
+                !arrangementSourcesCollapsed && !arrangementDetailsCollapsed
+                  ? {
+                      gridTemplateColumns: `${sharedArrangementSourcePanelWidthRem}rem ${sharedArrangementDetailsPanelWidthRem}rem`,
+                    }
+                  : undefined
+              }
+            >
               {!arrangementSourcesCollapsed && (
               <div
                 className={`${
@@ -18714,9 +18849,12 @@ useEffect(() => {
 	                    )}
                     <div className="relative">
                       <button
-                        ref={libraryFiltersButtonRef}
+                        ref={floatingLibraryFiltersButtonRef}
                         type="button"
-                        onClick={() => setLibraryFiltersOpen((v) => !v)}
+                        onClick={() => {
+                          setLibraryFiltersAnchor("floating");
+                          setLibraryFiltersOpen((v) => !v);
+                        }}
                         className={`inline-flex h-[1.625rem] items-center justify-center px-1.5 rounded border text-xs leading-none ${
                           libraryFiltersOpen
                             ? "border-neutral-700 text-white bg-neutral-800"
@@ -18920,10 +19058,16 @@ useEffect(() => {
                     </div>
                     <button
                       type="button"
-                      onClick={() => setIsArrangementOpen(false)}
+                      onClick={() => {
+                        if (!arrangementDetailsCollapsed) {
+                          setArrangementSourcesCollapsed(true);
+                          return;
+                        }
+                        setIsArrangementOpen(false);
+                      }}
                       className="inline-flex h-[1.625rem] w-[1.625rem] items-center justify-center rounded border border-neutral-800 bg-neutral-900/60 text-xs leading-none text-neutral-400 hover:bg-neutral-800/60"
-                      title="Close library"
-                      aria-label="Close library"
+                      title={!arrangementDetailsCollapsed ? "Close beats" : "Close library"}
+                      aria-label={!arrangementDetailsCollapsed ? "Close beats" : "Close library"}
                     >
                       ×
                     </button>
@@ -22488,6 +22632,46 @@ useEffect(() => {
                     </div>
                     <div className="mt-2 text-xs text-neutral-500">
                       Sets the default loop repeat mode for new selections.
+                    </div>
+                    <div className="my-3 border-t border-neutral-800" />
+                    <div className="flex flex-wrap items-center gap-3">
+                      <span className="text-sm text-neutral-300">Metronome volume</span>
+                      <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDefaultMetronomeVolume((prev) => {
+                              const next = Math.max(0, Math.min(1, Math.round((prev - 0.05) * 100) / 100));
+                              setMetronomeVolume(next);
+                              return next;
+                            });
+                          }}
+                          className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                          aria-label="Decrease default metronome volume"
+                        >
+                          −
+                        </button>
+                        <div className="min-w-[72px] border-l border-r border-neutral-700 px-3 py-1 text-center text-sm text-white">
+                          {`${Math.round(defaultMetronomeVolume * 100)}%`}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDefaultMetronomeVolume((prev) => {
+                              const next = Math.max(0, Math.min(1, Math.round((prev + 0.05) * 100) / 100));
+                              setMetronomeVolume(next);
+                              return next;
+                            });
+                          }}
+                          className="px-2 text-base leading-none text-neutral-200 hover:bg-neutral-700/60 active:bg-neutral-700"
+                          aria-label="Increase default metronome volume"
+                        >
+                          +
+                        </button>
+                      </div>
+                    </div>
+                    <div className="mt-2 text-xs text-neutral-500">
+                      Sets the default metronome volume for new sessions.
                     </div>
                     <div className="my-3 border-t border-neutral-800" />
                     <div className="flex flex-wrap items-center gap-3">
