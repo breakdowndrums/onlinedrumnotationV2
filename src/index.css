@@ -6,7 +6,35 @@
   html,
   body,
   #root {
-    @apply bg-neutral-900;
+    @apply bg-black;
+  }
+
+  * {
+    scrollbar-width: none;
+    scrollbar-color: transparent transparent;
+  }
+
+  *::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+    display: none;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background: rgba(148, 163, 184, 0.22);
+    border-radius: 9999px;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background: rgba(148, 163, 184, 0.32);
+  }
+
+  *::-webkit-scrollbar-corner {
+    background: transparent;
   }
 }
 
@@ -22,14 +50,70 @@
   -moz-appearance: textfield;
 }
 
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 16px;
+  background: transparent;
+  cursor: pointer;
+}
+
+input[type="range"]:focus {
+  outline: none;
+}
+
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 5px;
+  border-radius: 9999px;
+  background: rgba(38, 38, 38, 0.95);
+  border: 1px solid rgba(23, 23, 23, 0.95);
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  margin-top: -4.5px;
+  border-radius: 9999px;
+  background: rgb(115, 115, 115);
+  border: 1px solid rgb(64, 64, 64);
+  box-shadow: none;
+}
+
+input[type="range"]::-webkit-slider-thumb:hover {
+  background: rgb(140, 140, 140);
+}
+
+input[type="range"]::-moz-range-track {
+  height: 5px;
+  border-radius: 9999px;
+  background: rgba(38, 38, 38, 0.95);
+  border: 1px solid rgba(23, 23, 23, 0.95);
+}
+
+input[type="range"]::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 9999px;
+  background: rgb(115, 115, 115);
+  border: 1px solid rgb(64, 64, 64);
+  box-shadow: none;
+}
+
+input[type="range"]::-moz-range-thumb:hover {
+  background: rgb(140, 140, 140);
+}
+
 .dg-slim-scrollbar {
-  scrollbar-width: thin;
-  scrollbar-color: rgba(163, 163, 163, 0.55) transparent;
+  scrollbar-width: none;
+  scrollbar-color: transparent transparent;
 }
 
 .dg-slim-scrollbar::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 0;
+  height: 0;
+  display: none;
 }
 
 .dg-slim-scrollbar::-webkit-scrollbar-track {
@@ -37,10 +121,10 @@
 }
 
 .dg-slim-scrollbar::-webkit-scrollbar-thumb {
-  background: rgba(163, 163, 163, 0.55);
+  background: rgba(148, 163, 184, 0.22);
   border-radius: 9999px;
 }
 
 .dg-slim-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: rgba(212, 212, 212, 0.65);
+  background: rgba(148, 163, 184, 0.32);
 }

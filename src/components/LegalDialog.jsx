@@ -5,6 +5,7 @@ export default function LegalDialog({
   legalTab,
   onClose,
   onSetLegalTab,
+  onImpressumPress,
   showLegalEmail,
   onRevealEmail,
 }) {
@@ -31,7 +32,10 @@ export default function LegalDialog({
         <div className="mt-3 flex items-center gap-2">
           <button
             type="button"
-            onClick={() => onSetLegalTab("impressum")}
+            onClick={() => {
+              onSetLegalTab("impressum");
+              onImpressumPress?.();
+            }}
             className={`px-2.5 py-1 rounded border text-sm ${
               legalTab === "impressum"
                 ? "border-neutral-600 bg-neutral-800 text-white"
@@ -104,6 +108,14 @@ export default function LegalDialog({
               and operate the service (Art. 6(1)(f) GDPR).
             </p>
             <p>
+              Analytics / Vercel Web Analytics:
+              <br />
+              This site uses the official Vercel Web Analytics integration. In that context, Vercel may process
+              usage and request data such as page views, referrer information, browser / device information,
+              IP-derived technical metadata, and timestamps in order to measure traffic and improve service
+              quality (Art. 6(1)(f) GDPR).
+            </p>
+            <p>
               User accounts and cloud library:
               <br />
               If you create an account or sign in, your email address, account identifier, saved beats,
@@ -119,7 +131,9 @@ export default function LegalDialog({
             <p>
               Cookies:
               <br />
-              The app itself does not set non-essential tracking or marketing cookies.
+              The app itself does not use non-essential marketing cookies. Technical browser storage may still
+              be used where needed to operate the service, and privacy-focused analytics may process technical
+              usage data even where no marketing cookies are used.
             </p>
             <p>
               LocalStorage:
@@ -136,14 +150,43 @@ export default function LegalDialog({
               (Art. 6(1)(b) GDPR).
             </p>
             <p>
+              Recipients / processors:
+              <br />
+              Personal data may be processed by service providers used to run the app, in particular Vercel
+              (hosting and analytics), Supabase (authentication, database, and cloud library functions), and
+              Resend where used for account-related emails.
+            </p>
+            <p>
+              International transfers:
+              <br />
+              Depending on the configured provider regions and technical infrastructure, personal data may be
+              processed outside the EEA. Where this happens, processing is based on the GDPR mechanisms used
+              by the relevant provider, such as adequacy decisions or standard contractual clauses.
+            </p>
+            <p>
+              Storage period / retention:
+              <br />
+              Account data and cloud library content are generally stored for as long as your account exists or
+              until you delete the relevant content. Public shares may remain available until deleted by you or
+              removed from the service. Technical logs are kept only for as long as required for security,
+              operation, and troubleshooting. Browser-local data remains on your device until you delete it
+              through the app or your browser storage settings.
+            </p>
+            <p>
               Contact by email:
               <br />
               If you contact us by email, your message data is processed only to handle your request
               (Art. 6(1)(b) or (f) GDPR) and retained only as long as necessary.
             </p>
             <p>
+              No automated decision-making:
+              <br />
+              No automated decision-making within the meaning of Art. 22 GDPR is carried out.
+            </p>
+            <p>
               You may have rights under GDPR (access, rectification, erasure, restriction, portability, objection,
-              complaint to a supervisory authority). Contact:{" "}
+              complaint to a supervisory authority). Competent supervisory authority: Der Landesbeauftragte für den
+              Datenschutz und die Informationsfreiheit Rheinland-Pfalz, Hintere Bleiche 34, 55116 Mainz. Contact:{" "}
               {showLegalEmail ? (
                 <span>breakdowndrums@gmail.com</span>
               ) : (

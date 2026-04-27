@@ -5,8 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta
       name="description"
-      content="Free online drum notation editor to write grooves, hear playback, set BPM, and print/export drum sheet music in your browser."
+      content="Free drum notation editor and drum score maker. Write drum sheet music online, hear playback, build drum groove notation, and print clean drum charts in your browser."
     />
+    <link rel="canonical" href="https://onlinedrumnotation.com/" />
     <link rel="icon" type="image/png" sizes="96x96" href="/favicon-96x96.png" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="shortcut icon" href="/favicon.ico" />
@@ -19,7 +20,7 @@
         "name": "Online Drum Notation",
         "applicationCategory": "MusicApplication",
         "operatingSystem": "Web",
-        "description": "Free online drum notation tool for writing drum grooves and drum sheet music.",
+        "description": "Free drum notation tool online for writing drum sheet music, drum groove notation, and playable drum charts in the browser.",
         "url": "https://onlinedrumnotation.com",
         "offers": {
           "@type": "Offer",
@@ -29,12 +30,135 @@
         "inLanguage": "en"
       }
     </script>
-    <script defer src="/_vercel/insights/script.js"></script>
-    <title>Drum Notation Tool Online | Write & Play Drum Sheet Music</title>
-    <script type="module" crossorigin src="/assets/index-BK14mOin.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-Bhncs7L0.css">
+    <title>Free Drum Notation Editor | Write Drum Sheet Music Online</title>
+    <style>
+      :root {
+        --seo-bg: #171717;
+        --seo-surface: #111111;
+        --seo-border: #2f2f2f;
+        --seo-text: #f5f5f5;
+        --seo-muted: #a3a3a3;
+        --seo-link: #d4d4d4;
+      }
+      body {
+        margin: 0;
+        background: var(--seo-bg);
+      }
+      .seo-content {
+        max-width: 1040px;
+        margin: 0 auto;
+        padding: 24px 24px 48px;
+      }
+      .seo-panel {
+        padding: 0;
+      }
+      .seo-content > .seo-panel + .seo-panel {
+        margin-top: 20px;
+      }
+      .seo-content > .seo-panel:has(details[open]) + .seo-panel {
+        margin-top: 12px;
+      }
+      .seo-panel details {
+        display: block;
+      }
+      .seo-panel summary {
+        cursor: pointer;
+        list-style: none;
+        color: #5f5f5f;
+        font: 400 0.75rem/1.35 ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+        text-align: center;
+      }
+      .seo-panel summary::-webkit-details-marker {
+        display: none;
+      }
+      .seo-summary {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        justify-content: center;
+      }
+      .seo-caret {
+        display: inline-block;
+        transform: rotate(0deg);
+        transition: transform 160ms ease;
+        color: var(--seo-muted);
+      }
+      .seo-panel details[open] .seo-caret {
+        transform: rotate(90deg);
+      }
+      .seo-body {
+        margin-top: 14px;
+      }
+      .seo-panel h1,
+      .seo-panel h2 {
+        margin: 0 0 10px;
+        color: #737373;
+        font: 400 0.75rem/1.35 ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+      }
+      .seo-panel p,
+      .seo-panel li {
+        margin: 0 0 10px;
+        color: #737373;
+        font: 400 0.75rem/1.65 ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+      }
+      .seo-panel ul {
+        margin: 0;
+        padding-left: 18px;
+      }
+      .seo-links {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px 18px;
+        margin-top: 10px;
+      }
+      .seo-links a {
+        color: #737373;
+        text-decoration: underline;
+        text-underline-offset: 2px;
+        font: 400 0.75rem/1.35 ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+      }
+      .seo-links a:hover {
+        color: #a3a3a3;
+      }
+    </style>
+    <script type="module" crossorigin src="/assets/index-CAOr7Iu9.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-D7VgzLNc.css">
   </head>
   <body>
     <div id="root"></div>
+    <section class="seo-content" aria-label="Drum notation editor information">
+      <div class="seo-panel">
+          <details>
+            <summary>
+              <span class="seo-summary">
+                <span class="seo-caret">▸</span>
+                <span>About this drum notation editor</span>
+              </span>
+            </summary>
+          <div class="seo-body">
+            <p>
+              Online Drum Notation is a drum notation tool online for players, teachers, and students who want to write
+              drum sheet music online, hear playback, and build clean drum groove notation in the browser. You can use it
+              as a free drum notation editor, drum sheet music editor, and practical drum score maker for grooves, fills,
+              practice charts, and arrangements.
+            </p>
+          </div>
+        </details>
+      </div>
+      <div class="seo-panel">
+        <details>
+          <summary>
+            <span class="seo-summary">
+              <span class="seo-caret">▸</span>
+              <span>Feedback</span>
+            </span>
+          </summary>
+          <div class="seo-body">
+            <div id="feedback-panel-root"></div>
+          </div>
+        </details>
+      </div>
+      <div id="admin-stats-panel-root" class="seo-panel"></div>
+    </section>
   </body>
 </html>
