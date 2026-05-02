@@ -38,6 +38,8 @@ const MIDI_NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "
 const SHORTCUT_BINDINGS_STORAGE_KEY = "drum-grid-shortcut-bindings-v1";
 const FEEDBACK_ANON_FINGERPRINT_STORAGE_KEY = "drum-grid-feedback-anon-fingerprint-v1";
 const BEAT_AUTO_UPDATE_ENABLED_STORAGE_KEY = "drum-grid-beat-auto-update-enabled-v1";
+const TUPLET_GRID_APPEARANCE_BY_VALUE_STORAGE_KEY = "drum-grid-tuplet-grid-appearance-by-value-v2";
+const COUNT_ROW_DARKEN_NON_QUARTERS_STORAGE_KEY = "drum-grid-count-row-darken-non-quarters-v1";
 const SHORTCUTS = [
   {
     id: "play_toggle",
@@ -129,6 +131,17 @@ function formatMidiNoteName(note) {
   const pitchClass = ((rounded % 12) + 12) % 12;
   const octave = Math.floor(rounded / 12) - 1;
   return `${MIDI_NOTE_NAMES[pitchClass]}${octave}`;
+}
+
+function isMidiLikeFile(file) {
+  if (!file) return false;
+  const fileName = String(file?.name || "").toLowerCase();
+  const fileType = String(file?.type || "").toLowerCase();
+  return (
+    fileName.endsWith(".mid") ||
+    fileName.endsWith(".midi") ||
+    fileType.includes("midi")
+  );
 }
 
 function formatTimingShiftLabel(sixteenths) {
@@ -888,7 +901,7 @@ const TEMPORARY_SHARE_LINK_CLEANUP_INTERVAL_MS = 1000 * 60 * 60 * 24;
 const BEAT_LIBRARY_SELECTED_CONTAINER_STORAGE_KEY = "drum-grid-beat-library-selected-container-v1";
 const BEAT_LIBRARY_ROOT_COLLAPSED_STORAGE_KEY = "drum-grid-beat-library-root-collapsed-v1";
 const GRID_SETTINGS_PRESET_LIBRARY_STORAGE_KEY = "drum-grid-grid-settings-presets-v1";
-const APP_VERSION = "0.1.430";
+const APP_VERSION = "0.1.462";
 const BEAT_CATEGORY_OPTIONS = [
   "Groove",
   "Fill",
@@ -1095,7 +1108,7 @@ const MIDI_IMPORT_MAPPING_PRESET_BY_ID = Object.fromEntries(
 const TUPLET_OPTIONS = [null, 3, 5, 6, 7, 9];
 const QUARTER_SUBDIVISION_CYCLE = [2, 3, 4, 5, 6, 7, 8, 9];
 const QUARTER_SUBDIVISION_VISIBILITY_STORAGE_KEY = "drum-grid-quarter-subdivision-visibility-v1";
-const DEFAULT_VISIBLE_QUARTER_SUBDIVISIONS = [2, 3, 4, 5, 6, 7, 8];
+const DEFAULT_VISIBLE_QUARTER_SUBDIVISIONS = [3, 4, 5, 6, 7, 8];
 const QUARTER_SUBDIVISION_LABELS = {
   2: "2",
   3: "3",
@@ -1106,13 +1119,107 @@ const QUARTER_SUBDIVISION_LABELS = {
   8: "8",
   9: "9",
 };
-const TUPLET_COLOR_CLASS = {
-  3: "bg-amber-900/25",
-  5: "bg-indigo-700/25",
-  6: "bg-amber-700/25",
-  7: "bg-emerald-700/25",
-  9: "bg-fuchsia-700/25",
+const DEFAULT_TUPLET_GRID_APPEARANCE_BY_VALUE = {
+  3: { h: 22, s: 78, l: 26, opacity: 25 },
+  5: { h: 245, s: 58, l: 51, opacity: 25 },
+  6: { h: 26, s: 90, l: 37, opacity: 25 },
+  7: { h: 163, s: 94, l: 24, opacity: 25 },
+  9: { h: 295, s: 72, l: 40, opacity: 25 },
 };
+
+function normalizeTupletAppearanceByValue(raw) {
+  const next = {};
+  Object.entries(DEFAULT_TUPLET_GRID_APPEARANCE_BY_VALUE).forEach(([key, defaults]) => {
+    const source = raw && typeof raw === "object" ? raw[key] : null;
+    const h = Number(source?.h);
+    const s = Number(source?.s);
+    const l = Number(source?.l);
+    const opacity = Number(source?.opacity);
+    next[key] = {
+      h: Number.isFinite(h) ? Math.max(0, Math.min(360, Math.round(h))) : defaults.h,
+      s: Number.isFinite(s) ? Math.max(0, Math.min(100, Math.round(s))) : defaults.s,
+      l: Number.isFinite(l) ? Math.max(0, Math.min(100, Math.round(l))) : defaults.l,
+      opacity: Number.isFinite(opacity) ? Math.max(0, Math.min(100, Math.round(opacity))) : defaults.opacity,
+    };
+  });
+  return next;
+}
+
+function formatTupletHslColor(appearance, alpha = 1) {
+  const h = Math.max(0, Math.min(360, Math.round(Number(appearance?.h) || 0)));
+  const s = Math.max(0, Math.min(100, Math.round(Number(appearance?.s) || 0)));
+  const l = Math.max(0, Math.min(100, Math.round(Number(appearance?.l) || 0)));
+  const a = Math.max(0, Math.min(1, Number(alpha) || 0));
+  return `hsla(${h}, ${s}%, ${l}%, ${a})`;
+}
+
+function hslToHex(h, s, l) {
+  const hue = ((Number(h) || 0) % 360 + 360) % 360;
+  const sat = Math.max(0, Math.min(100, Number(s) || 0)) / 100;
+  const light = Math.max(0, Math.min(100, Number(l) || 0)) / 100;
+  const chroma = (1 - Math.abs(2 * light - 1)) * sat;
+  const segment = hue / 60;
+  const x = chroma * (1 - Math.abs((segment % 2) - 1));
+  let rPrime = 0;
+  let gPrime = 0;
+  let bPrime = 0;
+  if (segment >= 0 && segment < 1) {
+    rPrime = chroma;
+    gPrime = x;
+  } else if (segment < 2) {
+    rPrime = x;
+    gPrime = chroma;
+  } else if (segment < 3) {
+    gPrime = chroma;
+    bPrime = x;
+  } else if (segment < 4) {
+    gPrime = x;
+    bPrime = chroma;
+  } else if (segment < 5) {
+    rPrime = x;
+    bPrime = chroma;
+  } else {
+    rPrime = chroma;
+    bPrime = x;
+  }
+  const match = light - chroma / 2;
+  const toHex = (value) =>
+    Math.round((value + match) * 255)
+      .toString(16)
+      .padStart(2, "0")
+      .toUpperCase();
+  return `#${toHex(rPrime)}${toHex(gPrime)}${toHex(bPrime)}`;
+}
+
+function hexToHsl(hex) {
+  const normalized = String(hex || "").trim().replace(/^#/, "");
+  if (!/^[0-9a-fA-F]{6}$/.test(normalized)) return null;
+  const r = parseInt(normalized.slice(0, 2), 16) / 255;
+  const g = parseInt(normalized.slice(2, 4), 16) / 255;
+  const b = parseInt(normalized.slice(4, 6), 16) / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const delta = max - min;
+  let h = 0;
+  if (delta !== 0) {
+    if (max === r) {
+      h = ((g - b) / delta) % 6;
+    } else if (max === g) {
+      h = (b - r) / delta + 2;
+    } else {
+      h = (r - g) / delta + 4;
+    }
+    h *= 60;
+    if (h < 0) h += 360;
+  }
+  const l = (max + min) / 2;
+  const s = delta === 0 ? 0 : delta / (1 - Math.abs(2 * l - 1));
+  return {
+    h: Math.round(h),
+    s: Math.round(s * 100),
+    l: Math.round(l * 100),
+  };
+}
 
 function encodeBase64UrlUtf8(input) {
   try {
@@ -2057,6 +2164,49 @@ function getAnonymousFeedbackFingerprint() {
   } catch (_) {
     return "";
   }
+}
+
+function buildEffectiveNotationPayloadFromBeat(beat, overrides = {}) {
+  const basePayload =
+    beat?.payload && typeof beat.payload === "object"
+      ? { ...beat.payload }
+      : null;
+  if (!basePayload) return null;
+  const printStickingMode =
+    overrides?.printStickingMode === "all"
+      ? "all"
+      : overrides?.printStickingMode === "off"
+        ? "off"
+        : "custom";
+  const sourceNotationStickingSelection =
+    overrides?.notationStickingSelection &&
+    typeof overrides.notationStickingSelection === "object"
+      ? overrides.notationStickingSelection
+      : beat?.notationStickingSelection && typeof beat.notationStickingSelection === "object"
+        ? beat.notationStickingSelection
+        : null;
+  const mirroredNotationStickingSelection =
+    sourceNotationStickingSelection && typeof sourceNotationStickingSelection === "object"
+      ? Object.fromEntries(
+          Object.entries(sourceNotationStickingSelection).filter(([, value]) => value === true)
+        )
+      : null;
+  if (printStickingMode === "all") {
+    delete basePayload.notationStickingSelection;
+    basePayload.showNotationSticking = true;
+  } else if (printStickingMode === "off") {
+    basePayload.showNotationSticking = false;
+  } else if (mirroredNotationStickingSelection) {
+    if (Object.keys(mirroredNotationStickingSelection).length > 0) {
+      basePayload.notationStickingSelection = mirroredNotationStickingSelection;
+    } else {
+      delete basePayload.notationStickingSelection;
+    }
+  }
+  if (typeof overrides.showNotationSticking === "boolean") {
+    basePayload.showNotationSticking = overrides.showNotationSticking;
+  }
+  return basePayload;
 }
 
 function normalizePublishedBeatEntry(row) {
@@ -3555,6 +3705,7 @@ export default function App() {
     }
   });
   const [showPrefsPlaybackInfo, setShowPrefsPlaybackInfo] = useState(false);
+  const [openTupletAppearanceEditor, setOpenTupletAppearanceEditor] = useState(null);
   const [shortcutBindings, setShortcutBindings] = useState(() => shortcutsMapFromStorage());
   const [isEditingAdvancedMenuOpen, setIsEditingAdvancedMenuOpen] = useState(false);
   const [isRhythmSpellingMenuOpen, setIsRhythmSpellingMenuOpen] = useState(false);
@@ -3765,6 +3916,23 @@ export default function App() {
       return normalizeVisibleQuarterSubdivisions(parsed);
     } catch (_) {
       return [...DEFAULT_VISIBLE_QUARTER_SUBDIVISIONS];
+    }
+  });
+  const [tupletGridAppearanceByValue, setTupletGridAppearanceByValue] = useState(() => {
+    try {
+      const raw = window.localStorage.getItem(TUPLET_GRID_APPEARANCE_BY_VALUE_STORAGE_KEY);
+      const parsed = raw ? JSON.parse(raw) : null;
+      return normalizeTupletAppearanceByValue(parsed);
+    } catch (_) {
+      return normalizeTupletAppearanceByValue(null);
+    }
+  });
+  const [darkenCountRowNonQuarters, setDarkenCountRowNonQuarters] = useState(() => {
+    try {
+      const raw = window.localStorage.getItem(COUNT_ROW_DARKEN_NON_QUARTERS_STORAGE_KEY);
+      return raw == null ? false : raw !== "0";
+    } catch (_) {
+      return false;
     }
   });
   const [notationStickingModePreference, setNotationStickingModePreference] = useState(() =>
@@ -4660,8 +4828,10 @@ export default function App() {
   const loopAdvancedMenuRef = React.useRef(null);
   const loopAdvancedMenuButtonRef = React.useRef(null);
   const midiImportInputRef = React.useRef(null);
+  const midiWindowDragDepthRef = React.useRef(0);
   const kitOrderListRef = React.useRef(null);
   const arrangementListRef = React.useRef(null);
+  const [isMidiWindowDragActive, setIsMidiWindowDragActive] = useState(false);
   const arrangementSourceListRef = React.useRef(null);
   const applyImportedBeatPayloadRef = React.useRef(null);
   const loadBeatIntoEditorRef = React.useRef(null);
@@ -6415,6 +6585,23 @@ export default function App() {
       );
     } catch (_) {}
   }, [visibleQuarterSubdivisions]);
+  useEffect(() => {
+    try {
+      const next = normalizeTupletAppearanceByValue(tupletGridAppearanceByValue);
+      window.localStorage.setItem(
+        TUPLET_GRID_APPEARANCE_BY_VALUE_STORAGE_KEY,
+        JSON.stringify(next)
+      );
+    } catch (_) {}
+  }, [tupletGridAppearanceByValue]);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        COUNT_ROW_DARKEN_NON_QUARTERS_STORAGE_KEY,
+        darkenCountRowNonQuarters ? "1" : "0"
+      );
+    } catch (_) {}
+  }, [darkenCountRowNonQuarters]);
   useEffect(() => {
     try {
       window.localStorage.setItem(PREFERENCES_CATEGORY_STORAGE_KEY, preferencesCategory);
@@ -11123,12 +11310,39 @@ useEffect(() => {
     if (row?.showNotationBeatName) return String(row?.beat?.name || "Untitled Beat");
     return "";
   }, []);
+  const arrangementGlobalNotationStickingMode = React.useMemo(() => {
+    if (!showNotationSticking) return "off";
+    if (notationStickingModePreference === "all") return "all";
+    if (notationStickingSelectionModeEnabled) return "custom";
+    return notationStickingModePreference === "off" ? "off" : "custom";
+  }, [
+    showNotationSticking,
+    notationStickingModePreference,
+    notationStickingSelectionModeEnabled,
+  ]);
   const arrangementNotationSections = React.useMemo(() => {
     const out = [];
     let globalBarOffset = 0;
     let prevBpm = null;
     arrangementRows.forEach((row, idx) => {
-      const baseNotationState = buildNotationStateFromPayload(row?.beat?.payload);
+      const rowPrintStickingMode = row?.notationPrintStickingCustom === true
+        ? (row?.notationPrintStickingEffective === true ? "custom" : "off")
+        : arrangementGlobalNotationStickingMode === "all"
+          ? "all"
+          : arrangementGlobalNotationStickingMode === "off"
+            ? "off"
+            : "custom";
+      const currentBeatCustomSelection =
+        row?.source === "local" &&
+        String(row?.beat?.id || "") === String(loadedLocalBeatId || "")
+          ? notationStickingSelection
+          : undefined;
+      const effectiveBeatPayload = buildEffectiveNotationPayloadFromBeat(row?.beat, {
+        printStickingMode: rowPrintStickingMode,
+        notationStickingSelection: currentBeatCustomSelection,
+        showNotationSticking: row?.notationPrintStickingEffective === true,
+      });
+      const baseNotationState = buildNotationStateFromPayload(effectiveBeatPayload);
       const notationState = expandNotationStateForRepeats(baseNotationState, row?.repeats);
       if (!notationState) return;
       const stickingAssignments = computeStickingAssignmentsForNotationState(notationState, {
@@ -11194,6 +11408,9 @@ useEffect(() => {
     stickingHandedness,
     stickingLeadHand,
     stickingKeepQuarterLeadHand,
+    arrangementGlobalNotationStickingMode,
+    loadedLocalBeatId,
+    notationStickingSelection,
     getArrangementNotationLabel,
     arrangementNotationBarsPerRow,
   ]);
@@ -12004,10 +12221,9 @@ useEffect(() => {
       if (sharedBeatIdByRowBeat.has(sourceKey)) return;
       const sharedBeatId = `shared-${idx + 1}`;
       sharedBeatIdByRowBeat.set(sourceKey, sharedBeatId);
-      const payload = beat.payload && typeof beat.payload === "object"
-        ? JSON.parse(JSON.stringify(beat.payload))
-        : null;
-      if (!payload) return;
+      const payload = buildEffectiveNotationPayloadFromBeat(beat);
+      const safePayload = payload ? JSON.parse(JSON.stringify(payload)) : null;
+      if (!safePayload) return;
       sharedBeats.push({
         id: sharedBeatId,
         name: String(beat.name || `Beat ${idx + 1}`),
@@ -12015,10 +12231,10 @@ useEffect(() => {
         style: beat.style ? String(beat.style) : undefined,
         timeSigCategory: String(
           beat.timeSigCategory ||
-          `${Number(payload.timeSig?.n) || 4}/${Number(payload.timeSig?.d) || 4}`
+          `${Number(safePayload.timeSig?.n) || 4}/${Number(safePayload.timeSig?.d) || 4}`
         ),
-        bpm: Number.isFinite(Number(beat.bpm)) ? Math.round(Number(beat.bpm)) : Number(payload.bpm) || bpm,
-        payload,
+        bpm: Number.isFinite(Number(beat.bpm)) ? Math.round(Number(beat.bpm)) : Number(safePayload.bpm) || bpm,
+        payload: safePayload,
         source: "shared",
       });
     });
@@ -12052,6 +12268,7 @@ useEffect(() => {
     arrangementTitleLine1Draft,
     arrangementTitleLine2Draft,
     arrangementComposerDraft,
+    buildEffectiveNotationPayloadFromBeat,
     bpm,
   ]);
   const applyImportedMidiTempoMultiplier = React.useCallback((sourceImported, rawMultiplier = 1) => {
@@ -12622,6 +12839,55 @@ useEffect(() => {
     },
     [buildPendingMidiImportMappingState, midiArrangementImportMode, midiImportSplitBars, midiImportVelocityThresholds]
   );
+  useEffect(() => {
+    const hasDraggedFiles = (event) =>
+      Array.from(event?.dataTransfer?.types || []).includes("Files");
+    const handleDragEnter = (event) => {
+      if (!hasDraggedFiles(event)) return;
+      midiWindowDragDepthRef.current += 1;
+      event.preventDefault();
+      setIsMidiWindowDragActive(true);
+    };
+    const handleDragOver = (event) => {
+      if (!hasDraggedFiles(event)) return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+      if (!isMidiWindowDragActive) setIsMidiWindowDragActive(true);
+    };
+    const handleDragLeave = (event) => {
+      if (!hasDraggedFiles(event)) return;
+      event.preventDefault();
+      midiWindowDragDepthRef.current = Math.max(0, midiWindowDragDepthRef.current - 1);
+      if (midiWindowDragDepthRef.current === 0) {
+        setIsMidiWindowDragActive(false);
+      }
+    };
+    const handleDrop = async (event) => {
+      if (!hasDraggedFiles(event)) return;
+      event.preventDefault();
+      midiWindowDragDepthRef.current = 0;
+      setIsMidiWindowDragActive(false);
+      const files = Array.from(event.dataTransfer?.files || []);
+      const midiFile = files.find((file) => isMidiLikeFile(file));
+      if (!midiFile) return;
+      try {
+        await handleMidiImportFile(midiFile);
+      } catch (error) {
+        console.error(error);
+        alert(error?.message || "Failed to import MIDI");
+      }
+    };
+    window.addEventListener("dragenter", handleDragEnter);
+    window.addEventListener("dragover", handleDragOver);
+    window.addEventListener("dragleave", handleDragLeave);
+    window.addEventListener("drop", handleDrop);
+    return () => {
+      window.removeEventListener("dragenter", handleDragEnter);
+      window.removeEventListener("dragover", handleDragOver);
+      window.removeEventListener("dragleave", handleDragLeave);
+      window.removeEventListener("drop", handleDrop);
+    };
+  }, [handleMidiImportFile, isMidiWindowDragActive]);
   const confirmPendingMidiImportMapping = React.useCallback(() => {
     if (!pendingMidiImportMapping?.arrayBuffer) return;
     const imported = importDrumMidi({
@@ -13900,6 +14166,21 @@ useEffect(() => {
     notationStickingSelectionStats.mode,
     setNotationStickingPrintMode,
   ]);
+  const cycleNotationStickingPrintMode = React.useCallback((delta) => {
+    const modes = ["off", "all", "custom"];
+    const currentMode =
+      notationStickingSelectionStats.mode === "all"
+        ? "all"
+        : notationStickingSelectionStats.mode === "custom"
+          ? "custom"
+          : "off";
+    const currentIndex = modes.indexOf(currentMode);
+    const nextIndex = (currentIndex + delta + modes.length) % modes.length;
+    setNotationStickingPrintMode(modes[nextIndex]);
+  }, [
+    notationStickingSelectionStats.mode,
+    setNotationStickingPrintMode,
+  ]);
   useEffect(() => {
     if (importedBeatLoadInProgressRef.current) return;
     setNotationStickingSelection((prev) => {
@@ -14817,7 +15098,9 @@ useEffect(() => {
     const barStartTimes = new Map();
     let timeSec = 0;
     sourceEntries.forEach((entry) => {
-      const payload = entry?.row?.beat?.payload;
+      const payload = buildEffectiveNotationPayloadFromBeat(entry?.row?.beat, {
+        showNotationSticking: entry?.row?.notationPrintStickingEffective === true,
+      });
       const notationState = buildNotationStateFromPayload(payload);
       if (!notationState) return;
       const stepQuarterDurations = buildStepQuarterDurationsFromNotationState(notationState);
@@ -14978,7 +15261,7 @@ useEffect(() => {
       loop,
       barStartTimes: playbackBarStartTimes,
     };
-  }, [arrangementPlayableEntries, arrangementPlaybackLoopRange, normalizedArrangementBarLoopSelection, bpm, playbackRate, metronomeEnabled, metronomeVolume]);
+  }, [arrangementPlayableEntries, arrangementPlaybackLoopRange, normalizedArrangementBarLoopSelection, bpm, playbackRate, metronomeEnabled, metronomeVolume, buildEffectiveNotationPayloadFromBeat]);
   useEffect(() => {
     arrangementPlaybackIndexRef.current = arrangementPlaybackIndex;
   }, [arrangementPlaybackIndex]);
@@ -15017,7 +15300,9 @@ useEffect(() => {
       Number(firstEventAtStart?.meta?.queueIndex ?? startBoundary?.queueIndex) || 0
     );
     const startEntry = arrangementPlayableEntries[startIndex] || startBoundary;
-    const startPayload = startEntry?.row?.beat?.payload;
+    const startPayload = buildEffectiveNotationPayloadFromBeat(startEntry?.row?.beat, {
+      showNotationSticking: startEntry?.row?.notationPrintStickingEffective === true,
+    });
     const startTimeSig = startPayload?.timeSig || { n: 4, d: 4 };
     const startBpm = clampBpm(
       Math.round(
@@ -15051,6 +15336,7 @@ useEffect(() => {
   }, [
     arrangementCompiledPlayback,
     arrangementPlayableEntries,
+    buildEffectiveNotationPayloadFromBeat,
     clampBpm,
     bpm,
     playbackRate,
@@ -16838,122 +17124,62 @@ useEffect(() => {
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setBeatAutoUpdateEnabled((v) => !v)}
-                        className={`w-fit touch-none select-none px-3 py-[5px] rounded border text-sm ${
-                          beatAutoUpdateEnabled
-                            ? "bg-neutral-800 border-neutral-700 text-white"
-                            : "bg-neutral-900 border-neutral-800 text-neutral-600"
-                        }`}
-                        title="Automatically update the loaded local beat after beat changes. Notation sticking selection always auto-updates."
-                      >
-                        Auto update
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleMainTrashClick}
-                        className={`touch-none select-none inline-flex h-8 w-8 items-center justify-center rounded border ${
-                          canClearSelection
-                            ? "bg-neutral-800 border-neutral-700 text-white"
-                            : "bg-neutral-900 border-neutral-800 text-neutral-500 hover:bg-neutral-800/40"
-                        }`}
-                        title={canClearSelection ? "Clear selection (Cmd/Ctrl+click: reset defaults + delete library)" : "Clear all notes (Cmd/Ctrl+click: reset defaults + delete library)"}
-                        aria-label={canClearSelection ? "Clear selection" : "Clear all notes"}
-                      >
-                        <svg
-                          xmlns="http://www.w3.org/2000/svg"
-                          viewBox="0 0 16 16"
-                          className="-translate-y-px h-[0.95rem] w-[0.95rem]"
-                          fill="currentColor"
-                          aria-hidden="true"
-                        >
-                          <path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0z" />
-                          <path d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4zM2.5 3h11V2h-11z" />
-                        </svg>
-                      </button>
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setStickingEditModeEnabled((v) => {
-                            const next = !v;
-                            if (next) {
-                              setStickingGuideEnabled(true);
-                            } else {
-                              setNotationStickingSelectionModeEnabled(false);
-                            }
-                            return next;
-                          })
-                        }
-                        className={`w-fit touch-none select-none px-3 py-[5px] rounded border text-sm ${
-                          stickingEditModeEnabled
-                            ? "bg-neutral-800 border-neutral-700 text-white"
-                            : "bg-neutral-900 border-neutral-800 text-neutral-600"
-                        }`}
-                        title="When enabled, clicking active hand-hit cells edits R/L sticking instead of toggling notes"
-                      >
-                        Sticking edit mode
-                      </button>
-                    </div>
-
-                    <div className="flex flex-col items-start gap-2">
-                      <div className="flex w-full items-center justify-between gap-2">
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-sm text-neutral-300">Print sticking</span>
-                        </div>
-                      </div>
+                    <div className="flex w-full items-center justify-between gap-2">
+                      <span className="shrink-0 text-sm text-neutral-300">Print sticking</span>
                       <div className="flex items-center gap-1.5">
                         <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-800 bg-neutral-900/60">
                           <button
                             type="button"
-                            onClick={() => setNotationStickingPrintMode("off")}
-                            className={`min-w-[3.25rem] px-2.5 py-1 text-sm ${
-                              notationStickingSelectionStats.mode === "off"
-                                ? "bg-neutral-900 text-neutral-300"
-                                : "text-neutral-500 hover:bg-neutral-800/60"
-                            }`}
-                            title="Do not print sticking in notation"
+                            onClick={() => cycleNotationStickingPrintMode(-1)}
+                            className="px-2 text-base leading-none text-neutral-500 hover:bg-neutral-800/50 active:bg-neutral-800"
+                            title="Previous print sticking mode"
+                            aria-label="Previous print sticking mode"
                           >
-                            Off
+                            -
                           </button>
                           <button
                             type="button"
-                            onClick={() => setNotationStickingPrintMode("all")}
-                            className={`min-w-[3.25rem] border-l border-neutral-800 px-2.5 py-1 text-sm ${
-                              notationStickingSelectionStats.mode === "all"
-                                ? "bg-neutral-900 text-neutral-300"
-                                : "text-neutral-500 hover:bg-neutral-800/60"
-                            }`}
-                            title="Print all sticking in notation"
-                          >
-                            All
-                          </button>
-                          <button
-                            type="button"
-                            onClick={handleCustomNotationStickingModeToggle}
-                            className={`min-w-[4.1rem] border-l border-neutral-800 px-2.5 py-1 text-sm ${
+                            onClick={() => {
+                              if (notationStickingSelectionStats.mode === "custom") {
+                                handleCustomNotationStickingModeToggle();
+                              }
+                            }}
+                            className={`min-w-[72px] px-3 py-1 flex items-center justify-center text-sm border-l border-r border-neutral-800 ${
                               notationStickingSelectionModeEnabled
                                 ? "bg-neutral-800 text-white"
-                                : notationStickingSelectionStats.mode === "custom"
-                                  ? "bg-neutral-900 text-neutral-300"
-                                  : "text-neutral-500 hover:bg-neutral-800/60"
+                                : "bg-neutral-900/60 text-neutral-500 hover:bg-neutral-800/50"
                             }`}
                             title={
-                              notationStickingSelectionModeEnabled
-                                ? "Finish editing custom sticking selection"
-                                : notationStickingSelectionStats.mode === "custom"
-                                  ? "Edit custom sticking selection"
-                                  : "Use a custom sticking selection"
+                              notationStickingSelectionStats.mode === "custom"
+                                ? notationStickingSelectionModeEnabled
+                                  ? "Finish editing custom sticking selection"
+                                  : "Edit custom sticking selection"
+                                : notationStickingSelectionStats.mode === "all"
+                                  ? "Print all sticking in notation"
+                                  : "Do not print sticking in notation"
                             }
                           >
-                            Custom
+                            {notationStickingSelectionStats.mode === "all"
+                              ? "All"
+                              : notationStickingSelectionStats.mode === "custom"
+                                ? "Custom"
+                                : "Off"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => cycleNotationStickingPrintMode(1)}
+                            className="px-2 text-base leading-none text-neutral-500 hover:bg-neutral-800/50 active:bg-neutral-800"
+                            title="Next print sticking mode"
+                            aria-label="Next print sticking mode"
+                          >
+                            +
                           </button>
                         </div>
-                        <div className="relative shrink-0">
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <div className="relative shrink-0">
                           <button
                             ref={editingAdvancedMenuButtonRef}
                             type="button"
@@ -17006,8 +17232,66 @@ useEffect(() => {
                               </div>
                             </div>
                           )}
-                        </div>
                       </div>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setStickingEditModeEnabled((v) => {
+                            const next = !v;
+                            if (next) {
+                              setStickingGuideEnabled(true);
+                            } else {
+                              setNotationStickingSelectionModeEnabled(false);
+                            }
+                            return next;
+                          })
+                        }
+                        className={`w-fit touch-none select-none px-3 py-[5px] rounded border text-sm ${
+                          stickingEditModeEnabled
+                            ? "bg-neutral-800 border-neutral-700 text-white"
+                            : "bg-neutral-900 border-neutral-800 text-neutral-600"
+                        }`}
+                        title="When enabled, clicking active hand-hit cells edits R/L sticking instead of toggling notes"
+                      >
+                        Sticking edit mode
+                      </button>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setBeatAutoUpdateEnabled((v) => !v)}
+                        className={`w-fit touch-none select-none px-3 py-[5px] rounded border text-sm ${
+                          beatAutoUpdateEnabled
+                            ? "bg-neutral-800 border-neutral-700 text-white"
+                            : "bg-neutral-900 border-neutral-800 text-neutral-600"
+                        }`}
+                        title="Automatically update the loaded local beat after beat changes. Notation sticking selection always auto-updates."
+                      >
+                        Auto update
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleMainTrashClick}
+                        className={`touch-none select-none inline-flex h-8 w-8 items-center justify-center rounded border ${
+                          canClearSelection
+                            ? "bg-neutral-800 border-neutral-700 text-white"
+                            : "bg-neutral-900 border-neutral-800 text-neutral-500 hover:bg-neutral-800/40"
+                        }`}
+                        title={canClearSelection ? "Clear selection (Cmd/Ctrl+click: reset defaults + delete library)" : "Clear all notes (Cmd/Ctrl+click: reset defaults + delete library)"}
+                        aria-label={canClearSelection ? "Clear selection" : "Clear all notes"}
+                      >
+                        <svg
+                          xmlns="http://www.w3.org/2000/svg"
+                          viewBox="0 0 16 16"
+                          className="-translate-y-px h-[0.95rem] w-[0.95rem]"
+                          fill="currentColor"
+                          aria-hidden="true"
+                        >
+                          <path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0z" />
+                          <path d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4zM2.5 3h11V2h-11z" />
+                        </svg>
+                      </button>
                     </div>
 
                   </div>
@@ -20056,122 +20340,62 @@ useEffect(() => {
               </div>
             </div>
 
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setBeatAutoUpdateEnabled((v) => !v)}
-                className={`w-fit touch-none select-none px-3 py-[5px] rounded border text-sm ${
-                  beatAutoUpdateEnabled
-                    ? "bg-neutral-800 border-neutral-700 text-white"
-                    : "bg-neutral-900 border-neutral-800 text-neutral-600"
-                }`}
-                title="Automatically update the loaded local beat after beat changes. Notation sticking selection always auto-updates."
-              >
-                Auto update
-              </button>
-              <button
-                type="button"
-                onClick={handleMainTrashClick}
-                className={`touch-none select-none inline-flex h-8 w-8 items-center justify-center rounded border ${
-                  canClearSelection
-                    ? "bg-neutral-800 border-neutral-700 text-white"
-                    : "bg-neutral-900 border-neutral-800 text-neutral-500 hover:bg-neutral-800/40"
-                }`}
-                title={canClearSelection ? "Clear selection (Cmd/Ctrl+click: reset defaults + delete library)" : "Clear all notes (Cmd/Ctrl+click: reset defaults + delete library)"}
-                aria-label={canClearSelection ? "Clear selection" : "Clear all notes"}
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  viewBox="0 0 16 16"
-                  className="-translate-y-px h-[0.95rem] w-[0.95rem]"
-                  fill="currentColor"
-                  aria-hidden="true"
-                >
-                  <path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0z" />
-                  <path d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4zM2.5 3h11V2h-11z" />
-                </svg>
-              </button>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() =>
-                  setStickingEditModeEnabled((v) => {
-                    const next = !v;
-                    if (next) {
-                      setStickingGuideEnabled(true);
-                    } else {
-                      setNotationStickingSelectionModeEnabled(false);
-                    }
-                    return next;
-                  })
-                }
-                className={`w-fit touch-none select-none px-3 py-[5px] rounded border text-sm ${
-                  stickingEditModeEnabled
-                    ? "bg-neutral-800 border-neutral-700 text-white"
-                    : "bg-neutral-900 border-neutral-800 text-neutral-600"
-                }`}
-                title="When enabled, clicking active hand-hit cells edits R/L sticking instead of toggling notes"
-              >
-                Sticking edit mode
-              </button>
-            </div>
-
-            <div className="flex flex-col items-start gap-2">
-              <div className="flex w-full items-center justify-between gap-2">
-                <div className="flex items-center gap-1.5">
-                  <span className="text-sm text-neutral-300">Print sticking</span>
-                </div>
-              </div>
+            <div className="flex w-full items-center justify-between gap-2">
+              <span className="shrink-0 text-sm text-neutral-300">Print sticking</span>
               <div className="flex items-center gap-1.5">
                 <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-800 bg-neutral-900/60">
                   <button
                     type="button"
-                    onClick={() => setNotationStickingPrintMode("off")}
-                    className={`min-w-[3.25rem] px-2.5 py-1 text-sm ${
-                      notationStickingSelectionStats.mode === "off"
-                        ? "bg-neutral-900 text-neutral-300"
-                        : "text-neutral-500 hover:bg-neutral-800/60"
-                    }`}
-                    title="Do not print sticking in notation"
+                    onClick={() => cycleNotationStickingPrintMode(-1)}
+                    className="px-2 text-base leading-none text-neutral-500 hover:bg-neutral-800/50 active:bg-neutral-800"
+                    title="Previous print sticking mode"
+                    aria-label="Previous print sticking mode"
                   >
-                    Off
+                    -
                   </button>
                   <button
                     type="button"
-                    onClick={() => setNotationStickingPrintMode("all")}
-                    className={`min-w-[3.25rem] border-l border-neutral-800 px-2.5 py-1 text-sm ${
-                      notationStickingSelectionStats.mode === "all"
-                        ? "bg-neutral-900 text-neutral-300"
-                        : "text-neutral-500 hover:bg-neutral-800/60"
-                    }`}
-                    title="Print all sticking in notation"
-                  >
-                    All
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleCustomNotationStickingModeToggle}
-                    className={`min-w-[4.1rem] border-l border-neutral-800 px-2.5 py-1 text-sm ${
+                    onClick={() => {
+                      if (notationStickingSelectionStats.mode === "custom") {
+                        handleCustomNotationStickingModeToggle();
+                      }
+                    }}
+                    className={`min-w-[72px] px-3 py-1 flex items-center justify-center text-sm border-l border-r border-neutral-800 ${
                       notationStickingSelectionModeEnabled
                         ? "bg-neutral-800 text-white"
-                        : notationStickingSelectionStats.mode === "custom"
-                          ? "bg-neutral-900 text-neutral-300"
-                          : "text-neutral-500 hover:bg-neutral-800/60"
+                        : "bg-neutral-900/60 text-neutral-500 hover:bg-neutral-800/50"
                     }`}
                     title={
-                      notationStickingSelectionModeEnabled
-                        ? "Finish editing custom sticking selection"
-                        : notationStickingSelectionStats.mode === "custom"
-                          ? "Edit custom sticking selection"
-                          : "Use a custom sticking selection"
+                      notationStickingSelectionStats.mode === "custom"
+                        ? notationStickingSelectionModeEnabled
+                          ? "Finish editing custom sticking selection"
+                          : "Edit custom sticking selection"
+                        : notationStickingSelectionStats.mode === "all"
+                          ? "Print all sticking in notation"
+                          : "Do not print sticking in notation"
                     }
                   >
-                    Custom
+                    {notationStickingSelectionStats.mode === "all"
+                      ? "All"
+                      : notationStickingSelectionStats.mode === "custom"
+                        ? "Custom"
+                        : "Off"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => cycleNotationStickingPrintMode(1)}
+                    className="px-2 text-base leading-none text-neutral-500 hover:bg-neutral-800/50 active:bg-neutral-800"
+                    title="Next print sticking mode"
+                    aria-label="Next print sticking mode"
+                  >
+                    +
                   </button>
                 </div>
-                <div className="relative shrink-0">
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <div className="relative shrink-0">
                   <button
                     ref={editingAdvancedMenuButtonRef}
                     type="button"
@@ -20224,8 +20448,66 @@ useEffect(() => {
                       </div>
                     </div>
                   )}
-                </div>
               </div>
+              <button
+                type="button"
+                onClick={() =>
+                  setStickingEditModeEnabled((v) => {
+                    const next = !v;
+                    if (next) {
+                      setStickingGuideEnabled(true);
+                    } else {
+                      setNotationStickingSelectionModeEnabled(false);
+                    }
+                    return next;
+                  })
+                }
+                className={`w-fit touch-none select-none px-3 py-[5px] rounded border text-sm ${
+                  stickingEditModeEnabled
+                    ? "bg-neutral-800 border-neutral-700 text-white"
+                    : "bg-neutral-900 border-neutral-800 text-neutral-600"
+                }`}
+                title="When enabled, clicking active hand-hit cells edits R/L sticking instead of toggling notes"
+              >
+                Sticking edit mode
+              </button>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setBeatAutoUpdateEnabled((v) => !v)}
+                className={`w-fit touch-none select-none px-3 py-[5px] rounded border text-sm ${
+                  beatAutoUpdateEnabled
+                    ? "bg-neutral-800 border-neutral-700 text-white"
+                    : "bg-neutral-900 border-neutral-800 text-neutral-600"
+                }`}
+                title="Automatically update the loaded local beat after beat changes. Notation sticking selection always auto-updates."
+              >
+                Auto update
+              </button>
+              <button
+                type="button"
+                onClick={handleMainTrashClick}
+                className={`touch-none select-none inline-flex h-8 w-8 items-center justify-center rounded border ${
+                  canClearSelection
+                    ? "bg-neutral-800 border-neutral-700 text-white"
+                    : "bg-neutral-900 border-neutral-800 text-neutral-500 hover:bg-neutral-800/40"
+                }`}
+                title={canClearSelection ? "Clear selection (Cmd/Ctrl+click: reset defaults + delete library)" : "Clear all notes (Cmd/Ctrl+click: reset defaults + delete library)"}
+                aria-label={canClearSelection ? "Clear selection" : "Clear all notes"}
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 16 16"
+                  className="-translate-y-px h-[0.95rem] w-[0.95rem]"
+                  fill="currentColor"
+                  aria-hidden="true"
+                >
+                  <path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0z" />
+                  <path d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4zM2.5 3h11V2h-11z" />
+                </svg>
+              </button>
             </div>
           </div>
         </div>
@@ -20293,6 +20575,14 @@ useEffect(() => {
         setSelection(null);
       }}
     >
+      {isMidiWindowDragActive ? (
+        <div className="pointer-events-none fixed inset-0 z-[170] flex items-center justify-center bg-black/35">
+          <div className="rounded-xl border border-neutral-700 bg-neutral-900/90 px-5 py-4 text-center shadow-2xl">
+            <div className="text-base font-medium text-white">Drop MIDI to import</div>
+            <div className="mt-1 text-sm text-neutral-400">.mid or .midi</div>
+          </div>
+        </div>
+      ) : null}
       
       {isEmbedMode && (
         <header className="mb-3 flex items-center justify-between gap-3" data-loopui='1'>
@@ -20752,6 +21042,8 @@ useEffect(() => {
                 bakeLoopPreview={bakeLoopPreview}
                 hoveredGridCellRef={hoveredGridCellRef}
                 labelGutterWidth={currentGridLabelGutterWidth}
+                tupletGridAppearanceByValue={tupletGridAppearanceByValue}
+                darkenCountRowNonQuarters={darkenCountRowNonQuarters}
       />
             </div>
             </div>
@@ -20805,7 +21097,9 @@ useEffect(() => {
                 bakeLoopPreview={bakeLoopPreview}
                 hoveredGridCellRef={hoveredGridCellRef}
                 labelGutterWidth={currentGridLabelGutterWidth}
-              />
+                tupletGridAppearanceByValue={tupletGridAppearanceByValue}
+                darkenCountRowNonQuarters={darkenCountRowNonQuarters}
+      />
             </div>
             </div>
 
@@ -26168,6 +26462,163 @@ useEffect(() => {
                         </div>
                       ) : null}
                     </div>
+                    <div className="mt-5 flex items-center justify-between gap-2">
+                      <div className="text-sm font-normal text-neutral-200">Tuplet cells</div>
+                    </div>
+                    <div className="mt-2">
+                      <div className="flex flex-wrap gap-2">
+                        {[3, 5, 6, 7, 9].map((tupletValue) => {
+                          const appearance =
+                            tupletGridAppearanceByValue?.[tupletValue] ||
+                            DEFAULT_TUPLET_GRID_APPEARANCE_BY_VALUE[tupletValue];
+                          const isOpen = openTupletAppearanceEditor === tupletValue;
+                          return (
+                            <button
+                              key={`tuplet-opacity-${tupletValue}`}
+                              type="button"
+                              onClick={() => setOpenTupletAppearanceEditor((prev) => (prev === tupletValue ? null : tupletValue))}
+                              className={`inline-flex items-center gap-2 rounded border px-2.5 py-1.5 text-sm transition ${
+                                isOpen
+                                  ? "border-neutral-600 bg-neutral-800 text-neutral-100"
+                                  : "border-neutral-800 bg-neutral-900 text-neutral-300 hover:border-neutral-700"
+                              }`}
+                            >
+                              <span
+                                className="h-3 w-3 rounded-sm border border-neutral-800"
+                                style={{ backgroundColor: formatTupletHslColor(appearance, 1) }}
+                                aria-hidden="true"
+                              />
+                              <span>{tupletValue}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                      {openTupletAppearanceEditor != null && (() => {
+                        const tupletValue = openTupletAppearanceEditor;
+                        const appearance =
+                          tupletGridAppearanceByValue?.[tupletValue] ||
+                          DEFAULT_TUPLET_GRID_APPEARANCE_BY_VALUE[tupletValue];
+                        const opacity = Math.max(0, Math.min(100, Math.round(Number(appearance?.opacity) || 0)));
+                        const hexValue = hslToHex(appearance?.h, appearance?.s, appearance?.l);
+                        return (
+                          <div className="mt-3 rounded-xl border border-neutral-700 bg-neutral-900/95 px-3 py-3 shadow-[0_10px_30px_rgba(0,0,0,0.35)]">
+                            <div className="mb-3 flex items-center justify-between gap-3">
+                              <div className="flex items-center gap-2">
+                                <span
+                                  className="h-3.5 w-3.5 rounded-sm border border-neutral-800"
+                                  style={{ backgroundColor: formatTupletHslColor(appearance, 1) }}
+                                  aria-hidden="true"
+                                />
+                                <span className="text-sm text-neutral-200">Tuplet {tupletValue}</span>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => setOpenTupletAppearanceEditor(null)}
+                                className="rounded border border-neutral-800 px-2 py-1 text-xs text-neutral-400 hover:border-neutral-700 hover:text-neutral-200"
+                              >
+                                Close
+                              </button>
+                            </div>
+                            <div className="mb-3 flex items-center gap-3">
+                              <span className="w-4 text-xs text-neutral-500">#</span>
+                              <input
+                                type="text"
+                                inputMode="text"
+                                spellCheck={false}
+                                value={hexValue}
+                                onChange={(e) => {
+                                  const parsed = hexToHsl(e.target.value);
+                                  if (!parsed) return;
+                                  setTupletGridAppearanceByValue((prev) => ({
+                                    ...prev,
+                                    [tupletValue]: {
+                                      ...(prev?.[tupletValue] || DEFAULT_TUPLET_GRID_APPEARANCE_BY_VALUE[tupletValue]),
+                                      h: parsed.h,
+                                      s: parsed.s,
+                                      l: parsed.l,
+                                    },
+                                  }));
+                                }}
+                                className="min-w-0 flex-1 rounded border border-neutral-800 bg-neutral-950 px-2.5 py-1.5 text-sm text-neutral-200 outline-none transition focus:border-neutral-700"
+                              />
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setTupletGridAppearanceByValue((prev) => ({
+                                    ...prev,
+                                    [tupletValue]: {
+                                      ...(prev?.[tupletValue] || DEFAULT_TUPLET_GRID_APPEARANCE_BY_VALUE[tupletValue]),
+                                      h: DEFAULT_TUPLET_GRID_APPEARANCE_BY_VALUE[tupletValue]?.h ?? appearance?.h ?? 0,
+                                      s: DEFAULT_TUPLET_GRID_APPEARANCE_BY_VALUE[tupletValue]?.s ?? appearance?.s ?? 0,
+                                      l: DEFAULT_TUPLET_GRID_APPEARANCE_BY_VALUE[tupletValue]?.l ?? appearance?.l ?? 0,
+                                    },
+                                  }))
+                                }
+                                className="rounded border border-neutral-800 px-2 py-1 text-xs text-neutral-400 hover:border-neutral-700 hover:text-neutral-200"
+                                title="Reset hex color to default"
+                              >
+                                Reset
+                              </button>
+                            </div>
+                            <div className="grid gap-2">
+                              {[
+                                { key: "h", label: "H", min: 0, max: 360, value: appearance?.h ?? 0 },
+                                { key: "s", label: "S", min: 0, max: 100, value: appearance?.s ?? 0 },
+                                { key: "l", label: "L", min: 0, max: 100, value: appearance?.l ?? 0 },
+                                { key: "opacity", label: "A", min: 0, max: 100, value: opacity },
+                              ].map((slider) => (
+                                <div key={slider.key} className="flex items-center gap-3">
+                                  <span className="w-4 text-xs text-neutral-500">{slider.label}</span>
+                                  <input
+                                    type="range"
+                                    min={slider.min}
+                                    max={slider.max}
+                                    step="1"
+                                    value={slider.value}
+                                    onDoubleClick={() =>
+                                      setTupletGridAppearanceByValue((prev) => ({
+                                        ...prev,
+                                        [tupletValue]: {
+                                          ...(prev?.[tupletValue] || DEFAULT_TUPLET_GRID_APPEARANCE_BY_VALUE[tupletValue]),
+                                          [slider.key]: DEFAULT_TUPLET_GRID_APPEARANCE_BY_VALUE[tupletValue]?.[slider.key] ?? slider.value,
+                                        },
+                                      }))
+                                    }
+                                    onChange={(e) =>
+                                      setTupletGridAppearanceByValue((prev) => ({
+                                        ...prev,
+                                        [tupletValue]: {
+                                          ...(prev?.[tupletValue] || DEFAULT_TUPLET_GRID_APPEARANCE_BY_VALUE[tupletValue]),
+                                          [slider.key]: Number(e.target.value),
+                                        },
+                                      }))
+                                    }
+                                    className="flex-1 accent-neutral-700 opacity-80"
+                                    title="Double-click to reset to default"
+                                  />
+                                  <span className="w-10 text-right text-xs text-neutral-400">{slider.value}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </div>
+                    <div className="mt-5 flex items-center justify-between gap-3">
+                      <span className="text-sm text-neutral-300">Emphasize quarter counts</span>
+                      <button
+                        type="button"
+                        onClick={() => setDarkenCountRowNonQuarters((v) => !v)}
+                        className={`w-fit whitespace-nowrap touch-none select-none px-3 py-[5px] rounded border text-sm ${
+                          darkenCountRowNonQuarters
+                            ? "bg-neutral-800 border-neutral-700 text-white"
+                            : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
+                        }`}
+                        title="Make the quarter counts stand out more than the subdivision labels"
+                      >
+                        {darkenCountRowNonQuarters ? "On" : "Off"}
+                      </button>
+                    </div>
                   </>
                 ) : (
                   <>
@@ -26829,7 +27280,7 @@ function Grid({
   grid, columns, bars, stepsPerBar, resolution, timeSig, quarterSubdivisionsByBar, normalizedTupletOverridesByBar, barStepOffsets, cycleTupletAt, resetTupletAt, visibleQuarterSubdivisions, onSetVisibleQuarterSubdivisions, gridBarsPerLine,
   cycleVelocity, toggleGhost, selection, setSelection, loopRule,
     loopRepeats,
-  setLoopRule, wrappedSelectionCells, playhead, moveSelectionByDelta, playabilityWarningsEnabled, playabilityWarningStepSet, stickingConflictStepSet, stickingGuideEnabled, showEditedSticking, notationStickingSelection, stickingAssignmentsByStep, stickingEditModeEnabled, notationStickingSelectionModeEnabled, stickingOverrides, onCycleStickingOverride, onToggleNotationStickingSelection, onDisableNotationStickingSelectionMode, onDisableStickingEditMode, bakeLoopPreview, hoveredGridCellRef, labelGutterWidth = "calc(8ch + 0.75rem)"
+  setLoopRule, wrappedSelectionCells, playhead, moveSelectionByDelta, playabilityWarningsEnabled, playabilityWarningStepSet, stickingConflictStepSet, stickingGuideEnabled, showEditedSticking, notationStickingSelection, stickingAssignmentsByStep, stickingEditModeEnabled, notationStickingSelectionModeEnabled, stickingOverrides, onCycleStickingOverride, onToggleNotationStickingSelection, onDisableNotationStickingSelectionMode, onDisableStickingEditMode, bakeLoopPreview, hoveredGridCellRef, labelGutterWidth = "calc(8ch + 0.75rem)", tupletGridAppearanceByValue = DEFAULT_TUPLET_GRID_APPEARANCE_BY_VALUE, darkenCountRowNonQuarters = true
 }) {
   const gridContentOffsetStyle = React.useMemo(
     () => ({ transform: "translateX(-0.6rem)" }),
@@ -27154,7 +27605,13 @@ function Grid({
       const globalQuarterIdx = (quarterOffsetByBar?.[barIdx] ?? 0) + quarterIdx;
       const tuplet = normalizedTupletOverridesByBar?.[barIdx]?.[quarterIdx] ?? null;
       if (tuplet != null && !isPowerOfTwoSubdivision(tuplet)) {
-        return TUPLET_COLOR_CLASS[tuplet] || "bg-amber-900/25";
+        const prevTuplet = normalizedTupletOverridesByBar?.[barIdx]?.[quarterIdx - 1] ?? null;
+        const nextTuplet = normalizedTupletOverridesByBar?.[barIdx]?.[quarterIdx + 1] ?? null;
+        const hasTupletNeighbor =
+          (prevTuplet != null && !isPowerOfTwoSubdivision(prevTuplet)) ||
+          (nextTuplet != null && !isPowerOfTwoSubdivision(nextTuplet));
+        if (hasTupletNeighbor && globalQuarterIdx % 2 === 1) return "is-tuplet-band-dark";
+        return "is-tuplet-band";
       }
       if (
         tuplet != null &&
@@ -27170,6 +27627,29 @@ function Grid({
     },
     [normalizedTupletOverridesByBar, resolution, quarterOffsetByBar, gridBaseSubdivPerQuarter]
   );
+  const getTupletQuarterBandStyle = React.useCallback((tupletValue, dark = false) => {
+    const appearance =
+      tupletGridAppearanceByValue?.[tupletValue] ||
+      DEFAULT_TUPLET_GRID_APPEARANCE_BY_VALUE[String(tupletValue)] ||
+      DEFAULT_TUPLET_GRID_APPEARANCE_BY_VALUE[tupletValue] ||
+      DEFAULT_TUPLET_GRID_APPEARANCE_BY_VALUE[3];
+    const opacity = Math.max(0, Math.min(100, Number(appearance?.opacity) || 0)) / 100;
+    if (!dark) {
+      if (opacity <= 0) return { backgroundColor: "transparent" };
+      return {
+        backgroundColor: formatTupletHslColor(appearance, opacity),
+      };
+    }
+    const darkBase = "rgba(0, 0, 0, 0.14)";
+    if (opacity <= 0) return { backgroundColor: darkBase };
+    const darkOpacity = Math.min(1, opacity + opacity * 0.25);
+    const darkColor = formatTupletHslColor(appearance, darkOpacity);
+    return {
+      backgroundImage: [`linear-gradient(${darkBase}, ${darkBase})`, `linear-gradient(${darkColor}, ${darkColor})`].join(
+        ", "
+      ),
+    };
+  }, [tupletGridAppearanceByValue]);
 
   const getQuarterBorderClass = React.useCallback(
     (barIdx, stepMeta) => {
@@ -27178,7 +27658,14 @@ function Grid({
       const quarterCellCount = Math.max(1, Number(stepMeta.subdiv) || 1);
       const globalQuarterIdx = (quarterOffsetByBar?.[barIdx] ?? 0) + quarterIdx;
       const tuplet = normalizedTupletOverridesByBar?.[barIdx]?.[quarterIdx] ?? null;
-      if (tuplet != null && !isPowerOfTwoSubdivision(tuplet)) return "";
+      if (tuplet != null && !isPowerOfTwoSubdivision(tuplet)) {
+        const prevTuplet = normalizedTupletOverridesByBar?.[barIdx]?.[quarterIdx - 1] ?? null;
+        const nextTuplet = normalizedTupletOverridesByBar?.[barIdx]?.[quarterIdx + 1] ?? null;
+        const hasTupletNeighbor =
+          (prevTuplet != null && !isPowerOfTwoSubdivision(prevTuplet)) ||
+          (nextTuplet != null && !isPowerOfTwoSubdivision(nextTuplet));
+        return hasTupletNeighbor && globalQuarterIdx % 2 === 1 ? "border-[#212121]" : "";
+      }
       if (
         tuplet != null &&
         isPowerOfTwoSubdivision(tuplet) &&
@@ -27374,7 +27861,7 @@ function Grid({
           <div className="mb-2 text-sm font-medium text-neutral-100">Subdivisions</div>
           <div className="mb-2 text-xs text-neutral-500">Notes per quarter</div>
           <div className="grid grid-cols-2 gap-1.5">
-            {QUARTER_SUBDIVISION_CYCLE.map((value) => {
+            {QUARTER_SUBDIVISION_CYCLE.filter((value) => value !== 2).map((value) => {
               const enabled = normalizeVisibleQuarterSubdivisions(visibleQuarterSubdivisions).includes(value);
               return (
                 <button
@@ -27424,7 +27911,10 @@ function Grid({
                 {timeline.map((t, i) => {
                   if (t.type === "gap") return <div key={t.key} />;
                   const label = labelFor(t.stepMeta || { quarterIndex: 0, subIndex: 0, subdiv: 1 });
+                  const quarterBandClass = getQuarterBandClass(t.bar, t.stepMeta);
                   const quarterBorderClass = getQuarterBorderClass(t.bar, t.stepMeta);
+                  const quarterTupletValue =
+                    normalizedTupletOverridesByBar?.[t.bar]?.[t.stepMeta?.quarterIndex ?? 0] ?? null;
               return (
                 <div
                   key={`h-${t.stepIndex}`}
@@ -27475,9 +27965,26 @@ function Grid({
                       aria-hidden="true"
                     />
                   )}
+                  {(quarterBandClass || quarterBorderClass) ? (
+                    <span
+                      className={`pointer-events-none absolute inset-0 rounded-sm ${quarterBandClass}`}
+                      style={
+                        quarterBandClass === "is-tuplet-band"
+                          ? getTupletQuarterBandStyle(quarterTupletValue, false)
+                          : quarterBandClass === "is-tuplet-band-dark"
+                            ? getTupletQuarterBandStyle(quarterTupletValue, true)
+                            : undefined
+                      }
+                      aria-hidden="true"
+                    />
+                  ) : null}
                   <span
                     className={`absolute bottom-0 inset-x-0 hover:text-neutral-200 ${
-                      /^\d+$/.test(label) ? "text-neutral-400" : "text-neutral-600"
+                      /^\d+$/.test(label)
+                        ? "text-neutral-400"
+                        : darkenCountRowNonQuarters
+                          ? "text-neutral-600"
+                          : "text-neutral-400"
                     }`}
                   >
                     {label}
@@ -27513,6 +28020,8 @@ function Grid({
                   const val = grid[inst.id]?.[t.stepIndex] ?? CELL.OFF;
                   const quarterBandClass = getQuarterBandClass(t.bar, t.stepMeta);
                   const quarterBorderClass = getQuarterBorderClass(t.bar, t.stepMeta);
+                  const quarterTupletValue =
+                    normalizedTupletOverridesByBar?.[t.bar]?.[t.stepMeta?.quarterIndex ?? 0] ?? null;
                   const isUnplayableStep = !!playabilityWarningStepSet?.has(t.stepIndex);
                   const hasPlayabilityWarning =
                     !!playabilityWarningsEnabled && isUnplayableStep;
@@ -27982,6 +28491,13 @@ function Grid({
                         className={`pointer-events-none absolute inset-0 ${quarterBandClass} ${
                           quarterBandClass ? "opacity-100" : (val === CELL.OFF ? "opacity-100" : "opacity-40")
                         }`}
+                        style={
+                          quarterBandClass === "is-tuplet-band"
+                            ? getTupletQuarterBandStyle(quarterTupletValue, false)
+                            : quarterBandClass === "is-tuplet-band-dark"
+                              ? getTupletQuarterBandStyle(quarterTupletValue, true)
+                              : undefined
+                        }
                         aria-hidden="true"
                       />
                       {stickingHand && (
