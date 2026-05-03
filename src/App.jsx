@@ -40,6 +40,8 @@ const FEEDBACK_ANON_FINGERPRINT_STORAGE_KEY = "drum-grid-feedback-anon-fingerpri
 const BEAT_AUTO_UPDATE_ENABLED_STORAGE_KEY = "drum-grid-beat-auto-update-enabled-v1";
 const TUPLET_GRID_APPEARANCE_BY_VALUE_STORAGE_KEY = "drum-grid-tuplet-grid-appearance-by-value-v2";
 const COUNT_ROW_DARKEN_NON_QUARTERS_STORAGE_KEY = "drum-grid-count-row-darken-non-quarters-v1";
+const PERSONAL_CLOUD_BEAT_LIMIT = 1000;
+const PERSONAL_CLOUD_ARRANGEMENT_LIMIT = 100;
 const SHORTCUTS = [
   {
     id: "play_toggle",
@@ -901,7 +903,7 @@ const TEMPORARY_SHARE_LINK_CLEANUP_INTERVAL_MS = 1000 * 60 * 60 * 24;
 const BEAT_LIBRARY_SELECTED_CONTAINER_STORAGE_KEY = "drum-grid-beat-library-selected-container-v1";
 const BEAT_LIBRARY_ROOT_COLLAPSED_STORAGE_KEY = "drum-grid-beat-library-root-collapsed-v1";
 const GRID_SETTINGS_PRESET_LIBRARY_STORAGE_KEY = "drum-grid-grid-settings-presets-v1";
-const APP_VERSION = "0.1.462";
+const APP_VERSION = "0.1.496";
 const BEAT_CATEGORY_OPTIONS = [
   "Groove",
   "Fill",
@@ -1108,7 +1110,7 @@ const MIDI_IMPORT_MAPPING_PRESET_BY_ID = Object.fromEntries(
 const TUPLET_OPTIONS = [null, 3, 5, 6, 7, 9];
 const QUARTER_SUBDIVISION_CYCLE = [2, 3, 4, 5, 6, 7, 8, 9];
 const QUARTER_SUBDIVISION_VISIBILITY_STORAGE_KEY = "drum-grid-quarter-subdivision-visibility-v1";
-const DEFAULT_VISIBLE_QUARTER_SUBDIVISIONS = [3, 4, 5, 6, 7, 8];
+const DEFAULT_VISIBLE_QUARTER_SUBDIVISIONS = [3, 5, 7];
 const QUARTER_SUBDIVISION_LABELS = {
   2: "2",
   3: "3",
@@ -1714,6 +1716,22 @@ function getComparableBeatPayload(payload) {
       ? { notationStickingSelection: nextNotationStickingSelection }
       : {}),
   };
+  if (next.showNotationSticking === false) {
+    delete next.notationStickingSelection;
+  } else if (next.notationStickingSelection) {
+    const normalizedSelection = Object.fromEntries(
+      Object.entries(next.notationStickingSelection).filter(([, value]) => value === true)
+    );
+    const normalizedKeys = Object.keys(normalizedSelection).sort();
+    const allKeys = Object.keys(buildNotationStickingSelectionFromPayloadGrid(next.grid)).sort();
+    const matchesAll =
+      allKeys.length > 0 &&
+      normalizedKeys.length === allKeys.length &&
+      allKeys.every((key, idx) => key === normalizedKeys[idx]);
+    if (matchesAll) {
+      delete next.notationStickingSelection;
+    }
+  }
   delete next.libraryMeta;
   return next;
 }
@@ -2634,15 +2652,53 @@ function normalizeVisibleQuarterSubdivisions(raw) {
   return out.length ? out : [...DEFAULT_VISIBLE_QUARTER_SUBDIVISIONS];
 }
 
-function buildQuarterSubdivisionCycle(visibleValues, baseSubdiv, currentEffective) {
-  const included = new Set(normalizeVisibleQuarterSubdivisions(visibleValues));
-  if (Number.isFinite(baseSubdiv)) included.add(Math.max(1, Math.round(baseSubdiv)));
-  if (Number.isFinite(currentEffective)) included.add(Math.max(1, Math.round(currentEffective)));
+function buildQuarterSubdivisionCycle(visibleValues, baseSubdiv, currentEffective = null) {
+  const source =
+    Array.isArray(visibleValues) && visibleValues.length
+      ? visibleValues
+      : DEFAULT_VISIBLE_QUARTER_SUBDIVISIONS;
+  const included = new Set(source);
+  if (Number.isFinite(baseSubdiv)) {
+    included.add(Math.max(1, Math.round(baseSubdiv)));
+  }
+  if (Number.isFinite(currentEffective)) {
+    included.add(Math.max(1, Math.round(currentEffective)));
+  }
   return QUARTER_SUBDIVISION_CYCLE.filter((value) => included.has(value));
 }
 
 function resolveQuarterSubdivisions(tupletOverrides, baseSubdiv) {
   return (tupletOverrides || []).map((v) => clampTupletValue(v) ?? baseSubdiv);
+}
+
+function buildNotationStickingSelectionFromGridRows(gridLike, instrumentDefs, maxColumns = Infinity) {
+  const next = {};
+  const defs = Array.isArray(instrumentDefs) ? instrumentDefs : [];
+  defs.forEach((inst) => {
+    const instId = inst?.id;
+    if (!instId || FOOT_INSTRUMENTS.has(instId)) return;
+    const row = Array.isArray(gridLike?.[instId]) ? gridLike[instId] : [];
+    for (let idx = 0; idx < Math.min(maxColumns, row.length); idx += 1) {
+      if (row[idx] !== CELL.OFF) next[`${instId}:${idx}`] = true;
+    }
+  });
+  return next;
+}
+
+function buildNotationStickingSelectionFromPayloadGrid(payloadGrid) {
+  const next = {};
+  ALL_INSTRUMENTS.forEach((inst) => {
+    const instId = inst?.id;
+    if (!instId || FOOT_INSTRUMENTS.has(instId)) return;
+    const events = Array.isArray(payloadGrid?.[instId]) ? payloadGrid[instId] : [];
+    events.forEach((entry) => {
+      if (!Array.isArray(entry) || entry.length < 2) return;
+      const idx = Math.max(0, Math.round(Number(entry[0]) || 0));
+      const code = Math.max(0, Math.round(Number(entry[1]) || 0));
+      if (code > 0) next[`${instId}:${idx}`] = true;
+    });
+  });
+  return next;
 }
 
 function isPowerOfTwoSubdivision(count) {
@@ -3708,7 +3764,6 @@ export default function App() {
   const [openTupletAppearanceEditor, setOpenTupletAppearanceEditor] = useState(null);
   const [shortcutBindings, setShortcutBindings] = useState(() => shortcutsMapFromStorage());
   const [isEditingAdvancedMenuOpen, setIsEditingAdvancedMenuOpen] = useState(false);
-  const [isRhythmSpellingMenuOpen, setIsRhythmSpellingMenuOpen] = useState(false);
   const [isNotationStickingMenuOpen, setIsNotationStickingMenuOpen] = useState(false);
   const [isLoopAdvancedMenuOpen, setIsLoopAdvancedMenuOpen] = useState(false);
   const [legalTab, setLegalTab] = useState("impressum"); // impressum | privacy
@@ -4821,8 +4876,6 @@ export default function App() {
   const bpmButtonScrubSuppressUntilRef = React.useRef(0);
   const editingAdvancedMenuRef = React.useRef(null);
   const editingAdvancedMenuButtonRef = React.useRef(null);
-  const rhythmSpellingMenuRef = React.useRef(null);
-  const rhythmSpellingMenuButtonRef = React.useRef(null);
   const notationStickingMenuRef = React.useRef(null);
   const notationStickingMenuButtonRef = React.useRef(null);
   const loopAdvancedMenuRef = React.useRef(null);
@@ -4914,6 +4967,93 @@ export default function App() {
       if (!silent) setUsageLimitsLoading(false);
     }
   }, [callUsageLimitsApi]);
+  const normalizeCloudLibraryQuotaSnapshot = React.useCallback((cloudLibrary) => {
+    if (!cloudLibrary || typeof cloudLibrary !== "object") return null;
+    const limitBeats = Math.max(
+      0,
+      Number(cloudLibrary?.limits?.beats) || PERSONAL_CLOUD_BEAT_LIMIT
+    );
+    const limitArrangements = Math.max(
+      0,
+      Number(cloudLibrary?.limits?.arrangements) || PERSONAL_CLOUD_ARRANGEMENT_LIMIT
+    );
+    const countBeats = Math.max(0, Number(cloudLibrary?.counts?.beats) || 0);
+    const countArrangements = Math.max(0, Number(cloudLibrary?.counts?.arrangements) || 0);
+    const hasBeatSignal =
+      Number.isFinite(Number(cloudLibrary?.limits?.beats)) ||
+      Number.isFinite(Number(cloudLibrary?.counts?.beats)) ||
+      Number.isFinite(Number(cloudLibrary?.remaining?.beats));
+    const hasArrangementSignal =
+      Number.isFinite(Number(cloudLibrary?.limits?.arrangements)) ||
+      Number.isFinite(Number(cloudLibrary?.counts?.arrangements)) ||
+      Number.isFinite(Number(cloudLibrary?.remaining?.arrangements));
+    if (!hasBeatSignal && !hasArrangementSignal) return null;
+    return {
+      limits: {
+        beats: limitBeats,
+        arrangements: limitArrangements,
+      },
+      counts: {
+        beats: countBeats,
+        arrangements: countArrangements,
+      },
+      remaining: {
+        beats: Math.max(
+          0,
+          Number(cloudLibrary?.remaining?.beats) || (limitBeats - countBeats)
+        ),
+        arrangements: Math.max(
+          0,
+          Number(cloudLibrary?.remaining?.arrangements) || (limitArrangements - countArrangements)
+        ),
+      },
+    };
+  }, []);
+  const getVerifiedCloudLibraryQuota = React.useCallback(async () => {
+    if (!authUser?.id || !hasSupabaseEnabled || !supabase) return null;
+    const snapshot = (await refreshUsageLimits({ silent: true })) || usageLimits;
+    const normalizedSnapshot = normalizeCloudLibraryQuotaSnapshot(snapshot?.cloudLibrary);
+    if (normalizedSnapshot) return normalizedSnapshot;
+    try {
+      const [{ count: beatsCount, error: beatsError }, { count: arrangementsCount, error: arrangementsError }] =
+        await Promise.all([
+          supabase
+            .from("beats")
+            .select("id", { count: "exact", head: true })
+            .eq("user_id", authUser.id),
+          supabase
+            .from("arrangements")
+            .select("id", { count: "exact", head: true })
+            .eq("user_id", authUser.id),
+        ]);
+      if (beatsError || arrangementsError) throw beatsError || arrangementsError;
+      const safeBeatCount = Math.max(0, Number(beatsCount) || 0);
+      const safeArrangementCount = Math.max(0, Number(arrangementsCount) || 0);
+      return {
+        limits: {
+          beats: PERSONAL_CLOUD_BEAT_LIMIT,
+          arrangements: PERSONAL_CLOUD_ARRANGEMENT_LIMIT,
+        },
+        counts: {
+          beats: safeBeatCount,
+          arrangements: safeArrangementCount,
+        },
+        remaining: {
+          beats: Math.max(0, PERSONAL_CLOUD_BEAT_LIMIT - safeBeatCount),
+          arrangements: Math.max(0, PERSONAL_CLOUD_ARRANGEMENT_LIMIT - safeArrangementCount),
+        },
+      };
+    } catch (_) {
+      return null;
+    }
+  }, [
+    authUser?.id,
+    hasSupabaseEnabled,
+    normalizeCloudLibraryQuotaSnapshot,
+    refreshUsageLimits,
+    supabase,
+    usageLimits,
+  ]);
   const ensureShortShareQuotaAvailable = React.useCallback(async () => {
     const snapshot = (await refreshUsageLimits({ silent: true })) || usageLimits;
     const shortLinks = snapshot?.shortLinks;
@@ -4937,23 +5077,24 @@ export default function App() {
   }, [refreshUsageLimits, usageLimits]);
   const ensureCloudBeatQuotaAvailable = React.useCallback(async () => {
     if (!authUser?.id || !hasSupabaseEnabled || !supabase) return true;
-    const snapshot = (await refreshUsageLimits({ silent: true })) || usageLimits;
-    const cloudLibrary = snapshot?.cloudLibrary;
+    const cloudLibrary = await getVerifiedCloudLibraryQuota();
+    if (!cloudLibrary) return true;
     const remaining = Math.max(0, Number(cloudLibrary?.remaining?.beats) || 0);
     if (remaining < 1) {
       throw new Error("Personal cloud beat limit reached. Delete beats or keep working locally.");
     }
     return true;
-  }, [authUser?.id, hasSupabaseEnabled, refreshUsageLimits, supabase, usageLimits]);
+  }, [authUser?.id, getVerifiedCloudLibraryQuota, hasSupabaseEnabled, supabase]);
   const ensureCloudArrangementQuotaAvailable = React.useCallback(async (extraNeeded = 1) => {
     if (!authUser?.id || !hasSupabaseEnabled || !supabase) return true;
-    const snapshot = (await refreshUsageLimits({ silent: true })) || usageLimits;
-    const remaining = Math.max(0, Number(snapshot?.cloudLibrary?.remaining?.arrangements) || 0);
+    const cloudLibrary = await getVerifiedCloudLibraryQuota();
+    if (!cloudLibrary) return true;
+    const remaining = Math.max(0, Number(cloudLibrary?.remaining?.arrangements) || 0);
     if (remaining < Math.max(1, Number(extraNeeded) || 1)) {
       throw new Error("Personal cloud arrangement limit reached. Delete arrangements or keep working locally.");
     }
     return true;
-  }, [authUser?.id, hasSupabaseEnabled, refreshUsageLimits, supabase, usageLimits]);
+  }, [authUser?.id, getVerifiedCloudLibraryQuota, hasSupabaseEnabled, supabase]);
   const normalizeFeedbackItem = React.useCallback((row) => {
     if (!row || typeof row !== "object") return null;
     const body = String(row.body || "").trim();
@@ -5946,15 +6087,15 @@ export default function App() {
     const localFoldersToMerge = (Array.isArray(source.folders) ? source.folders : []).filter((entry) =>
       selectedFolderIds.has(String(entry?.id || ""))
     );
-    const quotaSnapshot = (await refreshUsageLimits({ silent: true })) || usageLimits;
-    const remainingBeatSlots = Math.max(0, Number(quotaSnapshot?.cloudLibrary?.remaining?.beats) || 0);
-    const remainingArrangementSlots = Math.max(0, Number(quotaSnapshot?.cloudLibrary?.remaining?.arrangements) || 0);
-    if (localBeatsToMerge.length > remainingBeatSlots) {
+    const cloudLibraryQuota = await getVerifiedCloudLibraryQuota();
+    const remainingBeatSlots = Math.max(0, Number(cloudLibraryQuota?.remaining?.beats) || 0);
+    const remainingArrangementSlots = Math.max(0, Number(cloudLibraryQuota?.remaining?.arrangements) || 0);
+    if (cloudLibraryQuota && localBeatsToMerge.length > remainingBeatSlots) {
       throw new Error(
         `Personal cloud beat limit reached. You can merge ${remainingBeatSlots} more beat${remainingBeatSlots === 1 ? "" : "s"} right now.`
       );
     }
-    if (localArrangementsToMerge.length > remainingArrangementSlots) {
+    if (cloudLibraryQuota && localArrangementsToMerge.length > remainingArrangementSlots) {
       throw new Error(
         `Personal cloud arrangement limit reached. You can merge ${remainingArrangementSlots} more arrangement${remainingArrangementSlots === 1 ? "" : "s"} right now.`
       );
@@ -6050,7 +6191,7 @@ export default function App() {
     });
     void refreshUsageLimits({ silent: true });
     return true;
-  }, [authUser?.id, refreshPersonalLibraryFromCloud, refreshUsageLimits, saveCloudBeatLibraryContainers, usageLimits]);
+  }, [authUser?.id, getVerifiedCloudLibraryQuota, refreshPersonalLibraryFromCloud, refreshUsageLimits, saveCloudBeatLibraryContainers, usageLimits]);
   const pendingPersonalCloudImportFolderChildrenByParent = React.useMemo(() => {
     const map = new Map();
     if (!pendingPersonalCloudImport) return map;
@@ -6934,27 +7075,6 @@ export default function App() {
       document.removeEventListener("keydown", handleKeyDown);
     };
   }, [isEditingAdvancedMenuOpen]);
-  React.useEffect(() => {
-    if (!isRhythmSpellingMenuOpen) return undefined;
-    const handlePointerDown = (event) => {
-      const target = event.target;
-      if (!(target instanceof Node)) return;
-      const menu = rhythmSpellingMenuRef.current;
-      const button = rhythmSpellingMenuButtonRef.current;
-      if (menu instanceof HTMLElement && menu.contains(target)) return;
-      if (button instanceof HTMLElement && button.contains(target)) return;
-      setIsRhythmSpellingMenuOpen(false);
-    };
-    const handleKeyDown = (event) => {
-      if (event.key === "Escape") setIsRhythmSpellingMenuOpen(false);
-    };
-    document.addEventListener("pointerdown", handlePointerDown, true);
-    document.addEventListener("keydown", handleKeyDown);
-    return () => {
-      document.removeEventListener("pointerdown", handlePointerDown, true);
-      document.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [isRhythmSpellingMenuOpen]);
   React.useEffect(() => {
     if (!isNotationStickingMenuOpen) return undefined;
     const handlePointerDown = (event) => {
@@ -7939,6 +8059,10 @@ useEffect(() => {
       ),
     [normalizedTupletOverridesByBar, baseSubdivPerQuarter]
   );
+  const baseVisibleQuarterSubdivisionCycle = React.useMemo(
+    () => buildQuarterSubdivisionCycle(visibleQuarterSubdivisions, baseSubdivPerQuarter, null),
+    [visibleQuarterSubdivisions, baseSubdivPerQuarter]
+  );
   const stepsPerBarByBar = React.useMemo(
     () =>
       quarterSubdivisionsByBar.map((row) =>
@@ -8409,6 +8533,158 @@ useEffect(() => {
     },
     []
   );
+  const remapGridQuarterBySubdivisions = React.useCallback(
+    (prevGrid, oldSubsByBar, newSubsByBar, barIdx, quarterIdx) => {
+      const oldStepsByBar = oldSubsByBar.map((subs) => buildStepMeta(subs));
+      const newStepsByBar = newSubsByBar.map((subs) => buildStepMeta(subs));
+      const oldOffsets = [0];
+      for (let i = 0; i < oldStepsByBar.length; i++) oldOffsets.push(oldOffsets[i] + oldStepsByBar[i].length);
+      const newOffsets = [0];
+      for (let i = 0; i < newStepsByBar.length; i++) newOffsets.push(newOffsets[i] + newStepsByBar[i].length);
+
+      const oldMeta = oldStepsByBar[barIdx] || [];
+      const newMeta = newStepsByBar[barIdx] || [];
+      const oldBarStart = oldOffsets[barIdx] || 0;
+      const newBarStart = newOffsets[barIdx] || 0;
+      const oldQuarterStartLocal = oldMeta.findIndex((m) => m?.quarterIndex === quarterIdx);
+      const newQuarterStartLocal = newMeta.findIndex((m) => m?.quarterIndex === quarterIdx);
+      if (oldQuarterStartLocal < 0 || newQuarterStartLocal < 0) {
+        return remapGridBySubdivisions(prevGrid, oldSubsByBar, newSubsByBar);
+      }
+      const oldQuarterLength = Math.max(1, Number(oldSubsByBar?.[barIdx]?.[quarterIdx]) || 1);
+      const newQuarterLength = Math.max(1, Number(newSubsByBar?.[barIdx]?.[quarterIdx]) || 1);
+      const oldQuarterStart = oldBarStart + oldQuarterStartLocal;
+      const newQuarterStart = newBarStart + newQuarterStartLocal;
+      const oldQuarterEnd = oldQuarterStart + oldQuarterLength;
+      const newQuarterEnd = newQuarterStart + newQuarterLength;
+      const newTotalColumns = newOffsets[newOffsets.length - 1] || 0;
+      const out = {};
+
+      ALL_INSTRUMENTS.forEach((inst) => {
+        const prevRow = prevGrid?.[inst.id] || [];
+        const row = Array(newTotalColumns).fill(CELL.OFF);
+
+        if (oldQuarterStart > 0) {
+          row.splice(0, oldQuarterStart, ...prevRow.slice(0, oldQuarterStart));
+        }
+
+        const events = [];
+        for (let oldStep = 0; oldStep < oldMeta.length; oldStep++) {
+          const m = oldMeta[oldStep];
+          if (!m || m.quarterIndex !== quarterIdx) continue;
+          const oldGlobal = oldBarStart + oldStep;
+          const val = prevRow[oldGlobal] ?? CELL.OFF;
+          if (val === CELL.OFF) continue;
+          const subdiv = Math.max(1, m.subdiv || 1);
+          events.push({
+            phase: m.subIndex / subdiv,
+            val,
+            srcSub: m.subIndex,
+          });
+        }
+        if (events.length) {
+          events.sort((a, b) => (a.phase - b.phase) || (a.srcSub - b.srcSub));
+          const slots = assignPhasesToSlots(events.map((e) => e.phase), newQuarterLength);
+          for (let i = 0; i < events.length; i++) {
+            const targetSub = Math.max(0, Math.min(newQuarterLength - 1, slots[i]));
+            const mappedIdx = newMeta.findIndex(
+              (m) => m?.quarterIndex === quarterIdx && m?.subIndex === targetSub
+            );
+            if (mappedIdx < 0) continue;
+            const nextGlobal = newBarStart + mappedIdx;
+            const cur = row[nextGlobal] ?? CELL.OFF;
+            row[nextGlobal] = rankCell(events[i].val) >= rankCell(cur) ? events[i].val : cur;
+          }
+        }
+
+        const oldSuffix = prevRow.slice(oldQuarterEnd);
+        if (oldSuffix.length > 0) {
+          row.splice(newQuarterEnd, oldSuffix.length, ...oldSuffix);
+        }
+        out[inst.id] = row;
+      });
+
+      return out;
+    },
+    [rankCell, remapGridBySubdivisions]
+  );
+  const remapNotationStickingSelectionQuarterBySubdivisions = React.useCallback(
+    (prevSelection, prevGrid, oldSubsByBar, newSubsByBar, barIdx, quarterIdx) => {
+      if (!prevSelection || typeof prevSelection !== "object") return {};
+      const selectedEntries = Object.entries(prevSelection).filter(([, enabled]) => enabled === true);
+      if (!selectedEntries.length) return {};
+      const oldStepsByBar = oldSubsByBar.map((subs) => buildStepMeta(subs));
+      const newStepsByBar = newSubsByBar.map((subs) => buildStepMeta(subs));
+      const oldOffsets = [0];
+      for (let i = 0; i < oldStepsByBar.length; i++) oldOffsets.push(oldOffsets[i] + oldStepsByBar[i].length);
+      const newOffsets = [0];
+      for (let i = 0; i < newStepsByBar.length; i++) newOffsets.push(newOffsets[i] + newStepsByBar[i].length);
+
+      const oldMeta = oldStepsByBar[barIdx] || [];
+      const newMeta = newStepsByBar[barIdx] || [];
+      const oldBarStart = oldOffsets[barIdx] || 0;
+      const newBarStart = newOffsets[barIdx] || 0;
+      const oldQuarterStartLocal = oldMeta.findIndex((m) => m?.quarterIndex === quarterIdx);
+      const newQuarterStartLocal = newMeta.findIndex((m) => m?.quarterIndex === quarterIdx);
+      if (oldQuarterStartLocal < 0 || newQuarterStartLocal < 0) {
+        return remapNotationStickingSelectionBySubdivisions(prevSelection, prevGrid, oldSubsByBar, newSubsByBar);
+      }
+      const oldQuarterLength = Math.max(1, Number(oldSubsByBar?.[barIdx]?.[quarterIdx]) || 1);
+      const newQuarterLength = Math.max(1, Number(newSubsByBar?.[barIdx]?.[quarterIdx]) || 1);
+      const oldQuarterStart = oldBarStart + oldQuarterStartLocal;
+      const newQuarterStart = newBarStart + newQuarterStartLocal;
+      const oldQuarterEnd = oldQuarterStart + oldQuarterLength;
+      const newQuarterEnd = newQuarterStart + newQuarterLength;
+      const next = {};
+
+      selectedEntries.forEach(([key, enabled]) => {
+        if (enabled !== true) return;
+        const [instId, rawIdx] = String(key).split(":");
+        const idx = Number(rawIdx);
+        if (!instId || !Number.isFinite(idx)) return;
+        if (idx < oldQuarterStart) {
+          next[`${instId}:${idx}`] = true;
+          return;
+        }
+        if (idx >= oldQuarterEnd) {
+          next[`${instId}:${idx + (newQuarterLength - oldQuarterLength)}`] = true;
+        }
+      });
+
+      ALL_INSTRUMENTS.forEach((inst) => {
+        const instId = inst.id;
+        const prevRow = prevGrid?.[instId] || [];
+        const events = [];
+        for (let oldStep = 0; oldStep < oldMeta.length; oldStep++) {
+          const m = oldMeta[oldStep];
+          if (!m || m.quarterIndex !== quarterIdx) continue;
+          const oldGlobal = oldBarStart + oldStep;
+          if (prevSelection[`${instId}:${oldGlobal}`] !== true) continue;
+          if ((prevRow[oldGlobal] ?? CELL.OFF) === CELL.OFF) continue;
+          const subdiv = Math.max(1, m.subdiv || 1);
+          events.push({
+            phase: m.subIndex / subdiv,
+            srcSub: m.subIndex,
+          });
+        }
+        if (!events.length) return;
+        events.sort((a, b) => (a.phase - b.phase) || (a.srcSub - b.srcSub));
+        const slots = assignPhasesToSlots(events.map((e) => e.phase), newQuarterLength);
+        for (let i = 0; i < events.length; i++) {
+          const targetSub = Math.max(0, Math.min(newQuarterLength - 1, slots[i]));
+          const mappedIdx = newMeta.findIndex(
+            (m) => m?.quarterIndex === quarterIdx && m?.subIndex === targetSub
+          );
+          if (mappedIdx < 0) continue;
+          const nextGlobal = newBarStart + mappedIdx;
+          next[`${instId}:${nextGlobal}`] = true;
+        }
+      });
+
+      return next;
+    },
+    [remapNotationStickingSelectionBySubdivisions]
+  );
 
   const handleResolutionChange = (newRes) => {
     tupletBaselineGridRef.current = null;
@@ -8486,15 +8762,16 @@ useEffect(() => {
       const oldSubsByBar = quarterSubdivisionsByBar;
       const currentOverride = normalizedTupletOverridesByBar[barIdx]?.[beatIdx] ?? null;
       const currentEffective = clampTupletValue(currentOverride) ?? baseSubdivPerQuarter;
-      const activeCycle = buildQuarterSubdivisionCycle(
-        visibleQuarterSubdivisions,
-        baseSubdivPerQuarter,
-        currentEffective
-      );
+      const activeCycle = baseVisibleQuarterSubdivisionCycle.includes(currentEffective)
+        ? baseVisibleQuarterSubdivisionCycle
+        : buildQuarterSubdivisionCycle(
+            visibleQuarterSubdivisions,
+            baseSubdivPerQuarter,
+            currentEffective
+          );
       if (!activeCycle.length) return;
       const idx = activeCycle.findIndex((v) => v === currentEffective);
-      const anchorIdx = activeCycle.findIndex((v) => v === baseSubdivPerQuarter);
-      const safeCurrentIdx = idx < 0 ? (anchorIdx < 0 ? 0 : anchorIdx) : idx;
+      const safeCurrentIdx = idx < 0 ? 0 : idx;
       const nextIdx =
         (safeCurrentIdx + dir + activeCycle.length) % activeCycle.length;
       const nextEffective = activeCycle[nextIdx];
@@ -8504,25 +8781,40 @@ useEffect(() => {
       const nextSubsByBar = nextOverridesByBar.map((row) =>
         resolveQuarterSubdivisions(row, baseSubdivPerQuarter)
       );
+      const hasAnyGridContent = ALL_INSTRUMENTS.some((inst) =>
+        (baseGridRef.current?.[inst.id] || []).some((val) => val !== CELL.OFF)
+      );
+      const hasAnyNotationSelection = Object.values(notationStickingSelection || {}).some((value) => value === true);
       if (keepTiming) {
+        if (!hasAnyGridContent && !hasAnyNotationSelection) {
+          tupletBaselineGridRef.current = null;
+          tupletBaselineSubsByBarRef.current = null;
+          setTupletOverridesByBar(nextOverridesByBar);
+          return;
+        }
         applyingTupletRemapRef.current = true;
-        setBaseGridWithUndo((prev) => {
-          if (!tupletBaselineGridRef.current || !tupletBaselineSubsByBarRef.current) {
-            tupletBaselineGridRef.current = cloneGridState(prev);
-            tupletBaselineSubsByBarRef.current = oldSubsByBar.map((row) => [...row]);
-          }
-          return remapGridBySubdivisions(
+        if (!tupletBaselineGridRef.current || !tupletBaselineSubsByBarRef.current) {
+          pushGridHistoryRef.current();
+          tupletBaselineGridRef.current = cloneGridState(baseGridRef.current);
+          tupletBaselineSubsByBarRef.current = oldSubsByBar.map((row) => [...row]);
+        }
+        setBaseGrid(
+          remapGridQuarterBySubdivisions(
             tupletBaselineGridRef.current,
             tupletBaselineSubsByBarRef.current,
-            nextSubsByBar
-          );
-        });
+            nextSubsByBar,
+            barIdx,
+            beatIdx
+          )
+        );
         setNotationStickingSelection((prev) =>
-          remapNotationStickingSelectionBySubdivisions(
+          remapNotationStickingSelectionQuarterBySubdivisions(
             prev,
             tupletBaselineGridRef.current || baseGridRef.current,
             tupletBaselineSubsByBarRef.current || oldSubsByBar,
-            nextSubsByBar
+            nextSubsByBar,
+            barIdx,
+            beatIdx
           )
         );
       } else {
@@ -8537,10 +8829,13 @@ useEffect(() => {
       quarterSubdivisionsByBar,
       normalizedTupletOverridesByBar,
       baseSubdivPerQuarter,
+      baseVisibleQuarterSubdivisionCycle,
       visibleQuarterSubdivisions,
       keepTiming,
+      notationStickingSelection,
       cloneGridState,
-      remapGridBySubdivisions,
+      remapGridQuarterBySubdivisions,
+      remapNotationStickingSelectionQuarterBySubdivisions,
     ]
   );
   const resetTupletAt = React.useCallback(
@@ -8555,25 +8850,40 @@ useEffect(() => {
       const nextSubsByBar = nextOverridesByBar.map((row) =>
         resolveQuarterSubdivisions(row, baseSubdivPerQuarter)
       );
+      const hasAnyGridContent = ALL_INSTRUMENTS.some((inst) =>
+        (baseGridRef.current?.[inst.id] || []).some((val) => val !== CELL.OFF)
+      );
+      const hasAnyNotationSelection = Object.values(notationStickingSelection || {}).some((value) => value === true);
       if (keepTiming) {
+        if (!hasAnyGridContent && !hasAnyNotationSelection) {
+          tupletBaselineGridRef.current = null;
+          tupletBaselineSubsByBarRef.current = null;
+          setTupletOverridesByBar(nextOverridesByBar);
+          return;
+        }
         applyingTupletRemapRef.current = true;
-        setBaseGridWithUndo((prev) => {
-          if (!tupletBaselineGridRef.current || !tupletBaselineSubsByBarRef.current) {
-            tupletBaselineGridRef.current = cloneGridState(prev);
-            tupletBaselineSubsByBarRef.current = oldSubsByBar.map((row) => [...row]);
-          }
-          return remapGridBySubdivisions(
+        if (!tupletBaselineGridRef.current || !tupletBaselineSubsByBarRef.current) {
+          pushGridHistoryRef.current();
+          tupletBaselineGridRef.current = cloneGridState(baseGridRef.current);
+          tupletBaselineSubsByBarRef.current = oldSubsByBar.map((row) => [...row]);
+        }
+        setBaseGrid(
+          remapGridQuarterBySubdivisions(
             tupletBaselineGridRef.current,
             tupletBaselineSubsByBarRef.current,
-            nextSubsByBar
-          );
-        });
+            nextSubsByBar,
+            barIdx,
+            beatIdx
+          )
+        );
         setNotationStickingSelection((prev) =>
-          remapNotationStickingSelectionBySubdivisions(
+          remapNotationStickingSelectionQuarterBySubdivisions(
             prev,
             tupletBaselineGridRef.current || baseGridRef.current,
             tupletBaselineSubsByBarRef.current || oldSubsByBar,
-            nextSubsByBar
+            nextSubsByBar,
+            barIdx,
+            beatIdx
           )
         );
       } else {
@@ -8589,8 +8899,10 @@ useEffect(() => {
       quarterSubdivisionsByBar,
       baseSubdivPerQuarter,
       keepTiming,
+      notationStickingSelection,
       cloneGridState,
-      remapGridBySubdivisions,
+      remapGridQuarterBySubdivisions,
+      remapNotationStickingSelectionQuarterBySubdivisions,
     ]
   );
   const globalTupletValue = React.useMemo(() => {
@@ -8704,6 +9016,7 @@ useEffect(() => {
   const unifiedPastRef = React.useRef([]);
   const unifiedFutureRef = React.useRef([]);
   const pushUnifiedHistoryRef = React.useRef(() => {});
+  const pushGridHistoryRef = React.useRef(() => {});
   const baseGridRef = React.useRef(null);
   const tupletOverridesRef = React.useRef(tupletOverridesByBar);
 
@@ -8836,6 +9149,9 @@ useEffect(() => {
     }
     syncHistoryState();
   }, [snapshotEditorState, syncHistoryState]);
+  React.useEffect(() => {
+    pushGridHistoryRef.current = pushGridHistory;
+  }, [pushGridHistory]);
 
   const undoGrid = React.useCallback(() => {
     if (gridPastRef.current.length === 0) return;
@@ -12179,6 +12495,9 @@ useEffect(() => {
       freshestBeat?.payload && typeof freshestBeat.payload === "object"
         ? {
             ...freshestBeat.payload,
+            name: String(freshestBeat.name || freshestBeat.payload.name || ""),
+            category: String(freshestBeat.category || freshestBeat.payload.category || "Groove"),
+            style: String(freshestBeat.style || freshestBeat.payload.style || "all"),
             ...(mirroredNotationStickingSelection && Object.keys(mirroredNotationStickingSelection).length > 0
               ? { notationStickingSelection: mirroredNotationStickingSelection }
               : {}),
@@ -12193,19 +12512,18 @@ useEffect(() => {
       await flushLoadedLocalBeatNotationSelectionRef.current?.();
     }
     const normalizedSource = source === "public" ? "public" : source === "shared" ? "shared" : "local";
-    setCurrentEditorBeatKey(`${normalizedSource}:${String(freshestBeat?.id || "")}`);
-    applyImportedBeatPayloadRef.current?.(
-      effectivePayload,
-      `${normalizedSource}:${freshestBeat.id}:${freshestBeat.updatedAt || freshestBeat.createdAt || ""}`
-    );
-    if (normalizedSource === "local") {
-      setLoadedLocalBeatId(freshestBeat.id);
-    } else {
-      setLoadedLocalBeatId(null);
-    }
-    setBeatNameDraft(String(freshestBeat.name || ""));
-    setBeatCategoryDraft(String(freshestBeat.category || "Groove"));
-    setBeatStyleDraft(String(freshestBeat.style || "all"));
+    flushSync(() => {
+      setCurrentEditorBeatKey(`${normalizedSource}:${String(freshestBeat?.id || "")}`);
+      applyImportedBeatPayloadRef.current?.(
+        effectivePayload,
+        `${normalizedSource}:${freshestBeat.id}:${freshestBeat.updatedAt || freshestBeat.createdAt || ""}`
+      );
+      if (normalizedSource === "local") {
+        setLoadedLocalBeatId(freshestBeat.id);
+      } else {
+        setLoadedLocalBeatId(null);
+      }
+    });
   }, []);
   useEffect(() => {
     loadBeatIntoEditorRef.current = loadBeatIntoEditor;
@@ -14020,16 +14338,7 @@ useEffect(() => {
     return applyLoopWrites(baseGrid, loopRule, loopRepeats, loopOverlapMode, loopRespectPlayability);
   }, [baseGrid, loopRule, loopRepeats, loopOverlapMode, loopRespectPlayability, applyLoopWrites, instruments]);
   function buildAllNotationStickingSelection() {
-    const next = {};
-    instruments.forEach((inst) => {
-      const instId = inst?.id;
-      if (!instId || FOOT_INSTRUMENTS.has(instId)) return;
-      const row = computedGrid[instId] || [];
-      row.forEach((value, idx) => {
-        if (value !== CELL.OFF) next[`${instId}:${idx}`] = true;
-      });
-    });
-    return next;
+    return buildNotationStickingSelectionFromGridRows(computedGrid, instruments, columns);
   }
   const allNotationStickingSelection = React.useMemo(
     () => buildAllNotationStickingSelection(),
@@ -14932,6 +15241,26 @@ useEffect(() => {
     isArrangementOpen,
     arrangementSourcesCollapsed,
   ]);
+  const handleArrangementExternalRowDragOver = React.useCallback((rowId, rowIndex, e) => {
+    if (!arrangementDragBeatRef.current?.beatId) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const rect = e.currentTarget.getBoundingClientRect();
+    const position =
+      e.clientY < rect.top + rect.height / 2 ? "before" : "after";
+    setArrangementDropActive(true);
+    setArrangementDropTarget({ rowId, position, index: rowIndex });
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+  }, []);
+  const handleArrangementExternalRowDrop = React.useCallback((rowId, rowIndex, e) => {
+    if (!arrangementDragBeatRef.current?.beatId) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const rect = e.currentTarget.getBoundingClientRect();
+    const position =
+      e.clientY < rect.top + rect.height / 2 ? "before" : "after";
+    dropDraggedBeatIntoArrangement(rowIndex + (position === "after" ? 1 : 0));
+  }, [dropDraggedBeatIntoArrangement]);
   useEffect(() => {
     if (!isArrangementOpen || arrangementSourcesCollapsed || !selectedArrangementSourceBeatKey) return;
     const target = Array.from(
@@ -15650,7 +15979,7 @@ useEffect(() => {
     if (importedBeatLoadInProgressRef.current) return;
     const syncKey = `${loadedLocalBeatId}:${loadedLocalBeat.updatedAt || loadedLocalBeat.createdAt || ""}`;
     if (loadedLocalBeatNotationSelectionSyncKeyRef.current === syncKey) return;
-    const nextSelection =
+    const savedSelection =
       loadedLocalBeat?.notationStickingSelection &&
       typeof loadedLocalBeat.notationStickingSelection === "object"
         ? Object.fromEntries(
@@ -15662,9 +15991,19 @@ useEffect(() => {
               Object.entries(loadedLocalBeat.payload.notationStickingSelection).filter(([, value]) => value === true)
             )
           : {};
+    const savedShowNotationSticking = loadedLocalBeat?.payload?.showNotationSticking !== false;
+    const nextSelection =
+      savedShowNotationSticking && Object.keys(savedSelection).length === 0
+        ? buildNotationStickingSelectionFromGridRows(computedGrid, instruments, columns)
+        : savedSelection;
     loadedLocalBeatNotationSelectionSyncKeyRef.current = syncKey;
+    setNotationStickingModePreference(
+      !savedShowNotationSticking ? "off" : Object.keys(savedSelection).length > 0 ? "custom" : "all"
+    );
+    setShowNotationSticking(savedShowNotationSticking);
+    setNotationStickingSelectionModeEnabled(false);
     setNotationStickingSelection(nextSelection);
-  }, [loadedLocalBeatId, loadedLocalBeat]);
+  }, [loadedLocalBeatId, loadedLocalBeat, computedGrid, instruments, columns]);
   const currentBeatPayload = React.useMemo(() => buildCurrentBeatPayload(), [buildCurrentBeatPayload]);
   const normalizedCurrentPayloadJson = React.useMemo(
     () => JSON.stringify(getComparableBeatPayload(currentBeatPayload)),
@@ -15817,10 +16156,25 @@ useEffect(() => {
           return clampTupletValue(raw) ?? null;
         })
       );
+      const nextBaseSubdivPerQuarter = getBaseSubdivPerQuarter(nextResolution, nextTimeSig);
+      const nextQuarterSubdivisionsByBar = tupletsByBar.map((row) =>
+        resolveQuarterSubdivisions(row, nextBaseSubdivPerQuarter)
+      );
+      const nextStepsPerBarByBar = nextQuarterSubdivisionsByBar.map((row) =>
+        Math.max(1, row.reduce((sum, n) => sum + Math.max(1, Number(n) || 1), 0))
+      );
+      const nextBarStepOffsets = [0];
+      for (let i = 0; i < nextStepsPerBarByBar.length; i += 1) {
+        nextBarStepOffsets.push(nextBarStepOffsets[i] + nextStepsPerBarByBar[i]);
+      }
+      const nextColumns = nextBarStepOffsets[nextBarStepOffsets.length - 1] ?? 0;
       const nextKitIds = Array.isArray(payload.kitInstrumentIds)
         ? [...new Set(payload.kitInstrumentIds.filter((id) => INSTRUMENT_BY_ID[id]))]
         : [];
       if (!nextKitIds.length) nextKitIds.push(...DRUMKIT_PRESETS.standard);
+      const nextInstrumentDefs = nextKitIds
+        .map((id) => INSTRUMENT_BY_ID[id])
+        .filter(Boolean);
       const nextStickingOverrides =
         payload?.stickingOverrides && typeof payload.stickingOverrides === "object"
           ? Object.fromEntries(
@@ -15833,79 +16187,106 @@ useEffect(() => {
             )
           : {};
 
-      pendingSharedLoadRef.current = {
-        bars: nextBars,
-        resolution: nextResolution,
-        timeSig: nextTimeSig,
-        tupletsByBar,
-        grid: payload.grid && typeof payload.grid === "object" ? payload.grid : {},
-        stickingOverrides: nextStickingOverrides,
-        notationStickingSelection:
-          payload.notationStickingSelection && typeof payload.notationStickingSelection === "object"
-            ? Object.fromEntries(
-                Object.entries(payload.notationStickingSelection).filter(([, value]) => value === true)
-              )
-            : {},
-      };
-      importedBeatLoadInProgressRef.current = true;
-      appliedSharedKeyRef.current = shareSourceKey;
-
-      setNotationStickingSelection(
+      const nextGrid = {};
+      ALL_INSTRUMENTS.forEach((inst) => {
+        nextGrid[inst.id] = Array(nextColumns).fill(CELL.OFF);
+      });
+      Object.entries(payload.grid && typeof payload.grid === "object" ? payload.grid : {}).forEach(
+        ([instId, events]) => {
+          if (!INSTRUMENT_BY_ID[instId] || !Array.isArray(events)) return;
+          events.forEach((event) => {
+            if (!Array.isArray(event) || event.length < 2) return;
+            const idx = Number(event[0]);
+            const code = Number(event[1]);
+            if (!Number.isFinite(idx) || idx < 0 || idx >= nextColumns) return;
+            const nextVal =
+              code === 3 ? CELL.ACCENT : code === 2 ? CELL.GHOST : code === 1 ? CELL.ON : CELL.OFF;
+            if (nextVal !== CELL.OFF) nextGrid[instId][Math.floor(idx)] = nextVal;
+          });
+        }
+      );
+      const compactImportedNotationStickingSelection =
         payload.notationStickingSelection && typeof payload.notationStickingSelection === "object"
           ? Object.fromEntries(
               Object.entries(payload.notationStickingSelection).filter(([, value]) => value === true)
             )
-          : {}
-      );
-      setStickingOverrides(nextStickingOverrides);
-      if (payload.stickingHandedness === "left" || payload.stickingHandedness === "right") {
-        setStickingHandedness(payload.stickingHandedness);
-      }
-      if (payload.stickingLeadHand === "left" || payload.stickingLeadHand === "right") {
-        setStickingLeadHand(payload.stickingLeadHand);
-      }
-      if (typeof payload.stickingKeepQuarterLeadHand === "boolean") {
-        setStickingKeepQuarterLeadHand(payload.stickingKeepQuarterLeadHand);
-      }
-      if (typeof payload.showNotationSticking === "boolean") {
-        setShowNotationSticking(payload.showNotationSticking);
-      }
-      if (payload.notationStickingView === "split-rows" || payload.notationStickingView === "above") {
-        setNotationStickingView(payload.notationStickingView);
-      }
+          : {};
+      const importedShowNotationSticking = payload.showNotationSticking !== false;
+      const importedNotationStickingMode =
+        !importedShowNotationSticking
+          ? "off"
+          : Object.keys(compactImportedNotationStickingSelection).length > 0
+            ? "custom"
+            : "all";
+      const importedEffectiveNotationStickingSelection =
+        importedNotationStickingMode === "all"
+          ? buildNotationStickingSelectionFromGridRows(nextGrid, nextInstrumentDefs, nextColumns)
+          : compactImportedNotationStickingSelection;
+      importedBeatLoadInProgressRef.current = true;
+      appliedSharedKeyRef.current = shareSourceKey;
+      gridPastRef.current = [];
+      gridFutureRef.current = [];
+      unifiedPastRef.current = [];
+      unifiedFutureRef.current = [];
+      flushSync(() => {
+        setNotationStickingSelection(
+          importedEffectiveNotationStickingSelection
+        );
+        setNotationStickingModePreference(importedNotationStickingMode);
+        setStickingOverrides(nextStickingOverrides);
+        if (payload.stickingHandedness === "left" || payload.stickingHandedness === "right") {
+          setStickingHandedness(payload.stickingHandedness);
+        }
+        if (payload.stickingLeadHand === "left" || payload.stickingLeadHand === "right") {
+          setStickingLeadHand(payload.stickingLeadHand);
+        }
+        if (typeof payload.stickingKeepQuarterLeadHand === "boolean") {
+          setStickingKeepQuarterLeadHand(payload.stickingKeepQuarterLeadHand);
+        }
+        setShowNotationSticking(importedShowNotationSticking);
+        if (payload.notationStickingView === "split-rows" || payload.notationStickingView === "above") {
+          setNotationStickingView(payload.notationStickingView);
+        }
 
-      const nextLayout = payload.layout;
-      const layoutOptions = ["grid-top", "notation-top", "grid-right", "notation-right"];
-      if (layoutOptions.includes(nextLayout)) setLayout(nextLayout);
-      setBeatNameDraft(String(payload?.name || ""));
-      if (typeof payload?.composer === "string") {
-        setPrintComposer(payload.composer);
-      }
-      if (typeof payload?.category === "string") {
-        setBeatCategoryDraft(payload.category);
-      }
-      if (typeof payload?.style === "string") {
-        setBeatStyleDraft(payload.style);
-      }
-      const nextBpm = Number(payload.bpm);
-      if (Number.isFinite(nextBpm)) {
-        const clampedBpm = Math.max(20, Math.min(400, Math.round(nextBpm)));
-        setBpm(clampedBpm);
-        setBpmDraft(String(clampedBpm));
-      }
-      setModifiedPresetBase(null);
-      setPendingPresetChange(null);
-      setPendingRemoval(null);
-      setSelection(null);
-      setLoopRule(null);
-      setActiveTab("none");
-      setLoopRepeats("off");
-      setLoadedLocalBeatId(null);
-      setKitInstrumentIds(nextKitIds);
-      setBars(nextBars);
-      setResolution(nextResolution);
-      setTimeSig(nextTimeSig);
-      setTupletOverridesByBar(tupletsByBar);
+        const nextLayout = payload.layout;
+        const layoutOptions = ["grid-top", "notation-top", "grid-right", "notation-right"];
+        if (layoutOptions.includes(nextLayout)) setLayout(nextLayout);
+        setBeatNameDraft(String(payload?.name || ""));
+        if (typeof payload?.composer === "string") {
+          setPrintComposer(payload.composer);
+        }
+        if (typeof payload?.category === "string") {
+          setBeatCategoryDraft(payload.category);
+        }
+        if (typeof payload?.style === "string") {
+          setBeatStyleDraft(payload.style);
+        }
+        const nextBpm = Number(payload.bpm);
+        if (Number.isFinite(nextBpm)) {
+          const clampedBpm = Math.max(20, Math.min(400, Math.round(nextBpm)));
+          setBpm(clampedBpm);
+          setBpmDraft(String(clampedBpm));
+        }
+        setModifiedPresetBase(null);
+        setPendingPresetChange(null);
+        setPendingRemoval(null);
+        setSelection(null);
+        setLoopRule(null);
+        setActiveTab("none");
+        setLoopRepeats("off");
+        setNotationStickingSelectionModeEnabled(false);
+        setLoadedLocalBeatId(null);
+        setKitInstrumentIds(nextKitIds);
+        setBars(nextBars);
+        setResolution(nextResolution);
+        setTimeSig(nextTimeSig);
+        setTupletOverridesByBar(tupletsByBar);
+        setBaseGrid(nextGrid);
+      });
+      syncHistoryState();
+      syncUnifiedHistoryState();
+      pendingSharedLoadRef.current = null;
+      importedBeatLoadInProgressRef.current = false;
     },
     []
   );
@@ -16786,7 +17167,7 @@ useEffect(() => {
                 </div>
 
                 <div className="flex items-center justify-between gap-2">
-                    <span className="text-sm text-neutral-300 whitespace-nowrap">Tuplets</span>
+                    <span className="text-sm text-neutral-300 whitespace-nowrap">Subdivision</span>
                     <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-700 bg-neutral-800">
                       <button
                         type="button"
@@ -16850,70 +17231,6 @@ useEffect(() => {
 
                 <div className="border-t border-neutral-800 pt-4">
                   <div className="flex flex-col gap-3">
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setDottedNotes((v) => !v)}
-                        className={`w-fit touch-none select-none px-3 py-[5px] rounded border text-sm ${
-                          dottedNotes
-                            ? "bg-neutral-800 border-neutral-700 text-white"
-                            : "bg-neutral-900 border-neutral-800 text-neutral-600"
-                        }`}
-                        title="Convert note + following rest into a dotted note when possible"
-                      >
-                        Dotted notes
-                      </button>
-                      <div className="relative shrink-0">
-                        <button
-                          ref={rhythmSpellingMenuButtonRef}
-                          type="button"
-                          onClick={() => setIsRhythmSpellingMenuOpen((v) => !v)}
-                          className={`inline-flex h-[1.625rem] w-[1.625rem] items-center justify-center rounded border text-xs leading-none ${
-                            isRhythmSpellingMenuOpen
-                              ? "bg-neutral-800 border-neutral-700 text-white"
-                              : "bg-neutral-900/60 border-neutral-800 text-neutral-400 hover:bg-neutral-800/60"
-                          }`}
-                          title="Rhythm spelling options"
-                          aria-label="Rhythm spelling options"
-                        >
-                          ...
-                        </button>
-                        {isRhythmSpellingMenuOpen && (
-                          <div
-                            ref={rhythmSpellingMenuRef}
-                            className="absolute left-full top-0 z-30 ml-2 min-w-[10.5rem] rounded-lg border border-neutral-700 bg-neutral-900 p-3 shadow-xl"
-                          >
-                            <div className="flex flex-col gap-3">
-                              <button
-                                type="button"
-                                onClick={() => setMergeNotes((v) => !v)}
-                                className={`w-fit whitespace-nowrap touch-none select-none px-3 py-[5px] rounded border text-sm ${
-                                  mergeNotes
-                                    ? "bg-neutral-800 border-neutral-700 text-white"
-                                    : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
-                                }`}
-                                title="Merge notes across adjacent rests"
-                              >
-                                Merge notes
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setMergeRests((v) => !v)}
-                                className={`w-fit whitespace-nowrap touch-none select-none px-3 py-[5px] rounded border text-sm ${
-                                  mergeRests
-                                    ? "bg-neutral-800 border-neutral-700 text-white"
-                                    : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
-                                }`}
-                                title="Merge consecutive rests"
-                              >
-                                Merge rests
-                              </button>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
                     <div className="flex items-center gap-2">
                       <span className="text-sm text-neutral-300">Looping</span>
                       <div
@@ -17124,8 +17441,8 @@ useEffect(() => {
                       </div>
                     </div>
 
-                    <div className="flex w-full items-center justify-between gap-2">
-                      <span className="shrink-0 text-sm text-neutral-300">Print sticking</span>
+                    <div className="flex w-full items-center gap-2">
+                      <span className="shrink-0 text-sm text-neutral-300">Sticking</span>
                       <div className="flex items-center gap-1.5">
                         <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-800 bg-neutral-900/60">
                           <button
@@ -17162,8 +17479,8 @@ useEffect(() => {
                             {notationStickingSelectionStats.mode === "all"
                               ? "All"
                               : notationStickingSelectionStats.mode === "custom"
-                                ? "Custom"
-                                : "Off"}
+                                ? "Some"
+                                : "None"}
                           </button>
                           <button
                             type="button"
@@ -17179,6 +17496,28 @@ useEffect(() => {
                     </div>
 
                     <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setStickingEditModeEnabled((v) => {
+                            const next = !v;
+                            if (next) {
+                              setStickingGuideEnabled(true);
+                            } else {
+                              setNotationStickingSelectionModeEnabled(false);
+                            }
+                            return next;
+                          })
+                        }
+                        className={`w-fit touch-none select-none px-3 py-[5px] rounded border text-sm ${
+                          stickingEditModeEnabled
+                            ? "bg-neutral-800 border-neutral-700 text-white"
+                            : "bg-neutral-900 border-neutral-800 text-neutral-600"
+                        }`}
+                        title="When enabled, clicking active hand-hit cells edits R/L sticking instead of toggling notes"
+                      >
+                        Sticking edit mode
+                      </button>
                       <div className="relative shrink-0">
                           <button
                             ref={editingAdvancedMenuButtonRef}
@@ -17197,7 +17536,7 @@ useEffect(() => {
                           {isEditingAdvancedMenuOpen && (
                             <div
                               ref={editingAdvancedMenuRef}
-                              className="absolute left-full top-0 z-[140] ml-2 min-w-[10.5rem] rounded-lg border border-neutral-700 bg-neutral-900 p-3 shadow-xl"
+                              className="absolute bottom-0 left-full z-[140] ml-2 min-w-[10.5rem] rounded-lg border border-neutral-700 bg-neutral-900 p-3 shadow-xl"
                             >
                               <div className="flex flex-col gap-3">
                                 <div className="space-y-1">
@@ -17229,32 +17568,51 @@ useEffect(() => {
                                     </button>
                                   </div>
                                 </div>
+                                <div className="space-y-1">
+                                  <span className="text-sm text-neutral-300">Rhythm spelling</span>
+                                  <div className="flex flex-col gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => setDottedNotes((v) => !v)}
+                                      className={`w-full whitespace-nowrap touch-none select-none rounded border px-3 py-[5px] text-left text-sm ${
+                                        dottedNotes
+                                          ? "bg-neutral-800 border-neutral-700 text-white"
+                                          : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
+                                      }`}
+                                      title="Convert note + following rest into a dotted note when possible"
+                                    >
+                                      Dotted notes
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setMergeNotes((v) => !v)}
+                                      className={`w-full whitespace-nowrap touch-none select-none rounded border px-3 py-[5px] text-left text-sm ${
+                                        mergeNotes
+                                          ? "bg-neutral-800 border-neutral-700 text-white"
+                                          : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
+                                      }`}
+                                      title="Merge notes across adjacent rests"
+                                    >
+                                      Merge notes
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setMergeRests((v) => !v)}
+                                      className={`w-full whitespace-nowrap touch-none select-none rounded border px-3 py-[5px] text-left text-sm ${
+                                        mergeRests
+                                          ? "bg-neutral-800 border-neutral-700 text-white"
+                                          : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
+                                      }`}
+                                      title="Merge consecutive rests"
+                                    >
+                                      Merge rests
+                                    </button>
+                                  </div>
+                                </div>
                               </div>
                             </div>
                           )}
                       </div>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setStickingEditModeEnabled((v) => {
-                            const next = !v;
-                            if (next) {
-                              setStickingGuideEnabled(true);
-                            } else {
-                              setNotationStickingSelectionModeEnabled(false);
-                            }
-                            return next;
-                          })
-                        }
-                        className={`w-fit touch-none select-none px-3 py-[5px] rounded border text-sm ${
-                          stickingEditModeEnabled
-                            ? "bg-neutral-800 border-neutral-700 text-white"
-                            : "bg-neutral-900 border-neutral-800 text-neutral-600"
-                        }`}
-                        title="When enabled, clicking active hand-hit cells edits R/L sticking instead of toggling notes"
-                      >
-                        Sticking edit mode
-                      </button>
                     </div>
 
                     <div className="flex items-center gap-2">
@@ -17266,7 +17624,11 @@ useEffect(() => {
                             ? "bg-neutral-800 border-neutral-700 text-white"
                             : "bg-neutral-900 border-neutral-800 text-neutral-600"
                         }`}
-                        title="Automatically update the loaded local beat after beat changes. Notation sticking selection always auto-updates."
+                        title={
+                          beatAutoUpdateEnabled
+                            ? "Auto update is on. Beat changes, including sticking settings, save automatically."
+                            : "Auto update is off. Beat changes, including sticking settings, do not save automatically."
+                        }
                       >
                         Auto update
                       </button>
@@ -17387,8 +17749,16 @@ useEffect(() => {
                   ? "text-[#00b3ba] hover:text-[#14c8d0]"
                   : "text-neutral-500 hover:text-neutral-300"
               }`}
-              title={beatAutoUpdateEnabled ? "Auto update is on" : "Auto update is off"}
-              aria-label={beatAutoUpdateEnabled ? "Auto update is on" : "Auto update is off"}
+              title={
+                beatAutoUpdateEnabled
+                  ? "Auto update is on. Beat changes, including sticking settings, save automatically."
+                  : "Auto update is off. Beat changes, including sticking settings, do not save automatically."
+              }
+              aria-label={
+                beatAutoUpdateEnabled
+                  ? "Auto update is on. Beat changes, including sticking settings, save automatically."
+                  : "Auto update is off. Beat changes, including sticking settings, do not save automatically."
+              }
             >
               <SaveStateIcon />
             </button>
@@ -17454,8 +17824,16 @@ useEffect(() => {
                   ? "text-[#00b3ba] hover:text-[#14c8d0]"
                   : "text-neutral-500 hover:text-neutral-300"
               }`}
-              title={beatAutoUpdateEnabled ? "Auto update is on" : "Auto update is off"}
-              aria-label={beatAutoUpdateEnabled ? "Auto update is on" : "Auto update is off"}
+              title={
+                beatAutoUpdateEnabled
+                  ? "Auto update is on. Beat changes, including sticking settings, save automatically."
+                  : "Auto update is off. Beat changes, including sticking settings, do not save automatically."
+              }
+              aria-label={
+                beatAutoUpdateEnabled
+                  ? "Auto update is on. Beat changes, including sticking settings, save automatically."
+                  : "Auto update is off. Beat changes, including sticking settings, do not save automatically."
+              }
             >
               <SaveStateIcon />
             </button>
@@ -18344,7 +18722,7 @@ useEffect(() => {
                 : {})}
             >
               {shouldRenderNotation ? (
-                <Notation
+                <MemoNotation
                   instruments={segment.notation.instruments}
                   grid={segment.notation.grid}
                   stickingAssignmentsByStep={segment.stickingAssignments || []}
@@ -19885,67 +20263,6 @@ useEffect(() => {
       <div className="mb-4 flex items-center justify-between gap-2">
         <div className="text-sm font-medium text-neutral-300">Settings</div>
         <div className="flex items-center gap-2">
-          <div className="relative shrink-0">
-            <button
-              ref={rhythmSpellingMenuButtonRef}
-              type="button"
-              onClick={() => setIsRhythmSpellingMenuOpen((v) => !v)}
-              className={`inline-flex h-[1.625rem] w-[1.625rem] items-center justify-center rounded border text-xs leading-none ${
-                isRhythmSpellingMenuOpen
-                  ? "bg-neutral-800 border-neutral-700 text-white"
-                  : "bg-neutral-900/60 border-neutral-800 text-neutral-400 hover:bg-neutral-800/60"
-              }`}
-              title="Rhythm spelling options"
-              aria-label="Rhythm spelling options"
-            >
-              ...
-            </button>
-            {isRhythmSpellingMenuOpen && (
-              <div
-                ref={rhythmSpellingMenuRef}
-                className="absolute right-0 top-full z-30 mt-2 min-w-[10.5rem] rounded-lg border border-neutral-700 bg-neutral-900 p-3 shadow-xl"
-              >
-                <div className="flex flex-col gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setDottedNotes((v) => !v)}
-                    className={`w-fit whitespace-nowrap touch-none select-none px-3 py-[5px] rounded border text-sm ${
-                      dottedNotes
-                        ? "bg-neutral-800 border-neutral-700 text-white"
-                        : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
-                    }`}
-                    title="Convert note + following rest into a dotted note when possible"
-                  >
-                    Dotted notes
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setMergeNotes((v) => !v)}
-                    className={`w-fit whitespace-nowrap touch-none select-none px-3 py-[5px] rounded border text-sm ${
-                      mergeNotes
-                        ? "bg-neutral-800 border-neutral-700 text-white"
-                        : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
-                    }`}
-                    title="Merge notes across adjacent rests"
-                  >
-                    Merge notes
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setMergeRests((v) => !v)}
-                    className={`w-fit whitespace-nowrap touch-none select-none px-3 py-[5px] rounded border text-sm ${
-                      mergeRests
-                        ? "bg-neutral-800 border-neutral-700 text-white"
-                        : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
-                    }`}
-                    title="Merge consecutive rests"
-                  >
-                    Merge rests
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
           <button
             type="button"
             onClick={() => setSettingsSidebarCollapsed(true)}
@@ -20066,7 +20383,7 @@ useEffect(() => {
             </div>
 
             <div className="flex items-center justify-between gap-2">
-              <span className="text-sm text-neutral-300 whitespace-nowrap">Tuplets</span>
+              <span className="text-sm text-neutral-300 whitespace-nowrap">Subdivision</span>
               <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-800 bg-neutral-900/60">
                 <button
                   type="button"
@@ -20340,8 +20657,8 @@ useEffect(() => {
               </div>
             </div>
 
-            <div className="flex w-full items-center justify-between gap-2">
-              <span className="shrink-0 text-sm text-neutral-300">Print sticking</span>
+            <div className="flex w-full items-center gap-2">
+              <span className="shrink-0 text-sm text-neutral-300">Sticking</span>
               <div className="flex items-center gap-1.5">
                 <div className="flex items-stretch overflow-hidden rounded-md border border-neutral-800 bg-neutral-900/60">
                   <button
@@ -20371,15 +20688,15 @@ useEffect(() => {
                           ? "Finish editing custom sticking selection"
                           : "Edit custom sticking selection"
                         : notationStickingSelectionStats.mode === "all"
-                          ? "Print all sticking in notation"
+                        ? "Print all sticking in notation"
                           : "Do not print sticking in notation"
                     }
                   >
                     {notationStickingSelectionStats.mode === "all"
                       ? "All"
                       : notationStickingSelectionStats.mode === "custom"
-                        ? "Custom"
-                        : "Off"}
+                        ? "Some"
+                        : "None"}
                   </button>
                   <button
                     type="button"
@@ -20395,6 +20712,28 @@ useEffect(() => {
             </div>
 
             <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() =>
+                  setStickingEditModeEnabled((v) => {
+                    const next = !v;
+                    if (next) {
+                      setStickingGuideEnabled(true);
+                    } else {
+                      setNotationStickingSelectionModeEnabled(false);
+                    }
+                    return next;
+                  })
+                }
+                className={`w-fit touch-none select-none px-3 py-[5px] rounded border text-sm ${
+                  stickingEditModeEnabled
+                    ? "bg-neutral-800 border-neutral-700 text-white"
+                    : "bg-neutral-900 border-neutral-800 text-neutral-600"
+                }`}
+                title="When enabled, clicking active hand-hit cells edits R/L sticking instead of toggling notes"
+              >
+                Sticking edit mode
+              </button>
               <div className="relative shrink-0">
                   <button
                     ref={editingAdvancedMenuButtonRef}
@@ -20413,7 +20752,7 @@ useEffect(() => {
                   {isEditingAdvancedMenuOpen && (
                     <div
                       ref={editingAdvancedMenuRef}
-                      className="absolute left-full top-0 z-[140] ml-2 min-w-[10.5rem] rounded-lg border border-neutral-700 bg-neutral-900 p-3 shadow-xl"
+                      className="absolute bottom-0 left-full z-[140] ml-2 min-w-[10.5rem] rounded-lg border border-neutral-700 bg-neutral-900 p-3 shadow-xl"
                     >
                       <div className="flex flex-col gap-3">
                         <div className="space-y-1">
@@ -20445,32 +20784,51 @@ useEffect(() => {
                             </button>
                           </div>
                         </div>
+                        <div className="space-y-1">
+                          <span className="text-sm text-neutral-300">Rhythm spelling</span>
+                          <div className="flex flex-col gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setDottedNotes((v) => !v)}
+                              className={`w-full whitespace-nowrap touch-none select-none rounded border px-3 py-[5px] text-left text-sm ${
+                                dottedNotes
+                                  ? "bg-neutral-800 border-neutral-700 text-white"
+                                  : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
+                              }`}
+                              title="Convert note + following rest into a dotted note when possible"
+                            >
+                              Dotted notes
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setMergeNotes((v) => !v)}
+                              className={`w-full whitespace-nowrap touch-none select-none rounded border px-3 py-[5px] text-left text-sm ${
+                                mergeNotes
+                                  ? "bg-neutral-800 border-neutral-700 text-white"
+                                  : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
+                              }`}
+                              title="Merge notes across adjacent rests"
+                            >
+                              Merge notes
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setMergeRests((v) => !v)}
+                              className={`w-full whitespace-nowrap touch-none select-none rounded border px-3 py-[5px] text-left text-sm ${
+                                mergeRests
+                                  ? "bg-neutral-800 border-neutral-700 text-white"
+                                  : "bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800/60"
+                              }`}
+                              title="Merge consecutive rests"
+                            >
+                              Merge rests
+                            </button>
+                          </div>
+                        </div>
                       </div>
                     </div>
                   )}
               </div>
-              <button
-                type="button"
-                onClick={() =>
-                  setStickingEditModeEnabled((v) => {
-                    const next = !v;
-                    if (next) {
-                      setStickingGuideEnabled(true);
-                    } else {
-                      setNotationStickingSelectionModeEnabled(false);
-                    }
-                    return next;
-                  })
-                }
-                className={`w-fit touch-none select-none px-3 py-[5px] rounded border text-sm ${
-                  stickingEditModeEnabled
-                    ? "bg-neutral-800 border-neutral-700 text-white"
-                    : "bg-neutral-900 border-neutral-800 text-neutral-600"
-                }`}
-                title="When enabled, clicking active hand-hit cells edits R/L sticking instead of toggling notes"
-              >
-                Sticking edit mode
-              </button>
             </div>
 
             <div className="flex items-center gap-2">
@@ -20482,7 +20840,11 @@ useEffect(() => {
                     ? "bg-neutral-800 border-neutral-700 text-white"
                     : "bg-neutral-900 border-neutral-800 text-neutral-600"
                 }`}
-                title="Automatically update the loaded local beat after beat changes. Notation sticking selection always auto-updates."
+                title={
+                  beatAutoUpdateEnabled
+                    ? "Auto update is on. Beat changes, including sticking settings, save automatically."
+                    : "Auto update is off. Beat changes, including sticking settings, do not save automatically."
+                }
               >
                 Auto update
               </button>
@@ -20730,7 +21092,7 @@ useEffect(() => {
                   <div className="mt-1">Selection: long press and drag to select.</div>
                   <div className="mt-1">Selection: use arrow keys to move it.</div>
                   <div className="mt-1">Looping: press &quot;L&quot; to toggle looping for the current selection.</div>
-                  <div className="mt-1">Tuplets: press the count numbers above the grid to cycle tuplets.</div>
+                  <div className="mt-1">Subdivision: press the count numbers above the grid to cycle subdivisions. Long press a count number for subdivision options.</div>
                 </>
               }
               align="right"
@@ -20942,7 +21304,7 @@ useEffect(() => {
         <div className={hasDesktopSidebarColumn ? "min-w-0" : undefined}>
         {isEmbedMode ? (
           <div className="w-full" ref={setNotationExportEl}>
-            <Notation
+            <MemoNotation
               instruments={instruments}
               grid={computedGrid}
               stickingAssignmentsByStep={stickingAssignmentsByStep}
@@ -20966,7 +21328,7 @@ useEffect(() => {
           <>
             <div className="w-full pl-14">
               <div className="w-full" ref={setNotationExportEl}>
-                <Notation
+                <MemoNotation
                   instruments={instruments}
                   grid={computedGrid}
                   stickingAssignmentsByStep={stickingAssignmentsByStep}
@@ -21108,7 +21470,7 @@ useEffect(() => {
               style={layout === "grid-top" ? { marginTop: `${gridNotationGap}px` } : undefined}
             >
               <div className="w-full" ref={setNotationExportEl}>
-                <Notation
+                <MemoNotation
                   instruments={instruments}
                   grid={computedGrid}
                   stickingAssignmentsByStep={stickingAssignmentsByStep}
@@ -22863,14 +23225,13 @@ useEffect(() => {
                               idx <= normalizedArrangementSelection.end
                           )}
                           isPlaying={arrangementPlaybackEnabled && idx === activeArrangementPlayingRowIndex}
-                          onSelect={(e) => {
-                            handleArrangementRowSelect(idx, !!e?.shiftKey);
+                          onSelectRow={(rowIndex, e) => {
+                            handleArrangementRowSelect(rowIndex, !!e?.shiftKey);
                             if (row?.beat) {
                               loadBeatIntoEditorRef.current?.("shared", row.beat);
                             }
                           }}
-                          onRepeatDown={() => nudgeSelectedPublicArrangementRepeat(row.id, -1)}
-                          onRepeatUp={() => nudgeSelectedPublicArrangementRepeat(row.id, 1)}
+                          onRepeatChange={(rowId, delta) => nudgeSelectedPublicArrangementRepeat(rowId, delta)}
                         />
                       ))}
                     </div>
@@ -23036,8 +23397,6 @@ useEffect(() => {
                             key={`arr-row-${row.id}`}
                             row={row}
                             index={idx}
-                            globalNotationBarsPerRow={arrangementNotationBarsPerRow}
-                            globalNotationDynamicSpacing={arrangementNotationDynamicSpacing}
                             isPlaying={arrangementPlaybackEnabled && idx === activeArrangementPlayingRowIndex}
                             isEditorBeat={currentArrangementEditorBeatKey === `${String(row?.source || "local")}:${String(row?.beat?.id || "")}`}
                             isSelected={Boolean(
@@ -23045,33 +23404,14 @@ useEffect(() => {
                                 idx >= normalizedArrangementSelection.start &&
                                 idx <= normalizedArrangementSelection.end
                             )}
-                            onSelect={(e) => handleArrangementRowSelect(idx, !!e?.shiftKey)}
-                            onTouchSelect={handleArrangementRowTouchSelect}
+                            onSelectRow={handleArrangementRowSelect}
+                            onTouchSelectRow={handleArrangementRowTouchSelect}
                             dropPosition={
                               arrangementDropTarget?.rowId === row.id ? arrangementDropTarget.position : null
                             }
-                            onExternalDragOver={(e) => {
-                              if (!arrangementDragBeatRef.current?.beatId) return;
-                              e.preventDefault();
-                              e.stopPropagation();
-                              const rect = e.currentTarget.getBoundingClientRect();
-                              const position =
-                                e.clientY < rect.top + rect.height / 2 ? "before" : "after";
-                              setArrangementDropActive(true);
-                              setArrangementDropTarget({ rowId: row.id, position, index: idx });
-                              if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
-                            }}
-                            onExternalDrop={(e) => {
-                              if (!arrangementDragBeatRef.current?.beatId) return;
-                              e.preventDefault();
-                              e.stopPropagation();
-                              const rect = e.currentTarget.getBoundingClientRect();
-                              const position =
-                                e.clientY < rect.top + rect.height / 2 ? "before" : "after";
-                              dropDraggedBeatIntoArrangement(idx + (position === "after" ? 1 : 0));
-                            }}
-                            onRepeatDown={() => arrangementNudgeRepeats(row.id, -1)}
-                            onRepeatUp={() => arrangementNudgeRepeats(row.id, 1)}
+                            onExternalDragOverRow={handleArrangementExternalRowDragOver}
+                            onExternalDropRow={handleArrangementExternalRowDrop}
+                            onRepeatChange={arrangementNudgeRepeats}
                             disableTransition={
                               !!activeArrangementSortRowId && arrangementOrderDropTargetId === "__trash__"
                             }
@@ -26781,19 +27121,18 @@ function SortableKitOrderRow({
   );
 }
 
-function SortableArrangementRow({
+const SortableArrangementRow = React.memo(function SortableArrangementRow({
   row,
   index,
   isPlaying,
   isEditorBeat,
   isSelected,
-  onSelect,
+  onSelectRow,
   dropPosition,
-  onExternalDragOver,
-  onExternalDrop,
-  onRepeatDown,
-  onRepeatUp,
-  onTouchSelect,
+  onExternalDragOverRow,
+  onExternalDropRow,
+  onRepeatChange,
+  onTouchSelectRow,
   disableTransition = false,
 }) {
   const rootRef = React.useRef(null);
@@ -26816,7 +27155,7 @@ function SortableArrangementRow({
       data-arrangement-row-index={index}
       style={style}
       {...attributes}
-      onClick={(e) => onSelect?.(e)}
+      onClick={(e) => onSelectRow?.(index, e)}
       onPointerDown={(e) => {
         if (e.pointerType === "mouse") {
           sortablePointerDown?.(e);
@@ -26824,13 +27163,13 @@ function SortableArrangementRow({
         }
         e.preventDefault();
         e.stopPropagation();
-        onTouchSelect?.(index, e.pointerId);
+        onTouchSelectRow?.(index, e.pointerId);
       }}
       onKeyDown={(e) => {
         sortableKeyDown?.(e);
       }}
-      onDragOver={onExternalDragOver}
-      onDrop={onExternalDrop}
+      onDragOver={(e) => onExternalDragOverRow?.(row.id, index, e)}
+      onDrop={(e) => onExternalDropRow?.(row.id, index, e)}
       className={`select-none rounded border px-2.5 py-2 outline-none focus:outline-none focus-visible:outline-none ${
         isPlaying
           ? "border-sky-500/70 bg-sky-900/20 shadow-[0_0_0_1px_rgba(14,165,233,0.35)]"
@@ -26863,7 +27202,7 @@ function SortableArrangementRow({
               onPointerDown={(e) => e.stopPropagation()}
               onClick={(e) => {
                 e.stopPropagation();
-                onRepeatDown?.();
+                onRepeatChange?.(row.id, -1);
               }}
               className="px-2 text-xs text-neutral-400 hover:bg-neutral-800/60"
               aria-label="Decrease repeats"
@@ -26878,7 +27217,7 @@ function SortableArrangementRow({
               onPointerDown={(e) => e.stopPropagation()}
               onClick={(e) => {
                 e.stopPropagation();
-                onRepeatUp?.();
+                onRepeatChange?.(row.id, 1);
               }}
               className="px-2 text-xs text-neutral-400 hover:bg-neutral-800/60"
               aria-label="Increase repeats"
@@ -26893,18 +27232,26 @@ function SortableArrangementRow({
       ) : null}
     </div>
   );
-}
+});
 
-function ReadonlyArrangementRow({ row, index, isSelected, isPlaying, isEditorBeat, onSelect, onRepeatDown, onRepeatUp }) {
+const ReadonlyArrangementRow = React.memo(function ReadonlyArrangementRow({
+  row,
+  index,
+  isSelected,
+  isPlaying,
+  isEditorBeat,
+  onSelectRow,
+  onRepeatChange,
+}) {
   return (
     <div
       role="button"
       tabIndex={0}
-      onClick={(e) => onSelect?.(e)}
+      onClick={(e) => onSelectRow?.(index, e)}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
-          onSelect?.(e);
+          onSelectRow?.(index, e);
         }
       }}
       className={`select-none rounded border px-2.5 py-2 outline-none focus:outline-none focus-visible:outline-none ${
@@ -26934,7 +27281,7 @@ function ReadonlyArrangementRow({ row, index, isSelected, isPlaying, isEditorBea
               onPointerDown={(e) => e.stopPropagation()}
               onClick={(e) => {
                 e.stopPropagation();
-                onRepeatDown?.();
+                onRepeatChange?.(row.id, -1);
               }}
               className="px-2 text-xs text-neutral-400 hover:bg-neutral-800/60"
               aria-label="Decrease repeats"
@@ -26949,7 +27296,7 @@ function ReadonlyArrangementRow({ row, index, isSelected, isPlaying, isEditorBea
               onPointerDown={(e) => e.stopPropagation()}
               onClick={(e) => {
                 e.stopPropagation();
-                onRepeatUp?.();
+                onRepeatChange?.(row.id, 1);
               }}
               className="px-2 text-xs text-neutral-400 hover:bg-neutral-800/60"
               aria-label="Increase repeats"
@@ -26961,7 +27308,7 @@ function ReadonlyArrangementRow({ row, index, isSelected, isPlaying, isEditorBea
       </div>
     </div>
   );
-}
+});
 
 function ArrangementRowNotationMenu({
   row,
@@ -27650,6 +27997,26 @@ function Grid({
       ),
     };
   }, [tupletGridAppearanceByValue]);
+  const getCountRowQuarterBandStyle = React.useCallback((quarterBandClass, quarterTupletValue) => {
+    if (quarterBandClass === "is-tuplet-band") {
+      return getTupletQuarterBandStyle(quarterTupletValue, false);
+    }
+    if (quarterBandClass === "is-tuplet-band-dark") {
+      return getTupletQuarterBandStyle(quarterTupletValue, true);
+    }
+    if (quarterBandClass === "bg-black/[0.14]") {
+      const straightOverride = Math.max(1, Number(quarterTupletValue) || 0);
+      if (
+        !quarterTupletValue ||
+        !isPowerOfTwoSubdivision(straightOverride) ||
+        straightOverride === gridBaseSubdivPerQuarter
+      ) {
+        return undefined;
+      }
+      return { backgroundColor: "#1f1f1f" };
+    }
+    return undefined;
+  }, [getTupletQuarterBandStyle, gridBaseSubdivPerQuarter]);
 
   const getQuarterBorderClass = React.useCallback(
     (barIdx, stepMeta) => {
@@ -27915,6 +28282,10 @@ function Grid({
                   const quarterBorderClass = getQuarterBorderClass(t.bar, t.stepMeta);
                   const quarterTupletValue =
                     normalizedTupletOverridesByBar?.[t.bar]?.[t.stepMeta?.quarterIndex ?? 0] ?? null;
+                  const countRowQuarterBandStyle = getCountRowQuarterBandStyle(
+                    quarterBandClass,
+                    quarterTupletValue
+                  );
               return (
                 <div
                   key={`h-${t.stepIndex}`}
@@ -27965,16 +28336,10 @@ function Grid({
                       aria-hidden="true"
                     />
                   )}
-                  {(quarterBandClass || quarterBorderClass) ? (
+                  {countRowQuarterBandStyle ? (
                     <span
                       className={`pointer-events-none absolute inset-0 rounded-sm ${quarterBandClass}`}
-                      style={
-                        quarterBandClass === "is-tuplet-band"
-                          ? getTupletQuarterBandStyle(quarterTupletValue, false)
-                          : quarterBandClass === "is-tuplet-band-dark"
-                            ? getTupletQuarterBandStyle(quarterTupletValue, true)
-                            : undefined
-                      }
+                      style={countRowQuarterBandStyle}
                       aria-hidden="true"
                     />
                   ) : null}
@@ -28572,9 +28937,10 @@ function Notation({
   const sectionTextColor = isLightTheme ? "#111111" : "#e5e5e5";
 
   useEffect(() => {
-  const Flow = Vex.Flow;
-    let ctx;
-    const buildBarSignature = (barIndex) => {
+    const rafId = window.requestAnimationFrame(() => {
+      const Flow = Vex.Flow;
+      let ctx;
+      const buildBarSignature = (barIndex) => {
       const quarterSubs = (Array.isArray(quarterSubdivisionsByBar) ? quarterSubdivisionsByBar[barIndex] : null) || [];
       const start = Array.isArray(barStepOffsets) ? Number(barStepOffsets[barIndex]) || 0 : barIndex * stepsPerBar;
       const end = Array.isArray(barStepOffsets)
@@ -28680,15 +29046,15 @@ function Notation({
       Array.isArray(list) && typeof list[barIndex] === "boolean" ? list[barIndex] : fallback
     );
     const getBarIndexForStep = (stepIdx) => {
-      if (!Array.isArray(barStepOffsets) || barStepOffsets.length < 2) {
-        return Math.max(0, Math.min((Number(bars) || 1) - 1, Math.floor(stepIdx / Math.max(1, Number(stepsPerBar) || 1))));
+      if (!Array.isArray(renderBarStepOffsets) || renderBarStepOffsets.length < 2) {
+        return Math.max(0, Math.min((Number(bars) || 1) - 1, Math.floor(stepIdx / Math.max(1, Number(renderStepsPerBar) || 1))));
       }
-      for (let barIndex = 0; barIndex < Math.max(0, barStepOffsets.length - 1); barIndex++) {
-        const start = Number(barStepOffsets[barIndex]) || 0;
-        const end = Number(barStepOffsets[barIndex + 1]) || start;
+      for (let barIndex = 0; barIndex < Math.max(0, renderBarStepOffsets.length - 1); barIndex++) {
+        const start = Number(renderBarStepOffsets[barIndex]) || 0;
+        const end = Number(renderBarStepOffsets[barIndex + 1]) || start;
         if (stepIdx >= start && stepIdx < end) return barIndex;
       }
-      return Math.max(0, Math.min((Number(bars) || 1) - 1, barStepOffsets.length - 2));
+      return Math.max(0, Math.min((Number(bars) || 1) - 1, renderBarStepOffsets.length - 2));
     };
     const drawArrangementTextMarkers = (svgRoot, staves) => {
       if (!svgRoot || !Array.isArray(staves) || staves.length < 1) return;
@@ -28966,18 +29332,22 @@ function Notation({
     };
     const getStickingSpecForStep = (stepIdx) => {
       const barIndex = getBarIndexForStep(stepIdx);
+      const sourceStepIdx =
+        Array.isArray(renderStepSourceIndexMap) && Number.isFinite(renderStepSourceIndexMap[stepIdx])
+          ? Number(renderStepSourceIndexMap[stepIdx])
+          : stepIdx;
       const effectiveShowNotationSticking = getEffectiveBarBoolean(
         showNotationStickingByBar,
         barIndex,
         showNotationSticking
       );
       if (!effectiveShowNotationSticking) return [];
-      const map = stickingAssignmentsByStep?.[stepIdx];
+      const map = stickingAssignmentsByStep?.[sourceStepIdx];
       if (!map || typeof map !== "object") return [];
       const entries = Object.entries(map).filter(([instId, hand]) => {
         if (hand !== "L" && hand !== "R") return false;
         if (!notationStickingSelection) return true;
-        return notationStickingSelection[`${instId}:${stepIdx}`] === true;
+        return notationStickingSelection[`${instId}:${sourceStepIdx}`] === true;
       });
       if (!entries.length) return [];
       const hands = entries.map(([, hand]) => hand);
@@ -29162,10 +29532,16 @@ function Notation({
         const stepsInBar = uniformQuarterSubsByBar[b].reduce((sum, value) => sum + Math.max(1, Number(value) || 1), 0);
         uniformBarStepOffsets.push(uniformBarStepOffsets[b] + stepsInBar);
       }
+      const expandedStepSourceIndexMap = Array(
+        Math.max(0, Number(uniformBarStepOffsets[uniformBarStepOffsets.length - 1] ?? 0))
+      ).fill(null);
       const expandedGrid = {};
       instruments.forEach((inst) => {
         expandedGrid[inst.id] = Array(uniformBarStepOffsets[uniformBarStepOffsets.length - 1] || 0).fill(CELL.OFF);
       });
+      const sourceToTargetIndexMap = Array(
+        Math.max(0, Number(resolvedStepOffsets[resolvedStepOffsets.length - 1] ?? 0))
+      ).fill(null);
       for (let b = 0; b < bars; b++) {
         const sourceBarStart = resolvedStepOffsets[b] ?? 0;
         const targetBarStart = uniformBarStepOffsets[b] ?? 0;
@@ -29176,19 +29552,30 @@ function Notation({
           for (let sub = 0; sub < sourceSubdiv; sub++) {
             const sourceIndex = sourceBarStart + sourceQuarterOffset + sub;
             const targetIndex = targetBarStart + q * maxSubdivPerQuarter + sub * targetFactor;
-            instruments.forEach((inst) => {
-              expandedGrid[inst.id][targetIndex] = grid[inst.id]?.[sourceIndex] ?? CELL.OFF;
-            });
+            expandedStepSourceIndexMap[targetIndex] = sourceIndex;
+            sourceToTargetIndexMap[sourceIndex] = targetIndex;
           }
           sourceQuarterOffset += sourceSubdiv;
         }
       }
+      instruments.forEach((inst) => {
+        const sourceRow = grid[inst.id] || [];
+        const targetRow = expandedGrid[inst.id];
+        for (let sourceIndex = 0; sourceIndex < sourceRow.length; sourceIndex++) {
+          const value = sourceRow[sourceIndex] ?? CELL.OFF;
+          if (value === CELL.OFF) continue;
+          const targetIndex = sourceToTargetIndexMap[sourceIndex];
+          if (targetIndex == null) continue;
+          targetRow[targetIndex] = value;
+        }
+      });
       return {
         grid: expandedGrid,
         resolution: expandedResolution,
         stepsPerBar: resolvedTimeSigByBar[0].n * maxSubdivPerQuarter,
         quarterSubdivisionsByBar: uniformQuarterSubsByBar,
         barStepOffsets: uniformBarStepOffsets,
+        stepSourceIndexMap: expandedStepSourceIndexMap,
       };
     })();
     const renderGrid = straightOnlyMixedStandardState?.grid || grid;
@@ -29196,6 +29583,7 @@ function Notation({
     const renderStepsPerBar = straightOnlyMixedStandardState?.stepsPerBar || stepsPerBar;
     const renderQuarterSubsByBar = straightOnlyMixedStandardState?.quarterSubdivisionsByBar || resolvedQuarterSubsByBar;
     const renderBarStepOffsets = straightOnlyMixedStandardState?.barStepOffsets || resolvedStepOffsets;
+    const renderStepSourceIndexMap = straightOnlyMixedStandardState?.stepSourceIndexMap || null;
     const hasTuplets =
       hasVariableTimeSig ||
       (!straightOnlyMixedStandardState &&
@@ -29871,7 +30259,7 @@ function Notation({
 const isRest = keys.length === 0;
 
         // Merge notes/rests to larger durations (optional)
-        const stepsPerBeatN = Math.max(1, Math.round(notationResolution / timeSig.d));
+        const stepsPerBeatN = Math.max(1, Math.round(notationResolution / barTimeSig.d));
         const subInBeat = stepsPerBeatN === 0 ? 0 : (s % stepsPerBeatN);
 
         const hasAnyHitAt = (absIdx) => {
@@ -29917,9 +30305,9 @@ const isRest = keys.length === 0;
         // Example: in 4/4, don't dot across quarter-note beats; in 6/8, don't dot across the 3+3 grouping.
         const beamGroupsPerBar = (() => {
           // Compound meters like 6/8, 9/8, 12/8: group in dotted quarters (3 eighths)
-          if (timeSig.d === 8 && timeSig.n % 3 === 0 && timeSig.n > 3) return timeSig.n / 3;
+          if (barTimeSig.d === 8 && barTimeSig.n % 3 === 0 && barTimeSig.n > 3) return barTimeSig.n / 3;
           // Simple meters: group by beats in the numerator (e.g., 4/4 -> 4, 3/4 -> 3)
-          return timeSig.n;
+          return barTimeSig.n;
         })();
         const groupSizeSteps = stepsPerBarN / beamGroupsPerBar;
         const inSameBeamGroup = (startStep, endExclusiveStep) => {
@@ -30207,7 +30595,7 @@ const isRest = keys.length === 0;
 
 
 // 16ths in x/8 (stepsPerBeatN=2): [rest][rest] -> eighth rest
-          if (notationResolution === 16 && stepsPerBeatN === 2 && subInBeat === 0 && s + 1 < stepsPerBar) {
+          if (notationResolution === 16 && stepsPerBeatN === 2 && subInBeat === 0 && s + 1 < stepsPerBarN) {
             if (isStepEmpty(barStartStep + (s + 1))) {
               pushNote(new StaveNote({ keys: ["b/4"], duration: "8r", clef: "percussion" }));
               s += 2;
@@ -30233,13 +30621,13 @@ const isRest = keys.length === 0;
         s += 1;
       }
 
-      const voice = new Voice({ num_beats: timeSig.n, beat_value: timeSig.d });
+      const voice = new Voice({ num_beats: barTimeSig.n, beat_value: barTimeSig.d });
       voice.setMode(Voice.Mode.SOFT);
       voice.addTickables(notes);
       voices.push(voice);
 
       // Beaming groups
-      if (timeSig.n === 6 && timeSig.d === 8) {
+      if (barTimeSig.n === 6 && barTimeSig.d === 8) {
         // Typical 6/8: 3+3 grouping
       } else {
         // Beam by beat unit
@@ -30257,7 +30645,7 @@ const isRest = keys.length === 0;
 // Generate beams *within* each beam group division only (never across groups).
       // This prevents later beats from affecting earlier beaming (e.g., dotted 8th + 16th in beat 1).
       const groupBuckets = Array.from({ length: beamGroupsPerBar }, () => []);
-            const groupSizeSteps = stepsPerBar / beamGroupsPerBar;
+      const groupSizeSteps = stepsPerBarN / beamGroupsPerBar;
 for (let i = 0; i < notes.length; i++) {
         const st = noteStarts[i] ?? CELL.OFF;
         const g = Math.max(0, Math.min(beamGroupsPerBar - 1, Math.floor(st / groupSizeSteps)));
@@ -30386,6 +30774,10 @@ for (let i = 0; i < notes.length; i++) {
         };
       });
     }
+    });
+    return () => {
+      window.cancelAnimationFrame(rafId);
+    };
   }, [instruments, grid, stickingAssignmentsByStep, showNotationSticking, notationStickingSelection, notationStickingView, resolution, bars, barsPerLine, barsPerRow, stepsPerBar, timeSig, timeSigByBar, quarterSubdivisionsByBar, barStepOffsets, mergeRests, mergeNotes, dottedNotes, flatBeams, justifySystems, targetContentWidth, sectionMarkers, tempoMarkers, dynamicSpacingByBar, showSystemBarNumbers, barNumberOffset, enableMeasureRepeats, spacingPresetByBar, mergeRestsByBar, mergeNotesByBar, dottedNotesByBar, showNotationStickingByBar, theme]);
 
   useEffect(() => {
@@ -30524,3 +30916,54 @@ for (let i = 0; i < notes.length; i++) {
   );
 
 }
+
+function areNumberArraysEqual(a = [], b = []) {
+  if (a === b) return true;
+  if (!Array.isArray(a) || !Array.isArray(b)) return false;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+const MemoNotation = React.memo(Notation, (prev, next) => {
+  return (
+    prev.instruments === next.instruments &&
+    prev.grid === next.grid &&
+    prev.stickingAssignmentsByStep === next.stickingAssignmentsByStep &&
+    prev.showNotationSticking === next.showNotationSticking &&
+    prev.notationStickingSelection === next.notationStickingSelection &&
+    prev.notationStickingView === next.notationStickingView &&
+    prev.resolution === next.resolution &&
+    prev.bars === next.bars &&
+    prev.barsPerLine === next.barsPerLine &&
+    prev.barsPerRow === next.barsPerRow &&
+    prev.stepsPerBar === next.stepsPerBar &&
+    prev.timeSig === next.timeSig &&
+    prev.timeSigByBar === next.timeSigByBar &&
+    prev.quarterSubdivisionsByBar === next.quarterSubdivisionsByBar &&
+    prev.barStepOffsets === next.barStepOffsets &&
+    prev.mergeRests === next.mergeRests &&
+    prev.mergeNotes === next.mergeNotes &&
+    prev.dottedNotes === next.dottedNotes &&
+    prev.flatBeams === next.flatBeams &&
+    prev.justifySystems === next.justifySystems &&
+    prev.targetContentWidth === next.targetContentWidth &&
+    areNumberArraysEqual(prev.activeBarIndices, next.activeBarIndices) &&
+    areNumberArraysEqual(prev.editorBarIndices, next.editorBarIndices) &&
+    areNumberArraysEqual(prev.selectedBarIndices, next.selectedBarIndices) &&
+    prev.sectionMarkers === next.sectionMarkers &&
+    prev.tempoMarkers === next.tempoMarkers &&
+    prev.dynamicSpacingByBar === next.dynamicSpacingByBar &&
+    prev.spacingPresetByBar === next.spacingPresetByBar &&
+    prev.mergeRestsByBar === next.mergeRestsByBar &&
+    prev.mergeNotesByBar === next.mergeNotesByBar &&
+    prev.dottedNotesByBar === next.dottedNotesByBar &&
+    prev.showNotationStickingByBar === next.showNotationStickingByBar &&
+    prev.showSystemBarNumbers === next.showSystemBarNumbers &&
+    prev.barNumberOffset === next.barNumberOffset &&
+    prev.enableMeasureRepeats === next.enableMeasureRepeats &&
+    prev.theme === next.theme
+  );
+});
