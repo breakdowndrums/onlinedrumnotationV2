@@ -402,6 +402,26 @@ function LibraryIcon() {
   );
 }
 
+function SheetIcon() {
+  return (
+    <svg viewBox="0 0 16 16" className="h-4 w-4 fill-current" aria-hidden="true">
+      <path d="M4 1.75A1.75 1.75 0 0 1 5.75 0h3.98c.46 0 .9.18 1.23.5l2.54 2.54c.32.33.5.77.5 1.23v9.98A1.75 1.75 0 0 1 12.25 16h-6.5A1.75 1.75 0 0 1 4 14.25zM9.5 1.5v2.25c0 .41.34.75.75.75h2.25zM6 7.25c0 .41.34.75.75.75h4.5a.75.75 0 0 0 0-1.5h-4.5a.75.75 0 0 0-.75.75m0 3c0 .41.34.75.75.75h4.5a.75.75 0 0 0 0-1.5h-4.5a.75.75 0 0 0-.75.75M6.75 12.5a.75.75 0 0 0 0 1.5h2.5a.75.75 0 0 0 0-1.5z" />
+    </svg>
+  );
+}
+
+function AddToSheetIcon() {
+  return (
+    <span className="relative inline-flex h-4 w-4 items-center justify-center overflow-visible" aria-hidden="true">
+      <SheetIcon />
+      <span className="pointer-events-none absolute -right-[6px] top-0 h-[6px] w-[6px]">
+        <span className="absolute left-0 top-1/2 h-[1.25px] w-full -translate-y-1/2 rounded-full bg-current" />
+        <span className="absolute left-1/2 top-0 h-full w-[1.25px] -translate-x-1/2 rounded-full bg-current" />
+      </span>
+    </span>
+  );
+}
+
 function SettingsIcon() {
   return (
     <span
@@ -876,6 +896,12 @@ const ARRANGEMENT_NOTATION_BARS_PER_ROW_STORAGE_KEY =
   "drum-grid-arrangement-notation-bars-per-row-v1";
 const ARRANGEMENT_NOTATION_DYNAMIC_SPACING_STORAGE_KEY =
   "drum-grid-arrangement-notation-dynamic-spacing-v1";
+const ARRANGEMENT_NOTATION_GLOBAL_MERGE_RESTS_STORAGE_KEY =
+  "drum-grid-arrangement-notation-global-merge-rests-v1";
+const ARRANGEMENT_NOTATION_GLOBAL_MERGE_NOTES_STORAGE_KEY =
+  "drum-grid-arrangement-notation-global-merge-notes-v1";
+const ARRANGEMENT_NOTATION_GLOBAL_DOTTED_NOTES_STORAGE_KEY =
+  "drum-grid-arrangement-notation-global-dotted-notes-v1";
 const ARRANGEMENT_NOTATION_SCROLL_ROWS_STORAGE_KEY =
   "drum-grid-arrangement-notation-scroll-rows-v1";
 const ARRANGEMENT_NOTATION_THEME_STORAGE_KEY =
@@ -891,6 +917,7 @@ const PREFERENCES_CATEGORY_STORAGE_KEY = "drum-grid-preferences-category-v1";
 const GRID_NOTATION_GAP_STORAGE_KEY = "drum-grid-grid-notation-gap-v1";
 const NOTATION_GRID_GAP_OFFSET_STORAGE_KEY = "drum-grid-notation-grid-gap-offset-v1";
 const DEFAULT_LOOP_REPEATS_STORAGE_KEY = "drum-grid-default-loop-repeats-v1";
+const STARTUP_GRID_SETTINGS_STORAGE_KEY = "drum-grid-startup-grid-settings-v1";
 const BEAT_LIBRARY_CONTAINERS_STORAGE_KEY = "drum-grid-beat-library-containers-v1";
 const DEVICE_LOCAL_BEAT_LIBRARY_CONTAINERS_SNAPSHOT_STORAGE_KEY =
   "drum-grid-device-local-beat-library-containers-snapshot-v1";
@@ -903,7 +930,7 @@ const TEMPORARY_SHARE_LINK_CLEANUP_INTERVAL_MS = 1000 * 60 * 60 * 24;
 const BEAT_LIBRARY_SELECTED_CONTAINER_STORAGE_KEY = "drum-grid-beat-library-selected-container-v1";
 const BEAT_LIBRARY_ROOT_COLLAPSED_STORAGE_KEY = "drum-grid-beat-library-root-collapsed-v1";
 const GRID_SETTINGS_PRESET_LIBRARY_STORAGE_KEY = "drum-grid-grid-settings-presets-v1";
-const APP_VERSION = "0.1.496";
+const APP_VERSION = "0.1.497";
 const BEAT_CATEGORY_OPTIONS = [
   "Groove",
   "Fill",
@@ -1293,6 +1320,9 @@ function normalizeArrangementItems(items) {
   const normalizeNotationBooleanOverride = (raw) => (
     typeof raw === "boolean" ? raw : null
   );
+  const normalizeNotationPrintStickingModeOverride = (raw) => (
+    raw === "all" || raw === "custom" ? raw : null
+  );
   return items
     .map((item) => ({
       id: String(item?.id || ""),
@@ -1316,13 +1346,21 @@ function normalizeArrangementItems(items) {
       notationBarsPerRowOverride: normalizeBarsPerRowOverride(item?.notationBarsPerRowOverride),
       notationSpacingPreset: normalizeSpacingPreset(item?.notationSpacingPreset),
       notationMergeRestsCustom: item?.notationMergeRestsCustom === true,
+      notationMergeRestsFollowBeat: item?.notationMergeRestsFollowBeat === true,
       notationMergeRestsOverride: normalizeNotationBooleanOverride(item?.notationMergeRestsOverride),
       notationMergeNotesCustom: item?.notationMergeNotesCustom === true,
+      notationMergeNotesFollowBeat: item?.notationMergeNotesFollowBeat === true,
       notationMergeNotesOverride: normalizeNotationBooleanOverride(item?.notationMergeNotesOverride),
       notationDottedNotesCustom: item?.notationDottedNotesCustom === true,
+      notationDottedNotesFollowBeat: item?.notationDottedNotesFollowBeat === true,
       notationDottedNotesOverride: normalizeNotationBooleanOverride(item?.notationDottedNotesOverride),
       notationPrintStickingCustom: item?.notationPrintStickingCustom === true,
+      notationPrintStickingFollowBeat:
+        Object.prototype.hasOwnProperty.call(item || {}, "notationPrintStickingFollowBeat")
+          ? item?.notationPrintStickingFollowBeat === true
+          : item?.notationPrintStickingCustom !== true,
       notationPrintStickingOverride: normalizeNotationBooleanOverride(item?.notationPrintStickingOverride),
+      notationPrintStickingModeOverride: normalizeNotationPrintStickingModeOverride(item?.notationPrintStickingModeOverride),
     }))
     .filter((item) => item.id && item.beatId);
 }
@@ -1415,6 +1453,72 @@ function buildEmptyTupletOverridesForPreset(bars, timeSig) {
   return Array.from({ length: safeBars }, () =>
     Array.from({ length: quarterCount }, () => null)
   );
+}
+
+const BUILT_IN_STARTUP_GRID_SETTINGS = {
+  resolution: 8,
+  bars: 2,
+  timeSig: { n: 4, d: 4 },
+  tupletsByBar: buildEmptyTupletOverridesForPreset(2, { n: 4, d: 4 }),
+  kitInstrumentIds: [...DRUMKIT_PRESETS.standard],
+};
+
+function cloneTupletOverridesByBar(rows, bars, timeSig) {
+  const fallback = buildEmptyTupletOverridesForPreset(bars, timeSig);
+  return fallback.map((row, barIdx) =>
+    row.map((_, qIdx) => clampTupletValue(rows?.[barIdx]?.[qIdx]) ?? null)
+  );
+}
+
+function normalizeStartupGridSettings(entry) {
+  if (!entry || typeof entry !== "object") return null;
+  const bars = Math.max(1, Number(entry?.bars) || BUILT_IN_STARTUP_GRID_SETTINGS.bars);
+  const resolution = [4, 8, 16, 32].includes(Number(entry?.resolution))
+    ? Number(entry.resolution)
+    : BUILT_IN_STARTUP_GRID_SETTINGS.resolution;
+  const timeSig = {
+    n: Math.max(2, Math.min(15, Number(entry?.timeSig?.n) || BUILT_IN_STARTUP_GRID_SETTINGS.timeSig.n)),
+    d: Number(entry?.timeSig?.d) === 8 ? 8 : 4,
+  };
+  const kitInstrumentIds = Array.isArray(entry?.kitInstrumentIds)
+    ? [...new Set(entry.kitInstrumentIds.filter((id) => INSTRUMENT_BY_ID[id]))]
+    : [];
+  return {
+    bars,
+    resolution,
+    timeSig,
+    tupletsByBar: cloneTupletOverridesByBar(entry?.tupletsByBar, bars, timeSig),
+    kitInstrumentIds: kitInstrumentIds.length
+      ? kitInstrumentIds
+      : [...BUILT_IN_STARTUP_GRID_SETTINGS.kitInstrumentIds],
+  };
+}
+
+function readStoredStartupGridSettings() {
+  try {
+    const raw = window.localStorage.getItem(STARTUP_GRID_SETTINGS_STORAGE_KEY);
+    if (!raw) return null;
+    return normalizeStartupGridSettings(JSON.parse(raw));
+  } catch (_) {
+    return null;
+  }
+}
+
+function getNotationPrintStickingModeFromPayload(payload, fallbackMode = "off") {
+  const nextFallback =
+    fallbackMode === "all" || fallbackMode === "custom" || fallbackMode === "off"
+      ? fallbackMode
+      : "off";
+  if (!payload || typeof payload !== "object") return nextFallback;
+  if (payload.showNotationSticking === false) return "off";
+  if (payload.showNotationSticking === true) {
+    const hasCustomSelection =
+      payload.notationStickingSelection &&
+      typeof payload.notationStickingSelection === "object" &&
+      Object.values(payload.notationStickingSelection).some((value) => value === true);
+    return hasCustomSelection ? "custom" : "all";
+  }
+  return nextFallback;
 }
 
 function normalizeGridSettingsPresetEntry(entry, index = 0) {
@@ -1668,18 +1772,22 @@ function getComparableBeatPayload(payload) {
   const nextNotationStickingSelection =
     payload?.notationStickingSelection && typeof payload.notationStickingSelection === "object"
       ? Object.fromEntries(
-          Object.entries(payload.notationStickingSelection).filter(([, value]) => value === true)
+          Object.entries(payload.notationStickingSelection)
+            .filter(([, value]) => value === true)
+            .sort(([a], [b]) => String(a).localeCompare(String(b)))
         )
       : {};
   const nextStickingOverrides =
     payload?.stickingOverrides && typeof payload.stickingOverrides === "object"
       ? Object.fromEntries(
-          Object.entries(payload.stickingOverrides).filter(
-            ([key, value]) =>
-              typeof key === "string" &&
-              key.includes(":") &&
-              (value === "L" || value === "R")
-          )
+          Object.entries(payload.stickingOverrides)
+            .filter(
+              ([key, value]) =>
+                typeof key === "string" &&
+                key.includes(":") &&
+                (value === "L" || value === "R")
+            )
+            .sort(([a], [b]) => String(a).localeCompare(String(b)))
         )
       : {};
   const next = {
@@ -1702,6 +1810,9 @@ function getComparableBeatPayload(payload) {
       payload?.layout === "notation-top"
         ? payload.layout
         : "grid-top",
+    mergeRests: payload?.mergeRests !== false,
+    mergeNotes: payload?.mergeNotes !== false,
+    dottedNotes: payload?.dottedNotes !== false,
     showNotationSticking: payload?.showNotationSticking !== false,
     notationStickingView: payload?.notationStickingView === "split-rows" ? "split-rows" : "above",
     tupletsByBar: nextTupletsByBar,
@@ -1738,6 +1849,29 @@ function getComparableBeatPayload(payload) {
 
 function getComparableBeatPayloadWithoutNotationSticking(payload) {
   const next = getComparableBeatPayload(payload);
+  delete next.notationStickingSelection;
+  return next;
+}
+
+function getComparableBeatPayloadForLibraryBeat(beat) {
+  const payload = beat?.payload && typeof beat.payload === "object" ? beat.payload : {};
+  const metadataPayload = {
+    ...payload,
+    name: String(beat?.name || payload?.name || "").trim(),
+    category: String(beat?.category || payload?.category || "Groove"),
+    style: String(beat?.style || payload?.style || "all"),
+    bpm: Number.isFinite(Number(beat?.bpm)) ? Number(beat.bpm) : payload?.bpm,
+    ...(beat?.notationStickingSelection &&
+    typeof beat.notationStickingSelection === "object" &&
+    Object.keys(beat.notationStickingSelection).length > 0
+      ? { notationStickingSelection: beat.notationStickingSelection }
+      : {}),
+  };
+  return getComparableBeatPayload(metadataPayload);
+}
+
+function getComparableBeatPayloadForLibraryBeatWithoutNotationSticking(beat) {
+  const next = getComparableBeatPayloadForLibraryBeat(beat);
   delete next.notationStickingSelection;
   return next;
 }
@@ -3094,7 +3228,7 @@ function sliceMarkerListByBars(markers, startBar, barCount) {
 function sliceBooleanListByBars(values, startBar, barCount, fallback = false) {
   return Array.from({ length: barCount }, (_, idx) => {
     const raw = Array.isArray(values) ? values[startBar + idx] : undefined;
-    return raw === true ? true : fallback;
+    return typeof raw === "boolean" ? raw : fallback;
   });
 }
 
@@ -3708,8 +3842,14 @@ export default function App() {
     return null;
   });
   const [sharedArrangementBeats, setSharedArrangementBeats] = useState([]);
+  const [customStartupGridSettings, setCustomStartupGridSettings] = useState(() =>
+    readStoredStartupGridSettings()
+  );
+  const initialStartupGridSettings = customStartupGridSettings || BUILT_IN_STARTUP_GRID_SETTINGS;
 
-  const [kitInstrumentIds, setKitInstrumentIds] = useState(DRUMKIT_PRESETS.standard);
+  const [kitInstrumentIds, setKitInstrumentIds] = useState(() => [
+    ...initialStartupGridSettings.kitInstrumentIds,
+  ]);
   const instruments = React.useMemo(
     () => kitInstrumentIds.map((id) => INSTRUMENT_BY_ID[id]).filter(Boolean),
     [kitInstrumentIds]
@@ -4010,6 +4150,30 @@ export default function App() {
       return window.localStorage.getItem(ARRANGEMENT_NOTATION_DYNAMIC_SPACING_STORAGE_KEY) === "true";
     } catch (_) {
       return false;
+    }
+  });
+  const [arrangementNotationGlobalMergeRests, setArrangementNotationGlobalMergeRests] = useState(() => {
+    try {
+      const raw = window.localStorage.getItem(ARRANGEMENT_NOTATION_GLOBAL_MERGE_RESTS_STORAGE_KEY);
+      return raw == null ? true : raw === "true";
+    } catch (_) {
+      return true;
+    }
+  });
+  const [arrangementNotationGlobalMergeNotes, setArrangementNotationGlobalMergeNotes] = useState(() => {
+    try {
+      const raw = window.localStorage.getItem(ARRANGEMENT_NOTATION_GLOBAL_MERGE_NOTES_STORAGE_KEY);
+      return raw == null ? true : raw === "true";
+    } catch (_) {
+      return true;
+    }
+  });
+  const [arrangementNotationGlobalDottedNotes, setArrangementNotationGlobalDottedNotes] = useState(() => {
+    try {
+      const raw = window.localStorage.getItem(ARRANGEMENT_NOTATION_GLOBAL_DOTTED_NOTES_STORAGE_KEY);
+      return raw == null ? true : raw === "true";
+    } catch (_) {
+      return true;
     }
   });
   const [arrangementNotationScrollRows, setArrangementNotationScrollRows] = useState(() => {
@@ -4399,8 +4563,8 @@ export default function App() {
     []
   );
 
-  const [resolution, setResolution] = useState(8); // 4, 8, 16, 32
-  const [bars, setBars] = useState(2);
+  const [resolution, setResolution] = useState(() => initialStartupGridSettings.resolution); // 4, 8, 16, 32
+  const [bars, setBars] = useState(() => initialStartupGridSettings.bars);
   const [barsPerLine, setBarsPerLine] = useState(4);
   const [gridBarsPerLine, setGridBarsPerLine] = useState(4);
   const [layout, setLayout] = useState("grid-top");
@@ -4421,11 +4585,15 @@ export default function App() {
     }
   });
   const [activeTab, setActiveTab] = useState("none"); // none | timing | notation | selection
-  const [timeSig, setTimeSig] = useState({ n: 4, d: 4 });
+  const [timeSig, setTimeSig] = useState(() => ({ ...initialStartupGridSettings.timeSig }));
   const [keepTiming, setKeepTiming] = useState(true);
   const [playabilityWarningsEnabled, setPlayabilityWarningsEnabled] = useState(true);
   const [tupletOverridesByBar, setTupletOverridesByBar] = useState(() =>
-    buildTupletOverridesByBar(2, getQuarterBeatsPerBar({ n: 4, d: 4 }))
+    cloneTupletOverridesByBar(
+      initialStartupGridSettings.tupletsByBar,
+      initialStartupGridSettings.bars,
+      initialStartupGridSettings.timeSig
+    )
   );
 
   const [bpm, setBpm] = useState(120);
@@ -6814,6 +6982,30 @@ export default function App() {
       );
     } catch (_) {}
   }, [arrangementNotationDynamicSpacing]);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        ARRANGEMENT_NOTATION_GLOBAL_MERGE_RESTS_STORAGE_KEY,
+        arrangementNotationGlobalMergeRests ? "true" : "false"
+      );
+    } catch (_) {}
+  }, [arrangementNotationGlobalMergeRests]);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        ARRANGEMENT_NOTATION_GLOBAL_MERGE_NOTES_STORAGE_KEY,
+        arrangementNotationGlobalMergeNotes ? "true" : "false"
+      );
+    } catch (_) {}
+  }, [arrangementNotationGlobalMergeNotes]);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        ARRANGEMENT_NOTATION_GLOBAL_DOTTED_NOTES_STORAGE_KEY,
+        arrangementNotationGlobalDottedNotes ? "true" : "false"
+      );
+    } catch (_) {}
+  }, [arrangementNotationGlobalDottedNotes]);
   useEffect(() => {
     try {
       window.localStorage.setItem(
@@ -9894,6 +10086,29 @@ useEffect(() => {
     setGridSettingsPresets((prev) => [nextPreset, ...prev]);
     setSelectedGridSettingsPresetId(nextPreset.id);
   }, [bars, resolution, timeSig, bpm, gridSettingsPresets.length, makeNextGridSettingsPresetName]);
+  const saveCurrentStartupGridSettings = React.useCallback(() => {
+    const nextSettings = normalizeStartupGridSettings({
+      bars,
+      resolution,
+      timeSig,
+      tupletsByBar: normalizedTupletOverridesByBar,
+      kitInstrumentIds,
+    });
+    if (!nextSettings) return;
+    setCustomStartupGridSettings(nextSettings);
+    try {
+      window.localStorage.setItem(
+        STARTUP_GRID_SETTINGS_STORAGE_KEY,
+        JSON.stringify(nextSettings)
+      );
+    } catch (_) {}
+  }, [bars, resolution, timeSig, normalizedTupletOverridesByBar, kitInstrumentIds]);
+  const resetStartupGridSettings = React.useCallback(() => {
+    setCustomStartupGridSettings(null);
+    try {
+      window.localStorage.removeItem(STARTUP_GRID_SETTINGS_STORAGE_KEY);
+    } catch (_) {}
+  }, []);
   const deleteSelectedGridSettingsPreset = React.useCallback(() => {
     const targetId = String(selectedGridSettingsPresetId || "");
     if (!targetId) return;
@@ -11524,6 +11739,14 @@ useEffect(() => {
     [publicBeats, sharedArrangementBeats, localBeats]
   );
   const arrangementRows = React.useMemo(() => {
+    const currentGlobalPrintStickingMode =
+      !showNotationSticking
+        ? "off"
+        : notationStickingSelectionModeEnabled
+          ? "custom"
+          : notationStickingModePreference === "all"
+            ? "all"
+            : "custom";
     const rows = arrangementItems.map((item) => {
       const beat = getBeatBySourceRef(item.source, item.beatId);
       const beatBars = Math.max(1, Number(beat?.payload?.bars) || 1);
@@ -11568,8 +11791,13 @@ useEffect(() => {
         notationDottedNotesOverride:
           typeof item?.notationDottedNotesOverride === "boolean" ? item.notationDottedNotesOverride : null,
         notationPrintStickingCustom: item?.notationPrintStickingCustom === true,
+        notationPrintStickingFollowBeat: item?.notationPrintStickingFollowBeat === true,
         notationPrintStickingOverride:
           typeof item?.notationPrintStickingOverride === "boolean" ? item.notationPrintStickingOverride : null,
+        notationPrintStickingModeOverride:
+          item?.notationPrintStickingModeOverride === "all" || item?.notationPrintStickingModeOverride === "custom"
+            ? item.notationPrintStickingModeOverride
+            : null,
       };
     });
     let runningBarNumber = 1;
@@ -11586,19 +11814,32 @@ useEffect(() => {
       const effectiveMergeRests =
         row?.notationMergeRestsCustom === true && typeof row?.notationMergeRestsOverride === "boolean"
           ? row.notationMergeRestsOverride
-          : mergeRests;
+          : row?.notationMergeRestsFollowBeat === true && typeof row?.beat?.payload?.mergeRests === "boolean"
+            ? row.beat.payload.mergeRests
+          : arrangementNotationGlobalMergeRests;
       const effectiveMergeNotes =
         row?.notationMergeNotesCustom === true && typeof row?.notationMergeNotesOverride === "boolean"
           ? row.notationMergeNotesOverride
-          : mergeNotes;
+          : row?.notationMergeNotesFollowBeat === true && typeof row?.beat?.payload?.mergeNotes === "boolean"
+            ? row.beat.payload.mergeNotes
+          : arrangementNotationGlobalMergeNotes;
       const effectiveDottedNotes =
         row?.notationDottedNotesCustom === true && typeof row?.notationDottedNotesOverride === "boolean"
           ? row.notationDottedNotesOverride
-          : dottedNotes;
-      const effectivePrintSticking =
-        row?.notationPrintStickingCustom === true && typeof row?.notationPrintStickingOverride === "boolean"
-          ? row.notationPrintStickingOverride
-          : showNotationSticking;
+          : row?.notationDottedNotesFollowBeat === true && typeof row?.beat?.payload?.dottedNotes === "boolean"
+            ? row.beat.payload.dottedNotes
+          : arrangementNotationGlobalDottedNotes;
+      const effectivePrintStickingMode =
+        row?.notationPrintStickingCustom === true
+          ? row?.notationPrintStickingOverride === false
+            ? "off"
+            : row?.notationPrintStickingModeOverride === "all"
+              ? "all"
+              : "custom"
+          : row?.notationPrintStickingFollowBeat === true
+            ? getNotationPrintStickingModeFromPayload(row?.beat?.payload, currentGlobalPrintStickingMode)
+          : currentGlobalPrintStickingMode;
+      const effectivePrintSticking = effectivePrintStickingMode !== "off";
       const sectionBars = Math.max(1, Number(row?.sectionBars) || 1);
       const controlDisabled = carryBarsRemaining > 0 && carryBarsRemaining >= sectionBars;
       const nextRow = {
@@ -11610,6 +11851,7 @@ useEffect(() => {
         notationMergeNotesEffective: effectiveMergeNotes,
         notationDottedNotesEffective: effectiveDottedNotes,
         notationPrintStickingEffective: effectivePrintSticking,
+        notationPrintStickingModeEffective: effectivePrintStickingMode,
       };
       runningBarNumber += sectionBars;
       if (controlDisabled) {
@@ -11619,7 +11861,7 @@ useEffect(() => {
       }
       return nextRow;
     });
-  }, [arrangementItems, getBeatBySourceRef, getBeatBpm, arrangementNotationBarsPerRow, arrangementNotationDynamicSpacing, mergeRests, mergeNotes, dottedNotes, showNotationSticking]);
+  }, [arrangementItems, getBeatBySourceRef, getBeatBpm, arrangementNotationBarsPerRow, arrangementNotationDynamicSpacing, arrangementNotationGlobalMergeRests, arrangementNotationGlobalMergeNotes, arrangementNotationGlobalDottedNotes, showNotationSticking, notationStickingSelectionModeEnabled, notationStickingModePreference]);
   const getArrangementNotationLabel = React.useCallback((row) => {
     const customText = String(row?.notationCustomText || "").trim();
     if (customText) return customText;
@@ -11641,11 +11883,10 @@ useEffect(() => {
     let globalBarOffset = 0;
     let prevBpm = null;
     arrangementRows.forEach((row, idx) => {
-      const rowPrintStickingMode = row?.notationPrintStickingCustom === true
-        ? (row?.notationPrintStickingEffective === true ? "custom" : "off")
-        : arrangementGlobalNotationStickingMode === "all"
+      const rowPrintStickingMode =
+        row?.notationPrintStickingModeEffective === "all"
           ? "all"
-          : arrangementGlobalNotationStickingMode === "off"
+          : row?.notationPrintStickingModeEffective === "off"
             ? "off"
             : "custom";
       const currentBeatCustomSelection =
@@ -11708,6 +11949,8 @@ useEffect(() => {
         notationDottedNotes: row?.notationDottedNotesEffective === true,
         notationPrintStickingCustom: row?.notationPrintStickingCustom === true,
         notationPrintStickingOverride: row?.notationPrintStickingOverride ?? null,
+        notationPrintStickingModeOverride: row?.notationPrintStickingModeOverride ?? null,
+        notationPrintStickingMode: row?.notationPrintStickingModeEffective || "off",
         notationPrintSticking: row?.notationPrintStickingEffective === true,
         notationBarsPerRowCustom: row?.notationBarsPerRowCustom === true,
         notationBarsPerRowOverride: row?.notationBarsPerRowOverride ?? null,
@@ -11724,7 +11967,6 @@ useEffect(() => {
     stickingHandedness,
     stickingLeadHand,
     stickingKeepQuarterLeadHand,
-    arrangementGlobalNotationStickingMode,
     loadedLocalBeatId,
     notationStickingSelection,
     getArrangementNotationLabel,
@@ -11909,10 +12151,27 @@ useEffect(() => {
     const entry = arrangementPlayableEntries[arrangementPlaybackIndex];
     return Number.isFinite(entry?.rowIndex) ? entry.rowIndex : -1;
   }, [arrangementPlayableEntries, arrangementPlaybackIndex]);
-  const arrangementAddBeat = React.useCallback((source, beatId) => {
+  const buildArrangementRowNotationSeedFromBeat = React.useCallback((source, beatId, beatOverride = null) => {
+    const beat = beatOverride || getBeatBySourceRef(source, beatId);
+    const payload = beat?.payload && typeof beat.payload === "object" ? beat.payload : null;
+    return {
+      notationMergeRestsCustom: false,
+      notationMergeRestsFollowBeat: typeof payload?.mergeRests === "boolean",
+      notationMergeRestsOverride: null,
+      notationMergeNotesCustom: false,
+      notationMergeNotesFollowBeat: typeof payload?.mergeNotes === "boolean",
+      notationMergeNotesOverride: null,
+      notationDottedNotesCustom: false,
+      notationDottedNotesFollowBeat: typeof payload?.dottedNotes === "boolean",
+      notationDottedNotesOverride: null,
+      notationPrintStickingFollowBeat: true,
+    };
+  }, [getBeatBySourceRef]);
+  const arrangementAddBeat = React.useCallback((source, beatId, beatOverride = null) => {
+    const normalizedSource = source === "public" ? "public" : "local";
+    const normalizedBeatId = String(beatId);
+    const notationSeed = buildArrangementRowNotationSeedFromBeat(normalizedSource, normalizedBeatId, beatOverride);
     setArrangementItemsWithUndo((prev) => {
-      const normalizedSource = source === "public" ? "public" : "local";
-      const normalizedBeatId = String(beatId);
       const last = prev[prev.length - 1];
       if (
         last &&
@@ -11937,18 +12196,14 @@ useEffect(() => {
           notationJoinWithNext: false,
           notationBarsPerRowCustom: false,
           notationBarsPerRowOverride: null,
-          notationMergeRestsCustom: false,
-          notationMergeRestsOverride: null,
-          notationMergeNotesCustom: false,
-          notationMergeNotesOverride: null,
-          notationDottedNotesCustom: false,
-          notationDottedNotesOverride: null,
+          ...notationSeed,
           notationPrintStickingCustom: false,
           notationPrintStickingOverride: null,
+          notationPrintStickingModeOverride: null,
         },
       ];
     });
-  }, [setArrangementItemsWithUndo]);
+  }, [buildArrangementRowNotationSeedFromBeat, setArrangementItemsWithUndo]);
   const arrangementAddBeatEntries = React.useCallback((entries) => {
     const normalizedEntries = Array.isArray(entries)
       ? entries
@@ -11971,21 +12226,18 @@ useEffect(() => {
         notationJoinWithNext: false,
         notationBarsPerRowCustom: false,
         notationBarsPerRowOverride: null,
-        notationMergeRestsCustom: false,
-        notationMergeRestsOverride: null,
-        notationMergeNotesCustom: false,
-        notationMergeNotesOverride: null,
-        notationDottedNotesCustom: false,
-        notationDottedNotesOverride: null,
+        ...buildArrangementRowNotationSeedFromBeat(entry.source, entry.beatId),
         notationPrintStickingCustom: false,
         notationPrintStickingOverride: null,
+        notationPrintStickingModeOverride: null,
       })),
     ]);
-  }, [setArrangementItemsWithUndo]);
+  }, [buildArrangementRowNotationSeedFromBeat, setArrangementItemsWithUndo]);
   const arrangementInsertBeatAt = React.useCallback((source, beatId, insertIndex) => {
+    const normalizedSource = source === "public" ? "public" : "local";
+    const normalizedBeatId = String(beatId || "");
+    const notationSeed = buildArrangementRowNotationSeedFromBeat(normalizedSource, normalizedBeatId);
     setArrangementItemsWithUndo((prev) => {
-      const normalizedSource = source === "public" ? "public" : "local";
-      const normalizedBeatId = String(beatId || "");
       const nextIndex = Math.max(0, Math.min(prev.length, Math.floor(Number(insertIndex) || 0)));
       const out = [...prev];
       out.splice(nextIndex, 0, {
@@ -11998,18 +12250,14 @@ useEffect(() => {
         notationJoinWithNext: false,
         notationBarsPerRowCustom: false,
         notationBarsPerRowOverride: null,
-        notationMergeRestsCustom: false,
-        notationMergeRestsOverride: null,
-        notationMergeNotesCustom: false,
-        notationMergeNotesOverride: null,
-        notationDottedNotesCustom: false,
-        notationDottedNotesOverride: null,
+        ...notationSeed,
         notationPrintStickingCustom: false,
         notationPrintStickingOverride: null,
+        notationPrintStickingModeOverride: null,
       });
       return out;
     });
-  }, [setArrangementItemsWithUndo]);
+  }, [buildArrangementRowNotationSeedFromBeat, setArrangementItemsWithUndo]);
   const beginArrangementBeatDrag = React.useCallback((source, beatId) => {
     arrangementDragBeatRef.current = {
       source: source === "public" ? "public" : "local",
@@ -12067,6 +12315,33 @@ useEffect(() => {
     setArrangementSelection(null);
     setArrangementSelectionAnchor(null);
   }, [normalizedArrangementSelection, setArrangementItemsWithUndo]);
+  const clearSheetArrangementBeats = React.useCallback(() => {
+    if (normalizedArrangementSelection) {
+      const selectedCount =
+        normalizedArrangementSelection.end - normalizedArrangementSelection.start + 1;
+      const confirmed = window.confirm(
+        `Clear ${selectedCount} selected ${selectedCount === 1 ? "beat" : "beats"} from the sheet?`
+      );
+      if (!confirmed) return;
+      arrangementRemoveSelectedRows();
+      setArrangementBarSelection(null);
+      setArrangementBarSelectionAnchor(null);
+      return;
+    }
+    if (arrangementItems.length < 1) return;
+    const confirmed = window.confirm("Clear all beats from the sheet?");
+    if (!confirmed) return;
+    setArrangementItemsWithUndo(() => []);
+    setArrangementSelection(null);
+    setArrangementSelectionAnchor(null);
+    setArrangementBarSelection(null);
+    setArrangementBarSelectionAnchor(null);
+  }, [
+    arrangementItems.length,
+    arrangementRemoveSelectedRows,
+    normalizedArrangementSelection,
+    setArrangementItemsWithUndo,
+  ]);
   const arrangementUpdateRowNotationOptions = React.useCallback((rowId, updates) => {
     setArrangementItemsWithUndo((prev) =>
       prev.map((row) =>
@@ -12127,8 +12402,8 @@ useEffect(() => {
                 : {}),
               ...(Object.prototype.hasOwnProperty.call(updates || {}, "notationMergeRests")
                 ? {
-                    notationMergeRestsCustom:
-                      typeof updates.notationMergeRests === "boolean",
+                    notationMergeRestsCustom: typeof updates.notationMergeRests === "boolean",
+                    notationMergeRestsFollowBeat: updates.notationMergeRests === "beat",
                     notationMergeRestsOverride:
                       typeof updates.notationMergeRests === "boolean"
                         ? updates.notationMergeRests
@@ -12137,8 +12412,8 @@ useEffect(() => {
                 : {}),
               ...(Object.prototype.hasOwnProperty.call(updates || {}, "notationMergeNotes")
                 ? {
-                    notationMergeNotesCustom:
-                      typeof updates.notationMergeNotes === "boolean",
+                    notationMergeNotesCustom: typeof updates.notationMergeNotes === "boolean",
+                    notationMergeNotesFollowBeat: updates.notationMergeNotes === "beat",
                     notationMergeNotesOverride:
                       typeof updates.notationMergeNotes === "boolean"
                         ? updates.notationMergeNotes
@@ -12147,8 +12422,8 @@ useEffect(() => {
                 : {}),
               ...(Object.prototype.hasOwnProperty.call(updates || {}, "notationDottedNotes")
                 ? {
-                    notationDottedNotesCustom:
-                      typeof updates.notationDottedNotes === "boolean",
+                    notationDottedNotesCustom: typeof updates.notationDottedNotes === "boolean",
+                    notationDottedNotesFollowBeat: updates.notationDottedNotes === "beat",
                     notationDottedNotesOverride:
                       typeof updates.notationDottedNotes === "boolean"
                         ? updates.notationDottedNotes
@@ -12158,9 +12433,19 @@ useEffect(() => {
               ...(Object.prototype.hasOwnProperty.call(updates || {}, "notationPrintSticking")
                 ? {
                     notationPrintStickingCustom:
-                      typeof updates.notationPrintSticking === "boolean",
+                      updates.notationPrintSticking === "off" ||
+                      updates.notationPrintSticking === "all" ||
+                      updates.notationPrintSticking === "custom",
+                    notationPrintStickingFollowBeat:
+                      updates.notationPrintSticking === "beat",
                     notationPrintStickingOverride:
-                      typeof updates.notationPrintSticking === "boolean"
+                      updates.notationPrintSticking === "off"
+                        ? false
+                        : updates.notationPrintSticking === "all" || updates.notationPrintSticking === "custom"
+                          ? true
+                          : null,
+                    notationPrintStickingModeOverride:
+                      updates.notationPrintSticking === "all" || updates.notationPrintSticking === "custom"
                         ? updates.notationPrintSticking
                         : null,
                   }
@@ -12170,6 +12455,115 @@ useEffect(() => {
       )
     );
   }, [setArrangementItemsWithUndo]);
+  const updateBeatRhythmSpellingFromSheet = React.useCallback(async (row, updates) => {
+    if (!row || row.source !== "local" || !row.beatId) return;
+    const rhythmUpdates = {};
+    if (typeof updates?.mergeRests === "boolean") rhythmUpdates.mergeRests = updates.mergeRests;
+    if (typeof updates?.mergeNotes === "boolean") rhythmUpdates.mergeNotes = updates.mergeNotes;
+    if (typeof updates?.dottedNotes === "boolean") rhythmUpdates.dottedNotes = updates.dottedNotes;
+    const printStickingMode =
+      updates?.printStickingMode === "all" || updates?.printStickingMode === "off" || updates?.printStickingMode === "custom"
+        ? updates.printStickingMode
+        : null;
+    if (!Object.keys(rhythmUpdates).length && !printStickingMode) return;
+
+    const beatId = String(row.beatId);
+    const currentBeat =
+      localBeatsRef.current.find((beat) => String(beat?.id || "") === beatId) || row.beat || null;
+    if (!currentBeat?.payload) return;
+    const storedNotationSelection =
+      currentBeat?.notationStickingSelection && typeof currentBeat.notationStickingSelection === "object"
+        ? Object.fromEntries(
+            Object.entries(currentBeat.notationStickingSelection).filter(([, value]) => value === true)
+          )
+        : currentBeat?.payload?.notationStickingSelection && typeof currentBeat.payload.notationStickingSelection === "object"
+          ? Object.fromEntries(
+              Object.entries(currentBeat.payload.notationStickingSelection).filter(([, value]) => value === true)
+            )
+          : null;
+    const nextPayload = {
+      ...(currentBeat.payload && typeof currentBeat.payload === "object" ? currentBeat.payload : {}),
+      ...rhythmUpdates,
+    };
+    if (printStickingMode === "off") {
+      nextPayload.showNotationSticking = false;
+      delete nextPayload.notationStickingSelection;
+    } else if (printStickingMode === "all") {
+      nextPayload.showNotationSticking = true;
+      delete nextPayload.notationStickingSelection;
+    } else if (printStickingMode === "custom") {
+      nextPayload.showNotationSticking = true;
+      if (storedNotationSelection && Object.keys(storedNotationSelection).length > 0) {
+        nextPayload.notationStickingSelection = storedNotationSelection;
+      }
+    }
+    const nextUpdatedAt = new Date().toISOString();
+    setLocalBeatsWithUndo((prev) =>
+      prev.map((beat) =>
+        String(beat?.id || "") === beatId
+          ? {
+              ...beat,
+              updatedAt: nextUpdatedAt,
+              notationStickingSelection:
+                printStickingMode === "all" || printStickingMode === "off"
+                  ? {}
+                  : storedNotationSelection && Object.keys(storedNotationSelection).length > 0
+                    ? storedNotationSelection
+                    : beat?.notationStickingSelection,
+              payload: nextPayload,
+            }
+          : beat
+      )
+    );
+    if (String(loadedLocalBeatId || "") === beatId) {
+      if (typeof rhythmUpdates.mergeRests === "boolean") setMergeRests(rhythmUpdates.mergeRests);
+      if (typeof rhythmUpdates.mergeNotes === "boolean") setMergeNotes(rhythmUpdates.mergeNotes);
+      if (typeof rhythmUpdates.dottedNotes === "boolean") setDottedNotes(rhythmUpdates.dottedNotes);
+      if (printStickingMode === "off") {
+        setNotationStickingModePreference("off");
+        setShowNotationSticking(false);
+        setNotationStickingSelectionModeEnabled(false);
+      } else if (printStickingMode === "all") {
+        setNotationStickingModePreference("all");
+        setShowNotationSticking(true);
+        setNotationStickingSelectionModeEnabled(false);
+      } else if (printStickingMode === "custom") {
+        setNotationStickingModePreference("custom");
+        if (storedNotationSelection && Object.keys(storedNotationSelection).length > 0) {
+          setNotationStickingSelection(storedNotationSelection);
+        }
+        setShowNotationSticking(true);
+        setNotationStickingSelectionModeEnabled(false);
+      }
+    }
+
+    if (authUser?.id && hasSupabaseEnabled && supabase && isUuidLike(beatId)) {
+      const { error } = await supabase
+        .from("beats")
+        .update({
+          payload: nextPayload,
+          updated_at: nextUpdatedAt,
+        })
+        .eq("id", beatId)
+        .eq("user_id", authUser.id);
+      if (error) {
+        alert(error.message || "Failed to update beat rhythm spelling");
+      }
+    }
+  }, [
+    authUser?.id,
+    hasSupabaseEnabled,
+    loadedLocalBeatId,
+    setLocalBeatsWithUndo,
+    setNotationStickingModePreference,
+    setNotationStickingSelection,
+    setNotationStickingSelectionModeEnabled,
+    setShowNotationSticking,
+    setMergeNotes,
+    setMergeRests,
+    setDottedNotes,
+    supabase,
+  ]);
   const saveArrangementSnapshot = React.useCallback(async (options = {}) => {
     const normalizedItems = normalizeArrangementItems(arrangementItems);
     const { mode = "auto", nameOverride = "" } = options;
@@ -15070,6 +15464,12 @@ useEffect(() => {
               segment.barCount,
               dottedNotes
             ),
+            showNotationStickingByBar: sliceBooleanListByBars(
+              block.showNotationStickingByBar,
+              segment.startBar,
+              segment.barCount,
+              showNotationSticking
+            ),
             startBarOffset: (block.startBarOffset || 0) + segment.startBar,
           };
         })
@@ -15084,6 +15484,25 @@ useEffect(() => {
     }
     return pages;
   }, [arrangementNotationBlocks, mergeRests, mergeNotes, dottedNotes]);
+  const arrangementSheetPages = React.useMemo(
+    () =>
+      arrangementNotationPages.length
+        ? arrangementNotationPages
+        : [{ id: "arr-blank-page", segments: [] }],
+    [arrangementNotationPages]
+  );
+  const activeArrangementNotationPageIndex = React.useMemo(() => {
+    if (!Number.isFinite(activeArrangementGlobalBarIndex) || activeArrangementGlobalBarIndex < 0) {
+      return -1;
+    }
+    return arrangementSheetPages.findIndex((page) =>
+      (Array.isArray(page?.segments) ? page.segments : []).some((segment) => {
+        const startBar = Number(segment?.startBarOffset) || 0;
+        const barCount = Math.max(1, Number(segment?.notation?.bars) || 0);
+        return activeArrangementGlobalBarIndex >= startBar && activeArrangementGlobalBarIndex < startBar + barCount;
+      })
+    );
+  }, [activeArrangementGlobalBarIndex, arrangementSheetPages]);
   const [arrangementVisiblePageIndices, setArrangementVisiblePageIndices] = useState([0, 1]);
   const arrangementVisiblePageStateRef = useRef(new Map());
   const arrangementVisiblePageSet = React.useMemo(
@@ -15092,27 +15511,27 @@ useEffect(() => {
   );
   useEffect(() => {
     arrangementNotationPageRefs.current = [];
-  }, [arrangementNotationPages.length]);
+  }, [arrangementSheetPages.length]);
   useEffect(() => {
     arrangementVisiblePageStateRef.current = new Map();
-  }, [arrangementNotationPages.length, arrangementNotationVirtualize]);
+  }, [arrangementSheetPages.length, arrangementNotationVirtualize]);
   useEffect(() => {
     if (!isArrangementNotationOpen) return;
     if (arrangementNotationViewMode !== "sheet" || arrangementNotationPageMode !== "pages") return;
     if (!arrangementNotationVirtualize) {
       setArrangementVisiblePageIndices(
-        Array.from({ length: arrangementNotationPages.length }, (_, idx) => idx)
+        Array.from({ length: arrangementSheetPages.length }, (_, idx) => idx)
       );
       return;
     }
     setArrangementVisiblePageIndices((prev) => {
-      const maxIndex = Math.max(0, arrangementNotationPages.length - 1);
+      const maxIndex = Math.max(0, arrangementSheetPages.length - 1);
       const next = [0, Math.min(1, maxIndex)].filter((v, idx, arr) => arr.indexOf(v) === idx);
       if (prev.length === next.length && prev.every((v, idx) => v === next[idx])) return prev;
       return next;
     });
     const root = arrangementNotationPanelRef.current;
-    if (!(root instanceof HTMLElement) || arrangementNotationPages.length < 1) return;
+    if (!(root instanceof HTMLElement) || arrangementSheetPages.length < 1) return;
     const observer = new IntersectionObserver(
       (entries) => {
         entries.forEach((entry) => {
@@ -15125,7 +15544,7 @@ useEffect(() => {
           if (!isVisible) return;
           visible.add(idx);
           if (idx > 0) visible.add(idx - 1);
-          if (idx + 1 < arrangementNotationPages.length) visible.add(idx + 1);
+          if (idx + 1 < arrangementSheetPages.length) visible.add(idx + 1);
         });
         if (!visible.size) return;
         const next = [...visible].sort((a, b) => a - b);
@@ -15148,7 +15567,34 @@ useEffect(() => {
     arrangementNotationViewMode,
     arrangementNotationPageMode,
     arrangementNotationVirtualize,
-    arrangementNotationPages.length,
+    arrangementSheetPages.length,
+  ]);
+  useEffect(() => {
+    if (!isArrangementNotationOpen) return;
+    if (arrangementNotationViewMode !== "sheet" || arrangementNotationPageMode !== "pages") return;
+    if (!arrangementNotationVirtualize) return;
+    if (!arrangementPlaybackEnabled || !playback.isPlaying) return;
+    if (activeArrangementNotationPageIndex < 0) return;
+    const maxIndex = Math.max(0, arrangementSheetPages.length - 1);
+    const wanted = [activeArrangementNotationPageIndex - 1, activeArrangementNotationPageIndex, activeArrangementNotationPageIndex + 1]
+      .filter((idx) => idx >= 0 && idx <= maxIndex);
+    setArrangementVisiblePageIndices((prev) => {
+      const next = Array.from(new Set([...(Array.isArray(prev) ? prev : []), ...wanted]))
+        .filter((idx) => idx >= 0 && idx <= maxIndex)
+        .sort((a, b) => a - b);
+      return prev.length === next.length && prev.every((idx, i) => idx === next[i])
+        ? prev
+        : next;
+    });
+  }, [
+    isArrangementNotationOpen,
+    arrangementNotationViewMode,
+    arrangementNotationPageMode,
+    arrangementNotationVirtualize,
+    arrangementPlaybackEnabled,
+    playback.isPlaying,
+    activeArrangementNotationPageIndex,
+    arrangementSheetPages.length,
   ]);
   useEffect(() => {
     if (!isArrangementOpen || arrangementDetailsCollapsed) return;
@@ -15335,6 +15781,7 @@ useEffect(() => {
     arrangementNotationViewMode,
     arrangementNotationPageMode,
     arrangementNotationScrollRows,
+    arrangementVisiblePageIndices,
   ]);
   useEffect(() => {
     if (!isArrangementNotationOpen) return;
@@ -15932,6 +16379,9 @@ useEffect(() => {
       layout,
       tupletsByBar: normalizedTupletOverridesByBar,
       grid,
+      mergeRests: mergeRests !== false,
+      mergeNotes: mergeNotes !== false,
+      dottedNotes: dottedNotes !== false,
       stickingHandedness: stickingHandedness === "left" ? "left" : "right",
       stickingLeadHand: stickingLeadHand === "left" ? "left" : "right",
       stickingKeepQuarterLeadHand: stickingKeepQuarterLeadHand !== false,
@@ -15958,6 +16408,9 @@ useEffect(() => {
     bpm,
     layout,
     normalizedTupletOverridesByBar,
+    mergeRests,
+    mergeNotes,
+    dottedNotes,
     stickingHandedness,
     stickingLeadHand,
     stickingKeepQuarterLeadHand,
@@ -16010,7 +16463,7 @@ useEffect(() => {
     [currentBeatPayload]
   );
   const loadedLocalPayloadJson = React.useMemo(
-    () => JSON.stringify(getComparableBeatPayload(loadedLocalBeat?.payload || {})),
+    () => JSON.stringify(getComparableBeatPayloadForLibraryBeat(loadedLocalBeat)),
     [loadedLocalBeat]
   );
   const normalizedCurrentPayloadJsonWithoutNotationSticking = React.useMemo(
@@ -16020,7 +16473,7 @@ useEffect(() => {
   const loadedLocalPayloadJsonWithoutNotationSticking = React.useMemo(
     () =>
       JSON.stringify(
-        getComparableBeatPayloadWithoutNotationSticking(loadedLocalBeat?.payload || {})
+        getComparableBeatPayloadForLibraryBeatWithoutNotationSticking(loadedLocalBeat)
       ),
     [loadedLocalBeat]
   );
@@ -16113,7 +16566,7 @@ useEffect(() => {
   const getUniqueBeatName = React.useCallback(
     (rawName, options = {}) => {
       const fallbackName = `Beat ${localBeats.length + 1}`;
-      const baseName = String(rawName || "").trim() || fallbackName;
+      const requestedName = String(rawName || "").trim() || fallbackName;
       const excludeId = String(options.excludeId || "").trim();
       const existingNames = new Set(
         localBeats
@@ -16121,14 +16574,20 @@ useEffect(() => {
           .map((beat) => String(beat?.name || "").trim().toLowerCase())
           .filter(Boolean)
       );
-      if (!existingNames.has(baseName.toLowerCase())) {
-        return baseName;
+      if (!existingNames.has(requestedName.toLowerCase())) {
+        return requestedName;
       }
-      let suffix = 2;
-      let nextName = `${baseName} ${suffix}`;
+
+      const seriesRoot =
+        requestedName
+          .replace(/\s*-\d{2,}$/u, "")
+          .replace(/\s+\d+$/u, "")
+          .trim() || fallbackName;
+      let suffix = 1;
+      let nextName = `${seriesRoot}-${String(suffix).padStart(2, "0")}`;
       while (existingNames.has(nextName.toLowerCase())) {
         suffix += 1;
-        nextName = `${baseName} ${suffix}`;
+        nextName = `${seriesRoot}-${String(suffix).padStart(2, "0")}`;
       }
       return nextName;
     },
@@ -16246,6 +16705,15 @@ useEffect(() => {
         setShowNotationSticking(importedShowNotationSticking);
         if (payload.notationStickingView === "split-rows" || payload.notationStickingView === "above") {
           setNotationStickingView(payload.notationStickingView);
+        }
+        if (typeof payload.mergeRests === "boolean") {
+          setMergeRests(payload.mergeRests);
+        }
+        if (typeof payload.mergeNotes === "boolean") {
+          setMergeNotes(payload.mergeNotes);
+        }
+        if (typeof payload.dottedNotes === "boolean") {
+          setDottedNotes(payload.dottedNotes);
         }
 
         const nextLayout = payload.layout;
@@ -16530,7 +16998,8 @@ useEffect(() => {
       shareKind: effectiveSharedState.kind === "arrangement" ? "arrangement" : "beat",
     });
   }, [requestedSharedState, resolvedSharedState, routeOptions.shared, routeOptions.shareId, trackStatsEvent]);
-  const saveCurrentBeatLocal = React.useCallback(async () => {
+  const saveCurrentBeatLocal = React.useCallback(async (options = {}) => {
+    const shouldAutoRename = !(options && options.autoRename === false);
     const name = getUniqueBeatName(beatNameDraft);
     const now = new Date().toISOString();
     const selectedParentId = selectedBeatLibraryContainerId !== "all" ? selectedBeatLibraryContainerId : null;
@@ -16570,7 +17039,7 @@ useEffect(() => {
         await ensureCloudBeatQuotaAvailable();
       } catch (error) {
         alert(error?.message || "Personal cloud beat limit reached.");
-        return;
+        return null;
       }
       const { data, error } = await supabase
         .from("beats")
@@ -16585,19 +17054,19 @@ useEffect(() => {
         .single();
       if (error) {
         alert(error.message || "Failed to save beat to cloud");
-        return;
+        return null;
       }
       const nextItem = normalizeCloudBeatRow(data);
-      if (!nextItem) return;
+      if (!nextItem) return null;
       setLocalBeatsWithUndo((prev) => [nextItem, ...prev].slice(0, 500));
       setLoadedLocalBeatId(nextItem.id);
       setUnsavedBeatStripSnapshot(null);
       setBeatNameDraft(String(nextItem.name || ""));
       setIsCurrentBeatStripRenaming(false);
       setCurrentBeatStripRenameWidth(null);
-      setPendingCurrentBeatStripAutoRename(true);
+      setPendingCurrentBeatStripAutoRename(shouldAutoRename);
       void refreshUsageLimits({ silent: true });
-      return;
+      return nextItem;
     }
     setLocalBeatsWithUndo((prev) => [item, ...prev].slice(0, 500));
     setLoadedLocalBeatId(item.id);
@@ -16605,7 +17074,8 @@ useEffect(() => {
     setBeatNameDraft(String(item.name || ""));
     setIsCurrentBeatStripRenaming(false);
     setCurrentBeatStripRenameWidth(null);
-    setPendingCurrentBeatStripAutoRename(true);
+    setPendingCurrentBeatStripAutoRename(shouldAutoRename);
+    return item;
   }, [
     authUser?.id,
     selectedBeatLibraryContainerId,
@@ -16621,6 +17091,13 @@ useEffect(() => {
     getUniqueBeatName,
     setLocalBeatsWithUndo,
   ]);
+  const saveCurrentBeatAsNewAndAddToSheet = React.useCallback(async () => {
+    const savedBeat = await saveCurrentBeatLocal({ autoRename: false });
+    if (!savedBeat?.id) return;
+    arrangementAddBeat("local", savedBeat.id, savedBeat);
+    setIsArrangementNotationOpen(true);
+    setArrangementNotationRowMenuState(null);
+  }, [arrangementAddBeat, saveCurrentBeatLocal]);
   const updateCurrentLoadedBeatLocal = React.useCallback(async () => {
     if (!loadedLocalBeatId) return;
     const name = beatNameDraft.trim() || String(loadedLocalBeat?.name || "Untitled Beat");
@@ -17762,6 +18239,16 @@ useEffect(() => {
             >
               <SaveStateIcon />
             </button>
+            <button
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={saveCurrentBeatAsNewAndAddToSheet}
+              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-neutral-500 transition-colors hover:bg-neutral-900/70 hover:text-neutral-200"
+              title="Save as new beat and add to sheet"
+              aria-label="Save as new beat and add to sheet"
+            >
+              <AddToSheetIcon />
+            </button>
             {playabilityWarningsEnabled && playabilityWarningSteps.length > 0 ? (
               <span className="shrink-0 text-[11px] text-red-400/80">
                 {`${playabilityWarningSteps.length} playability warning${playabilityWarningSteps.length === 1 ? "" : "s"}`}
@@ -17836,6 +18323,15 @@ useEffect(() => {
               }
             >
               <SaveStateIcon />
+            </button>
+            <button
+              type="button"
+              onClick={saveCurrentBeatAsNewAndAddToSheet}
+              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-neutral-500 transition-colors hover:bg-neutral-900/70 hover:text-neutral-200"
+              title="Save as new beat and add to sheet"
+              aria-label="Save as new beat and add to sheet"
+            >
+              <AddToSheetIcon />
             </button>
             {playabilityWarningsEnabled && playabilityWarningSteps.length > 0 ? (
               <span className="shrink-0 text-[11px] text-red-400/80">
@@ -21121,6 +21617,22 @@ useEffect(() => {
               →
             </button>
           </div>
+          <button
+            type="button"
+            onClick={() => {
+              setArrangementNotationRowMenuState(null);
+              setIsArrangementNotationOpen((v) => !v);
+            }}
+            className={`touch-none select-none inline-flex h-[2.125rem] w-[2.125rem] items-center justify-center rounded border text-sm ${
+              isArrangementNotationOpen
+                ? "bg-neutral-800 border-neutral-600 text-white"
+                : "bg-black border-neutral-900 text-neutral-400 hover:bg-neutral-950/80 hover:text-neutral-300"
+            }`}
+            title={isArrangementNotationOpen ? "Close sheet" : "Open sheet"}
+            aria-label={isArrangementNotationOpen ? "Close sheet" : "Open sheet"}
+          >
+            <SheetIcon />
+          </button>
           {showDesktopSettingsSidebar ? (
             <button
               type="button"
@@ -23702,7 +24214,7 @@ useEffect(() => {
                     }}
                     title="Drag window"
                   >
-	                    <h3 className="text-sm text-neutral-200">Arrangement Notation</h3>
+	                    <h3 className="text-sm text-neutral-200">Sheet</h3>
 	                  </div>
 	                  {isMobileFloatingPanels && (
 	                    <button
@@ -23740,6 +24252,29 @@ useEffect(() => {
                       ? "Stop"
                       : "Play"}
                   </button>
+                  <button
+                    type="button"
+                    onPointerDown={(e) => {
+                      e.stopPropagation();
+                    }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      clearSheetArrangementBeats();
+                    }}
+                    disabled={arrangementItems.length < 1}
+                    className={`inline-flex h-[1.625rem] items-center justify-center rounded border px-2 text-xs leading-none ${
+                      arrangementItems.length > 0
+                        ? "border-neutral-800 bg-neutral-900/60 text-neutral-400 hover:bg-neutral-800/60 hover:text-neutral-200"
+                        : "border-neutral-800 bg-neutral-900/60 text-neutral-600 cursor-not-allowed"
+                    }`}
+                    title={
+                      normalizedArrangementSelection
+                        ? "Clear selected beats from sheet"
+                        : "Clear all beats from sheet"
+                    }
+                  >
+                    Clear
+                  </button>
                 </div>
                 <div className="flex items-center gap-2">
                   <button
@@ -23751,7 +24286,7 @@ useEffect(() => {
                         ? "border-neutral-700 text-white bg-neutral-800"
                         : "border-neutral-800 text-neutral-400 bg-neutral-900/60 hover:bg-neutral-800/60"
                     }`}
-                    title="Open arrangement notation options"
+                    title="Open sheet options"
                   >
                     ...
                   </button>
@@ -23814,7 +24349,7 @@ useEffect(() => {
                                 ? "bg-neutral-800 text-white"
                                 : "text-neutral-300 hover:bg-neutral-800/60"
                             }`}
-                            title="Switch arrangement notation preview theme"
+                            title="Switch sheet preview theme"
                           >
                             <span>Theme</span>
                             <span>{arrangementNotationTheme === "light" ? "Light" : "Dark"}</span>
@@ -23887,49 +24422,49 @@ useEffect(() => {
                                   ? "bg-neutral-800 text-white"
                                   : "text-neutral-300 hover:bg-neutral-800/60"
                               }`}
-                              title="Use content-based bar widths for arrangement notation by default"
+                              title="Use content-based bar widths for the sheet by default"
                             >
                               <span>Dyn. spacing</span>
                               <span>{arrangementNotationDynamicSpacing ? "On" : "Off"}</span>
                             </button>
                             <button
                               type="button"
-                              onClick={() => setMergeRests((v) => !v)}
+                              onClick={() => setArrangementNotationGlobalMergeRests((v) => !v)}
                               className={`mt-1 flex w-full items-center justify-between rounded px-2 py-2 text-xs ${
-                                mergeRests
+                                arrangementNotationGlobalMergeRests
                                   ? "bg-neutral-800 text-white"
                                   : "text-neutral-300 hover:bg-neutral-800/60"
                               }`}
-                              title="Use merged rest spelling by default for arrangement notation"
+                              title="Use merged rest spelling as the default for sheet rows set to Global"
                             >
-                              <span>Merge rests</span>
-                              <span>{mergeRests ? "On" : "Off"}</span>
+                              <span>Default merge rests</span>
+                              <span>{arrangementNotationGlobalMergeRests ? "On" : "Off"}</span>
                             </button>
                             <button
                               type="button"
-                              onClick={() => setMergeNotes((v) => !v)}
+                              onClick={() => setArrangementNotationGlobalMergeNotes((v) => !v)}
                               className={`mt-1 flex w-full items-center justify-between rounded px-2 py-2 text-xs ${
-                                mergeNotes
+                                arrangementNotationGlobalMergeNotes
                                   ? "bg-neutral-800 text-white"
                                   : "text-neutral-300 hover:bg-neutral-800/60"
                               }`}
-                              title="Use merged note spelling by default for arrangement notation"
+                              title="Use merged note spelling as the default for sheet rows set to Global"
                             >
-                              <span>Merge notes</span>
-                              <span>{mergeNotes ? "On" : "Off"}</span>
+                              <span>Default merge notes</span>
+                              <span>{arrangementNotationGlobalMergeNotes ? "On" : "Off"}</span>
                             </button>
                             <button
                               type="button"
-                              onClick={() => setDottedNotes((v) => !v)}
+                              onClick={() => setArrangementNotationGlobalDottedNotes((v) => !v)}
                               className={`mt-1 flex w-full items-center justify-between rounded px-2 py-2 text-xs ${
-                                dottedNotes
+                                arrangementNotationGlobalDottedNotes
                                   ? "bg-neutral-800 text-white"
                                   : "text-neutral-300 hover:bg-neutral-800/60"
                               }`}
-                              title="Use dotted note spelling by default for arrangement notation"
+                              title="Use dotted note spelling as the default for sheet rows set to Global"
                             >
-                              <span>Dotted notes</span>
-                              <span>{dottedNotes ? "On" : "Off"}</span>
+                              <span>Default dotted notes</span>
+                              <span>{arrangementNotationGlobalDottedNotes ? "On" : "Off"}</span>
                             </button>
                             <button
                               type="button"
@@ -23939,7 +24474,7 @@ useEffect(() => {
                                   ? "bg-neutral-800 text-white"
                                   : "text-neutral-300 hover:bg-neutral-800/60"
                               }`}
-                              title="Use notation sticking by default for arrangement notation"
+                              title="Use notation sticking by default for the sheet"
                             >
                               <span>Print sticking</span>
                               <span>{showNotationSticking ? "On" : "Off"}</span>
@@ -23951,7 +24486,7 @@ useEffect(() => {
                                   type="button"
                                   onClick={() => stepArrangementNotationPreviewScale(-1)}
                                   className="px-2 text-xs text-neutral-300 hover:bg-neutral-700/60"
-                                  aria-label="Decrease arrangement notation preview scale"
+                                  aria-label="Decrease sheet preview scale"
                                 >
                                   −
                                 </button>
@@ -23964,7 +24499,7 @@ useEffect(() => {
                                   type="button"
                                   onClick={() => stepArrangementNotationPreviewScale(1)}
                                   className="px-2 text-xs text-neutral-300 hover:bg-neutral-700/60"
-                                  aria-label="Increase arrangement notation preview scale"
+                                  aria-label="Increase sheet preview scale"
                                 >
                                   +
                                 </button>
@@ -23973,16 +24508,16 @@ useEffect(() => {
                             <button
                               type="button"
                               onClick={() => setIsArrangementPrintDialogOpen(true)}
-                              disabled={arrangementNotationPages.length < 1}
+                              disabled={arrangementSheetPages.length < 1}
                               className={`mt-1 flex w-full items-center justify-between rounded px-2 py-2 text-xs ${
-                                arrangementNotationPages.length > 0
+                                arrangementSheetPages.length > 0
                                   ? "text-neutral-300 hover:bg-neutral-800/60"
                                   : "text-neutral-500 cursor-not-allowed"
                               }`}
-                              title="Download arrangement sheet as A4 PDF"
+                              title="Download sheet as A4 PDF"
                             >
                               <span>PDF export</span>
-                              <span>{arrangementNotationPages.length > 0 ? "Open" : "Off"}</span>
+                              <span>{arrangementSheetPages.length > 0 ? "Open" : "Off"}</span>
                             </button>
                           </div>
                         </div>,
@@ -23993,8 +24528,8 @@ useEffect(() => {
                     type="button"
                     onClick={() => setIsArrangementNotationOpen(false)}
                     className="inline-flex h-[1.625rem] w-[1.625rem] items-center justify-center rounded border border-neutral-800 bg-neutral-900/60 text-xs leading-none text-neutral-400 hover:bg-neutral-800/60"
-                    aria-label="Close arrangement notation"
-                    title="Close arrangement notation"
+                    aria-label="Close sheet"
+                    title="Close sheet"
                   >
                     ×
                   </button>
@@ -24023,11 +24558,6 @@ useEffect(() => {
                     : undefined,
                 }}
               >
-                {arrangementNotationPages.length < 1 ? (
-                  <div className="px-3 py-4 text-sm text-neutral-500">
-                    No arrangement notation to render.
-                  </div>
-                ) : null}
                 <div
                   ref={arrangementNotationPreviewInnerRef}
                   className="max-w-none overflow-visible p-0"
@@ -24038,7 +24568,7 @@ useEffect(() => {
                   }}
                 >
               <div ref={arrangementNotationVisiblePagesRef} className="space-y-6">
-                {arrangementNotationPages.map((page, pageIdx) =>
+                {arrangementSheetPages.map((page, pageIdx) =>
                   renderArrangementNotationPage(page, pageIdx, {
                     dark: arrangementNotationTheme !== "light",
                     exportMode: false,
@@ -24058,10 +24588,10 @@ useEffect(() => {
                       position={arrangementNotationRowMenuState.position}
                       globalNotationBarsPerRow={arrangementNotationBarsPerRow}
                       globalNotationDynamicSpacing={arrangementNotationDynamicSpacing}
-                      globalMergeRests={mergeRests}
-                      globalMergeNotes={mergeNotes}
-                      globalDottedNotes={dottedNotes}
-                      globalShowNotationSticking={showNotationSticking}
+                      globalMergeRests={arrangementNotationGlobalMergeRests}
+                      globalMergeNotes={arrangementNotationGlobalMergeNotes}
+                      globalDottedNotes={arrangementNotationGlobalDottedNotes}
+                      globalNotationPrintStickingMode={arrangementGlobalNotationStickingMode}
                       onClose={() => setArrangementNotationRowMenuState(null)}
                       onToggleNotationBeatName={() =>
                         arrangementUpdateRowNotationOptions(arrangementRows[arrangementNotationRowMenuState.rowIndex].id, {
@@ -24088,26 +24618,30 @@ useEffect(() => {
                           notationBarsPerRowOverride: value,
                         })
                       }
-                      onSetNotationMergeRests={(value) =>
-                        arrangementUpdateRowNotationOptions(arrangementRows[arrangementNotationRowMenuState.rowIndex].id, {
+                      onSetNotationMergeRests={(value) => {
+                        const row = arrangementRows[arrangementNotationRowMenuState.rowIndex];
+                        arrangementUpdateRowNotationOptions(row.id, {
                           notationMergeRests: value,
-                        })
-                      }
-                      onSetNotationMergeNotes={(value) =>
-                        arrangementUpdateRowNotationOptions(arrangementRows[arrangementNotationRowMenuState.rowIndex].id, {
+                        });
+                      }}
+                      onSetNotationMergeNotes={(value) => {
+                        const row = arrangementRows[arrangementNotationRowMenuState.rowIndex];
+                        arrangementUpdateRowNotationOptions(row.id, {
                           notationMergeNotes: value,
-                        })
-                      }
-                      onSetNotationDottedNotes={(value) =>
-                        arrangementUpdateRowNotationOptions(arrangementRows[arrangementNotationRowMenuState.rowIndex].id, {
+                        });
+                      }}
+                      onSetNotationDottedNotes={(value) => {
+                        const row = arrangementRows[arrangementNotationRowMenuState.rowIndex];
+                        arrangementUpdateRowNotationOptions(row.id, {
                           notationDottedNotes: value,
-                        })
-                      }
-                      onSetNotationPrintSticking={(value) =>
-                        arrangementUpdateRowNotationOptions(arrangementRows[arrangementNotationRowMenuState.rowIndex].id, {
+                        });
+                      }}
+                      onSetNotationPrintSticking={(value) => {
+                        const row = arrangementRows[arrangementNotationRowMenuState.rowIndex];
+                        arrangementUpdateRowNotationOptions(row.id, {
                           notationPrintSticking: value,
-                        })
-                      }
+                        });
+                      }}
                     />,
                     document.body
                   )
@@ -24124,7 +24658,7 @@ useEffect(() => {
         className="pointer-events-none fixed left-0 top-0 z-[-1] w-[794px] overflow-hidden opacity-0"
         aria-hidden="true"
       >
-        {arrangementNotationPages.map((page, pageIdx) =>
+        {arrangementSheetPages.map((page, pageIdx) =>
           renderArrangementNotationPage(page, pageIdx, {
             dark: false,
             exportMode: true,
@@ -24710,13 +25244,13 @@ useEffect(() => {
                     setIsShareActionsDialogOpen(false);
 	                    setIsArrangementPrintDialogOpen(true);
 	                  }}
-	                  disabled={arrangementNotationPages.length < 1}
+	                  disabled={arrangementSheetPages.length < 1}
 	                  className={`rounded-lg border px-3 py-2 text-left text-sm ${
-	                    arrangementNotationPages.length > 0
+	                    arrangementSheetPages.length > 0
 	                      ? "border-neutral-800 bg-neutral-900/60 text-neutral-200 hover:bg-neutral-800/60"
 	                      : "border-neutral-800 text-neutral-500 bg-neutral-900/60 cursor-not-allowed"
 	                  }`}
-	                  title="Export arrangement sheet as PDF"
+	                  title="Export sheet as PDF"
                 >
                   PDF
                 </button>
@@ -26334,6 +26868,39 @@ useEffect(() => {
                       Sets whether the desktop settings sidebar starts open by default.
                     </div>
                     <div className="my-3 border-t border-neutral-800" />
+                    <div className="flex flex-wrap items-center gap-3">
+                      <span className="text-sm text-neutral-300">Startup grid</span>
+                      <button
+                        type="button"
+                        onClick={saveCurrentStartupGridSettings}
+                        className="px-3 py-1 rounded border border-neutral-700 text-sm text-white bg-neutral-800 hover:bg-neutral-700/60"
+                        title="Save the current grid setup as the startup default"
+                      >
+                        Save current
+                      </button>
+                      <button
+                        type="button"
+                        onClick={resetStartupGridSettings}
+                        disabled={!customStartupGridSettings}
+                        className={`px-3 py-1 rounded border text-sm ${
+                          customStartupGridSettings
+                            ? "border-neutral-700 text-neutral-300 hover:bg-neutral-800/60"
+                            : "border-neutral-800 text-neutral-600 cursor-default"
+                        }`}
+                        title="Reset startup grid to the built-in default"
+                      >
+                        Reset
+                      </button>
+                    </div>
+                    <div className="mt-2 text-xs text-neutral-500">
+                      Save the current resolution, bars, time, subdivision, and drumkit for new sessions.
+                    </div>
+                    <div className="mt-1 text-xs text-neutral-600">
+                      {customStartupGridSettings
+                        ? "Custom startup grid active."
+                        : "Using built-in startup grid."}
+                    </div>
+                    <div className="my-3 border-t border-neutral-800" />
                     <div className="mt-4 flex items-center gap-3">
                       <span className="text-sm text-neutral-300">Keyboard shortcuts</span>
                       <button
@@ -27318,7 +27885,7 @@ function ArrangementRowNotationMenu({
   globalMergeRests,
   globalMergeNotes,
   globalDottedNotes,
-  globalShowNotationSticking,
+  globalNotationPrintStickingMode,
   onClose,
   onToggleNotationBeatName,
   onSetNotationDynamicSpacing,
@@ -27389,10 +27956,26 @@ function ArrangementRowNotationMenu({
     row?.notationDottedNotesCustom === true && typeof row?.notationDottedNotesOverride === "boolean"
       ? row.notationDottedNotesOverride
       : globalDottedNotes === true;
-  const effectivePrintSticking =
-    row?.notationPrintStickingCustom === true && typeof row?.notationPrintStickingOverride === "boolean"
-      ? row.notationPrintStickingOverride
-      : globalShowNotationSticking === true;
+  const effectivePrintStickingMode =
+    row?.notationPrintStickingCustom === true
+      ? row?.notationPrintStickingOverride === false
+        ? "off"
+        : row?.notationPrintStickingModeOverride === "all"
+          ? "all"
+          : "custom"
+      : row?.notationPrintStickingFollowBeat === true
+        ? getNotationPrintStickingModeFromPayload(row?.beat?.payload, globalNotationPrintStickingMode)
+      : globalNotationPrintStickingMode === "all"
+        ? "all"
+        : globalNotationPrintStickingMode === "off"
+          ? "off"
+          : "custom";
+  const cyclePrintStickingMode = React.useCallback((delta) => {
+    const modes = ["off", "all", "custom"];
+    const currentIndex = Math.max(0, modes.indexOf(effectivePrintStickingMode));
+    const nextIndex = (currentIndex + delta + modes.length) % modes.length;
+    onSetNotationPrintSticking?.(modes[nextIndex]);
+  }, [effectivePrintStickingMode, onSetNotationPrintSticking]);
   const TriStateRow = ({ label, effectiveValue, hasOverride, onChange }) => (
     <div className="mt-2 flex items-center justify-between gap-2">
       <span className="text-[11px] text-neutral-400">{label}</span>
@@ -27437,7 +28020,7 @@ function ArrangementRowNotationMenu({
             ? "border-neutral-700 text-white bg-neutral-800"
             : "border-neutral-800 text-neutral-400 bg-neutral-900"
         }`}
-        title="Show beat name above this section in arrangement notation"
+        title="Show beat name above this section in the sheet"
       >
         Show beat name
       </button>
@@ -27449,7 +28032,7 @@ function ArrangementRowNotationMenu({
             ? "border-neutral-700 text-white bg-neutral-800"
             : "border-neutral-800 text-neutral-400 bg-neutral-900"
         }`}
-        title="Allow this section to use content-based bar widths in arrangement notation"
+        title="Allow this section to use content-based bar widths in the sheet"
       >
         Dynamic spacing
       </button>
@@ -27503,12 +28086,50 @@ function ArrangementRowNotationMenu({
         hasOverride={row?.notationDottedNotesCustom === true}
         onChange={onSetNotationDottedNotes}
       />
-      <TriStateRow
-        label="Print sticking"
-        effectiveValue={effectivePrintSticking}
-        hasOverride={row?.notationPrintStickingCustom === true}
-        onChange={onSetNotationPrintSticking}
-      />
+      <div className="mt-2 flex items-center justify-between gap-2">
+        <span className="text-[11px] text-neutral-400">Print sticking</span>
+        <div className="flex items-center gap-1.5">
+          <div className="flex items-stretch overflow-hidden rounded border border-neutral-700 bg-neutral-800">
+            <button
+              type="button"
+              onClick={() => cyclePrintStickingMode(-1)}
+              className="px-2 py-1 text-sm leading-none text-neutral-400 hover:bg-neutral-700/60"
+              title="Previous print sticking mode"
+              aria-label="Previous print sticking mode"
+            >
+              −
+            </button>
+            <div className="min-w-[60px] border-l border-r border-neutral-700 px-2 py-1 text-center text-[11px] text-white">
+              {effectivePrintStickingMode === "all"
+                ? "All"
+                : effectivePrintStickingMode === "custom"
+                  ? "Some"
+                  : "None"}
+            </div>
+            <button
+              type="button"
+              onClick={() => cyclePrintStickingMode(1)}
+              className="px-2 py-1 text-sm leading-none text-neutral-400 hover:bg-neutral-700/60"
+              title="Next print sticking mode"
+              aria-label="Next print sticking mode"
+            >
+              +
+            </button>
+          </div>
+          <button
+            type="button"
+            onClick={() => onSetNotationPrintSticking?.(null)}
+            className={`rounded border px-1.5 py-1 text-[10px] ${
+              row?.notationPrintStickingCustom === true || row?.notationPrintStickingFollowBeat === true
+                ? "border-neutral-700 text-neutral-300 bg-neutral-800 hover:bg-neutral-700/60"
+                : "border-neutral-800 text-neutral-600 bg-neutral-900/60"
+            }`}
+            title="Use global print sticking"
+          >
+            G
+          </button>
+        </div>
+      </div>
       <button
         type="button"
         onClick={() => onSetNotationDynamicSpacing?.(null)}
@@ -28887,6 +29508,39 @@ function Grid({
   );
 }
 
+function drawNotationBarOverlay(svg, rects, barIndices, {
+  className,
+  fill,
+  stroke,
+  strokeWidth,
+  pointerEvents = "",
+}) {
+  if (!(svg instanceof SVGElement)) return;
+  svg.querySelectorAll(`.${className}`).forEach((el) => el.remove());
+  const barSet = new Set(
+    (Array.isArray(barIndices) ? barIndices : [])
+      .map((value) => Number(value))
+      .filter((value) => Number.isFinite(value) && value >= 0)
+  );
+  if (!barSet.size) return;
+  (Array.isArray(rects) ? rects : []).forEach((rectSpec, barIndex) => {
+    if (!barSet.has(barIndex) || !rectSpec) return;
+    const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    rect.setAttribute("x", String(rectSpec.x));
+    rect.setAttribute("y", String(rectSpec.y));
+    rect.setAttribute("width", String(rectSpec.width));
+    rect.setAttribute("height", String(rectSpec.height));
+    rect.setAttribute("rx", "6");
+    rect.setAttribute("ry", "6");
+    rect.setAttribute("fill", fill);
+    rect.setAttribute("stroke", stroke);
+    rect.setAttribute("stroke-width", String(strokeWidth));
+    rect.setAttribute("class", className);
+    if (pointerEvents) rect.style.pointerEvents = pointerEvents;
+    svg.insertBefore(rect, svg.firstChild);
+  });
+}
+
 function Notation({
   instruments,
   grid,
@@ -28931,6 +29585,11 @@ function Notation({
   const ref = useRef(null);
   const highlightSvgRef = useRef(null);
   const highlightRectsRef = useRef([]);
+  const onBarClickRef = useRef(onBarClick);
+  const onBarMenuOpenRef = useRef(onBarMenuOpen);
+  const [hitLayerVersion, setHitLayerVersion] = useState(0);
+  onBarClickRef.current = onBarClick;
+  onBarMenuOpenRef.current = onBarMenuOpen;
   const isLightTheme = theme === "light";
   const notationColor = isLightTheme ? "#111111" : "#ffffff";
   const secondaryTextColor = isLightTheme ? "#171717" : "#d4d4d4";
@@ -29456,7 +30115,6 @@ function Notation({
 ;
 
     if (!ref.current) return;
-    ref.current.innerHTML = "";
 
     const quarterCount = Math.max(1, Number(timeSig?.n) || 1);
     const baseSubdivPerQuarter = Math.max(1, Math.round(resolution / Math.max(1, Number(timeSig?.d) || 4)));
@@ -29670,6 +30328,7 @@ function Notation({
       }
       const width = 20 + (rowWidths.length ? Math.max(...rowWidths) : 0);
 
+      ref.current.innerHTML = "";
       const renderer = new Renderer(ref.current, Renderer.Backends.SVG);
       renderer.resize(width, height);
       ctx = renderer.getContext();
@@ -30037,7 +30696,7 @@ function Notation({
           el.setAttribute("fill", notationColor);
         });
         highlightSvgRef.current = svg;
-        highlightRectsRef.current = staves.map((stave) => {
+        const highlightRects = staves.map((stave) => {
           const x = Number(stave?.getX?.()) || 0;
           const width = Number(stave?.getWidth?.()) || 0;
           const yTop = Number(stave?.getYForLine?.(0)) || 0;
@@ -30049,6 +30708,27 @@ function Notation({
             height: Math.max(40, (yBottom - yTop) + 44),
           };
         });
+        highlightRectsRef.current = highlightRects;
+        drawNotationBarOverlay(svg, highlightRects, selectedBarIndices, {
+          className: "dg-selected-bar",
+          fill: "rgba(14,165,233,0.04)",
+          stroke: "rgba(14,165,233,0.45)",
+          strokeWidth: 1.5,
+          pointerEvents: "none",
+        });
+        drawNotationBarOverlay(svg, highlightRects, editorBarIndices, {
+          className: "dg-editor-bar",
+          fill: "rgba(14,165,233,0.08)",
+          stroke: "rgba(14,165,233,0.9)",
+          strokeWidth: 2,
+        });
+        drawNotationBarOverlay(svg, highlightRects, activeBarIndices, {
+          className: "dg-active-bar",
+          fill: "rgba(34,211,238,0.08)",
+          stroke: "rgba(34,211,238,0.7)",
+          strokeWidth: 1.5,
+        });
+        setHitLayerVersion((v) => v + 1);
       }
       return;
     }
@@ -30136,6 +30816,7 @@ function Notation({
     }
     const width = 20 + (rowWidths.length ? Math.max(...rowWidths) : 0);
 
+    ref.current.innerHTML = "";
     const renderer = new Renderer(ref.current, Renderer.Backends.SVG);
     renderer.resize(width, height);
     ctx = renderer.getContext();
@@ -30761,7 +31442,7 @@ for (let i = 0; i < notes.length; i++) {
           el.setAttribute("fill", notationColor);
       });
       highlightSvgRef.current = svg;
-      highlightRectsRef.current = staves.map((stave) => {
+      const highlightRects = staves.map((stave) => {
         const x = Number(stave?.getX?.()) || 0;
         const width = Number(stave?.getWidth?.()) || 0;
         const yTop = Number(stave?.getYForLine?.(0)) || 0;
@@ -30773,6 +31454,27 @@ for (let i = 0; i < notes.length; i++) {
           height: Math.max(40, (yBottom - yTop) + 44),
         };
       });
+      highlightRectsRef.current = highlightRects;
+      drawNotationBarOverlay(svg, highlightRects, selectedBarIndices, {
+        className: "dg-selected-bar",
+        fill: "rgba(14,165,233,0.04)",
+        stroke: "rgba(14,165,233,0.45)",
+        strokeWidth: 1.5,
+        pointerEvents: "none",
+      });
+      drawNotationBarOverlay(svg, highlightRects, editorBarIndices, {
+        className: "dg-editor-bar",
+        fill: "rgba(14,165,233,0.08)",
+        stroke: "rgba(14,165,233,0.9)",
+        strokeWidth: 2,
+      });
+      drawNotationBarOverlay(svg, highlightRects, activeBarIndices, {
+        className: "dg-active-bar",
+        fill: "rgba(34,211,238,0.08)",
+        stroke: "rgba(34,211,238,0.7)",
+        strokeWidth: 1.5,
+      });
+      setHitLayerVersion((v) => v + 1);
     }
     });
     return () => {
@@ -30782,128 +31484,98 @@ for (let i = 0; i < notes.length; i++) {
 
   useEffect(() => {
     const svg = highlightSvgRef.current;
-    if (!(svg instanceof SVGElement)) return;
-    svg.querySelectorAll(".dg-active-bar").forEach((el) => el.remove());
-    const activeBarSet = new Set(
-      (Array.isArray(activeBarIndices) ? activeBarIndices : [])
-        .map((v) => Number(v))
-        .filter((v) => Number.isFinite(v) && v >= 0)
-    );
-    if (!activeBarSet.size) return;
     const rects = Array.isArray(highlightRectsRef.current) ? highlightRectsRef.current : [];
-    rects.forEach((rectSpec, barIndex) => {
-      if (!activeBarSet.has(barIndex) || !rectSpec) return;
-      const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-      rect.setAttribute("x", String(rectSpec.x));
-      rect.setAttribute("y", String(rectSpec.y));
-      rect.setAttribute("width", String(rectSpec.width));
-      rect.setAttribute("height", String(rectSpec.height));
-      rect.setAttribute("rx", "6");
-      rect.setAttribute("ry", "6");
-      rect.setAttribute("fill", "rgba(34,211,238,0.08)");
-      rect.setAttribute("stroke", "rgba(34,211,238,0.7)");
-      rect.setAttribute("stroke-width", "1.5");
-      rect.setAttribute("class", "dg-active-bar");
-      svg.insertBefore(rect, svg.firstChild);
+    drawNotationBarOverlay(svg, rects, activeBarIndices, {
+      className: "dg-active-bar",
+      fill: "rgba(34,211,238,0.08)",
+      stroke: "rgba(34,211,238,0.7)",
+      strokeWidth: 1.5,
     });
-  }, [activeBarIndices]);
+  }, [activeBarIndices, hitLayerVersion]);
+  useEffect(() => {
+    const svg = highlightSvgRef.current;
+    const rects = Array.isArray(highlightRectsRef.current) ? highlightRectsRef.current : [];
+    drawNotationBarOverlay(svg, rects, editorBarIndices, {
+      className: "dg-editor-bar",
+      fill: "rgba(14,165,233,0.08)",
+      stroke: "rgba(14,165,233,0.9)",
+      strokeWidth: 2,
+    });
+  }, [editorBarIndices, hitLayerVersion]);
+  useEffect(() => {
+    const svg = highlightSvgRef.current;
+    const rects = Array.isArray(highlightRectsRef.current) ? highlightRectsRef.current : [];
+    drawNotationBarOverlay(svg, rects, selectedBarIndices, {
+      className: "dg-selected-bar",
+      fill: "rgba(14,165,233,0.04)",
+      stroke: "rgba(14,165,233,0.45)",
+      strokeWidth: 1.5,
+      pointerEvents: "none",
+    });
+  }, [selectedBarIndices, hitLayerVersion]);
+
   useEffect(() => {
     const svg = highlightSvgRef.current;
     if (!(svg instanceof SVGElement)) return;
-    svg.querySelectorAll(".dg-editor-bar").forEach((el) => el.remove());
-    const editorBarSet = new Set(
-      (Array.isArray(editorBarIndices) ? editorBarIndices : [])
-        .map((v) => Number(v))
-        .filter((v) => Number.isFinite(v) && v >= 0)
-    );
-    if (!editorBarSet.size) return;
+    svg.querySelectorAll(".dg-click-bar").forEach((el) => el.remove());
+    if (typeof onBarClickRef.current !== "function") return;
     const rects = Array.isArray(highlightRectsRef.current) ? highlightRectsRef.current : [];
-    rects.forEach((rectSpec, barIndex) => {
-      if (!editorBarSet.has(barIndex) || !rectSpec) return;
-      const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-      rect.setAttribute("x", String(rectSpec.x));
-      rect.setAttribute("y", String(rectSpec.y));
-      rect.setAttribute("width", String(rectSpec.width));
-      rect.setAttribute("height", String(rectSpec.height));
-      rect.setAttribute("rx", "6");
-      rect.setAttribute("ry", "6");
-      rect.setAttribute("fill", "rgba(14,165,233,0.08)");
-      rect.setAttribute("stroke", "rgba(14,165,233,0.9)");
-      rect.setAttribute("stroke-width", "2");
-      rect.setAttribute("class", "dg-editor-bar");
-      svg.insertBefore(rect, svg.firstChild);
-    });
-  }, [editorBarIndices]);
-  useEffect(() => {
-    const svg = highlightSvgRef.current;
-    if (!(svg instanceof SVGElement)) return;
-    svg.querySelectorAll(".dg-selected-bar, .dg-click-bar").forEach((el) => el.remove());
-    const rects = Array.isArray(highlightRectsRef.current) ? highlightRectsRef.current : [];
-    const selectedBarSet = new Set(
-      (Array.isArray(selectedBarIndices) ? selectedBarIndices : [])
-        .map((v) => Number(v))
-        .filter((v) => Number.isFinite(v) && v >= 0)
-    );
     rects.forEach((rectSpec, barIndex) => {
       if (!rectSpec) return;
-      if (selectedBarSet.has(barIndex)) {
-        const selected = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-        selected.setAttribute("x", String(rectSpec.x));
-        selected.setAttribute("y", String(rectSpec.y));
-        selected.setAttribute("width", String(rectSpec.width));
-        selected.setAttribute("height", String(rectSpec.height));
-        selected.setAttribute("rx", "6");
-        selected.setAttribute("ry", "6");
-        selected.setAttribute("fill", "rgba(14,165,233,0.04)");
-        selected.setAttribute("stroke", "rgba(14,165,233,0.45)");
-        selected.setAttribute("stroke-width", "1.5");
-        selected.setAttribute("class", "dg-selected-bar");
-        selected.style.pointerEvents = "none";
-        svg.insertBefore(selected, svg.firstChild);
-      }
-      if (typeof onBarClick === "function") {
-        const hit = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-        let pointerDownHandledClick = false;
-        hit.setAttribute("x", String(rectSpec.x));
-        hit.setAttribute("y", String(rectSpec.y));
-        hit.setAttribute("width", String(rectSpec.width));
-        hit.setAttribute("height", String(rectSpec.height));
-        hit.setAttribute("fill", "rgba(0,0,0,0)");
-        hit.setAttribute("stroke", "none");
-        hit.setAttribute("class", "dg-click-bar");
-        hit.style.cursor = "pointer";
-        hit.style.pointerEvents = "all";
-        hit.style.touchAction = "pan-y";
-        hit.addEventListener("pointerdown", (event) => {
-          pointerDownHandledClick = false;
-          if (event.pointerType === "mouse" && event.button !== 0) return;
-          if (event.pointerType !== "mouse") {
-            pointerDownHandledClick = true;
-            onBarClick(barIndex, event);
-            return;
-          }
+      const hit = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+      let pointerDownHandledClick = false;
+      hit.setAttribute("x", String(rectSpec.x));
+      hit.setAttribute("y", String(rectSpec.y));
+      hit.setAttribute("width", String(rectSpec.width));
+      hit.setAttribute("height", String(rectSpec.height));
+      hit.setAttribute("fill", "rgba(0,0,0,0)");
+      hit.setAttribute("stroke", "none");
+      hit.setAttribute("class", "dg-click-bar");
+      hit.setAttribute("data-no-window-drag", "1");
+      hit.style.cursor = "pointer";
+      hit.style.pointerEvents = "all";
+      hit.style.touchAction = "pan-y";
+      hit.addEventListener("mousedown", (event) => {
+        event.stopPropagation();
+      });
+      hit.addEventListener("touchstart", (event) => {
+        event.stopPropagation();
+      });
+      hit.addEventListener("pointerdown", (event) => {
+        pointerDownHandledClick = false;
+        event.stopPropagation();
+        if (event.pointerType === "mouse" && event.button !== 0) return;
+        const clickHandler = onBarClickRef.current;
+        if (typeof clickHandler !== "function") return;
+        if (event.pointerType !== "mouse") {
           pointerDownHandledClick = true;
+          clickHandler(barIndex, event);
+          return;
+        }
+        pointerDownHandledClick = true;
+        event.preventDefault();
+        clickHandler(barIndex, event);
+      });
+      hit.addEventListener("contextmenu", (event) => {
+        const menuHandler = onBarMenuOpenRef.current;
+        if (typeof menuHandler !== "function") return;
+        event.preventDefault();
+        event.stopPropagation();
+        menuHandler(barIndex, event);
+      });
+      hit.addEventListener("click", (event) => {
+        event.stopPropagation();
+        if (pointerDownHandledClick) {
+          pointerDownHandledClick = false;
           event.preventDefault();
-          onBarClick(barIndex, event);
-        });
-        hit.addEventListener("contextmenu", (event) => {
-          if (typeof onBarMenuOpen !== "function") return;
-          event.preventDefault();
-          event.stopPropagation();
-          onBarMenuOpen(barIndex, event);
-        });
-        hit.addEventListener("click", (event) => {
-          if (pointerDownHandledClick) {
-            pointerDownHandledClick = false;
-            event.preventDefault();
-            return;
-          }
-          onBarClick(barIndex, event);
-        });
-        svg.appendChild(hit);
-      }
+          return;
+        }
+        const clickHandler = onBarClickRef.current;
+        if (typeof clickHandler === "function") clickHandler(barIndex, event);
+      });
+      svg.appendChild(hit);
     });
-  }, [onBarClick, onBarMenuOpen, selectedBarIndices]);
+  }, [hitLayerVersion]);
 
   return (
     <div
