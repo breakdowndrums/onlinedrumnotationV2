@@ -410,14 +410,16 @@ function SheetIcon() {
   );
 }
 
-function AddToSheetIcon() {
+function AddToSheetIcon({ showPlus = true }) {
   return (
     <span className="relative inline-flex h-4 w-4 items-center justify-center overflow-visible" aria-hidden="true">
       <SheetIcon />
-      <span className="pointer-events-none absolute -right-[6px] top-0 h-[6px] w-[6px]">
-        <span className="absolute left-0 top-1/2 h-[1.25px] w-full -translate-y-1/2 rounded-full bg-current" />
-        <span className="absolute left-1/2 top-0 h-full w-[1.25px] -translate-x-1/2 rounded-full bg-current" />
-      </span>
+      {showPlus ? (
+        <span className="pointer-events-none absolute -right-[6px] top-0 h-[6px] w-[6px]">
+          <span className="absolute left-0 top-1/2 h-[1.25px] w-full -translate-y-1/2 rounded-full bg-current" />
+          <span className="absolute left-1/2 top-0 h-full w-[1.25px] -translate-x-1/2 rounded-full bg-current" />
+        </span>
+      ) : null}
     </span>
   );
 }
@@ -1859,7 +1861,7 @@ function getComparableBeatPayloadForLibraryBeat(beat) {
     ...payload,
     name: String(beat?.name || payload?.name || "").trim(),
     category: String(beat?.category || payload?.category || "Groove"),
-    style: String(beat?.style || payload?.style || "all"),
+    style: String(beat?.style || payload?.style || ""),
     bpm: Number.isFinite(Number(beat?.bpm)) ? Number(beat.bpm) : payload?.bpm,
     ...(beat?.notationStickingSelection &&
     typeof beat.notationStickingSelection === "object" &&
@@ -4287,6 +4289,21 @@ export default function App() {
     if (scale === 1) return -1;
     return 0;
   }, [arrangementNotationPreviewScale, arrangementNotationManualPreviewScale, arrangementNotationEffectivePreviewScale]);
+  const positionArrangementNotationUnderHeaderButton = React.useCallback((buttonEl) => {
+    if (isMobileFloatingPanels) return;
+    if (!(buttonEl instanceof HTMLElement) || typeof window === "undefined") return;
+    const rect = buttonEl.getBoundingClientRect();
+    const margin = 8;
+    const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+    const panelWidth = arrangementNotationShellWidth;
+    const panelHeight = arrangementNotationPanelRef.current?.offsetHeight || 760;
+    const maxX = Math.max(margin, viewportWidth - panelWidth - margin);
+    const maxY = Math.max(margin, viewportHeight - panelHeight - margin);
+    const nextX = Math.max(margin, Math.min(Math.round(rect.right - panelWidth), maxX));
+    const nextY = Math.max(margin, Math.min(Math.round(rect.bottom + 18), maxY));
+    setArrangementNotationPos({ x: nextX, y: nextY });
+  }, [arrangementNotationShellWidth, isMobileFloatingPanels]);
   const [arrangementPdfQrEnabled, setArrangementPdfQrEnabled] = useState(false);
   const [arrangementPdfWatermarkEnabled, setArrangementPdfWatermarkEnabled] = useState(true);
   useEffect(() => {
@@ -4328,6 +4345,7 @@ export default function App() {
     setArrangementBarSelectionAnchor(null);
   }, []);
   const arrangementPlayButtonRef = React.useRef(null);
+  const headerSheetButtonRef = React.useRef(null);
   const blurActiveTextInput = React.useCallback(() => {
     const activeEl = document.activeElement;
     if (
@@ -4410,6 +4428,11 @@ export default function App() {
     arrangementPickerIdRef.current = nextId;
     setArrangementPickerId(nextId);
   }, []);
+  const [arrangementPickerMenuOpen, setArrangementPickerMenuOpen] = useState(false);
+  const [arrangementPickerMenuPosition, setArrangementPickerMenuPosition] = useState({ top: 0, left: 0, width: 224 });
+  const [isArrangementPickerRenaming, setIsArrangementPickerRenaming] = useState(false);
+  const [arrangementPickerRenameWidth, setArrangementPickerRenameWidth] = useState(null);
+  const [arrangementPickerRenameHoverAction, setArrangementPickerRenameHoverAction] = useState(null);
   const [arrangementLibraryTab, setArrangementLibraryTab] = useState("local");
   const [arrangementTitleMenuOpen, setArrangementTitleMenuOpen] = useState(false);
   const [arrangementTitleMenuPosition, setArrangementTitleMenuPosition] = useState({ top: 0, left: 0 });
@@ -4428,6 +4451,7 @@ export default function App() {
   const [beatNameDraft, setBeatNameDraft] = useState("");
   const [isCurrentBeatStripRenaming, setIsCurrentBeatStripRenaming] = useState(false);
   const [currentBeatStripRenameWidth, setCurrentBeatStripRenameWidth] = useState(null);
+  const [currentBeatStripRenameHoverAction, setCurrentBeatStripRenameHoverAction] = useState(null);
   const [pendingCurrentBeatStripAutoRename, setPendingCurrentBeatStripAutoRename] = useState(false);
   const [unsavedBeatStripSnapshot, setUnsavedBeatStripSnapshot] = useState(null);
   const [publicSubmitTitle, setPublicSubmitTitle] = useState("");
@@ -4500,6 +4524,7 @@ export default function App() {
   const gridSettingsPresetPendingRenameExitRef = React.useRef("");
   const beatLibraryJustDraggedContainerRef = React.useRef({ id: "", at: 0 });
   const beatLibraryExpandAllSnapshotRef = React.useRef(null);
+  const pendingBeatLibraryScrollTargetIdRef = React.useRef("");
   const [localBeatPast, setLocalBeatPast] = useState([]);
   const [localBeatFuture, setLocalBeatFuture] = useState([]);
   const [publicBeats, setPublicBeats] = useState([]);
@@ -4958,7 +4983,10 @@ export default function App() {
   const arrangementNotationScrollBucketRef = React.useRef(-1);
   const arrangementTitleMenuRef = React.useRef(null);
   const arrangementTitleMenuButtonRef = React.useRef(null);
-  const arrangementPickerSelectRef = React.useRef(null);
+  const arrangementPickerButtonRef = React.useRef(null);
+  const arrangementPickerMenuRef = React.useRef(null);
+  const arrangementPickerNameButtonRef = React.useRef(null);
+  const arrangementPickerNameInputRef = React.useRef(null);
   const arrangementTrashTargetRef = React.useRef(null);
   const arrangementSortLastOverIdRef = React.useRef("");
   const arrangementSortDragOverTrashRef = React.useRef(false);
@@ -7102,6 +7130,49 @@ export default function App() {
       window.removeEventListener("scroll", updateMenuPosition, true);
     };
   }, [arrangementTitleMenuOpen]);
+  React.useEffect(() => {
+    if (!arrangementPickerMenuOpen) return undefined;
+    const updateMenuPosition = () => {
+      const button = arrangementPickerButtonRef.current;
+      if (!(button instanceof HTMLElement)) return;
+      const rect = button.getBoundingClientRect();
+      const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+      const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+      const menuWidth = Math.max(224, Math.min(320, viewportWidth - 16));
+      const maxMenuHeight = Math.max(160, viewportHeight - rect.bottom - 16);
+      const left = Math.max(8, Math.min(rect.right - menuWidth, viewportWidth - menuWidth - 8));
+      const top = Math.max(8, rect.bottom + 8);
+      setArrangementPickerMenuPosition({
+        top,
+        left,
+        width: menuWidth,
+        maxHeight: Math.max(160, maxMenuHeight),
+      });
+    };
+    const handlePointerDown = (event) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      const menu = arrangementPickerMenuRef.current;
+      const button = arrangementPickerButtonRef.current;
+      if (menu instanceof HTMLElement && menu.contains(target)) return;
+      if (button instanceof HTMLElement && button.contains(target)) return;
+      setArrangementPickerMenuOpen(false);
+    };
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") setArrangementPickerMenuOpen(false);
+    };
+    updateMenuPosition();
+    document.addEventListener("pointerdown", handlePointerDown, true);
+    document.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("resize", updateMenuPosition);
+    window.addEventListener("scroll", updateMenuPosition, true);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown, true);
+      document.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("resize", updateMenuPosition);
+      window.removeEventListener("scroll", updateMenuPosition, true);
+    };
+  }, [arrangementPickerMenuOpen]);
   React.useEffect(() => {
     if (!arrangementNotationMoreMenuOpen) return undefined;
     const updateMenuPosition = () => {
@@ -11716,6 +11787,18 @@ useEffect(() => {
       setArrangementBarSelectionAnchor,
     ]
   );
+  const handlePublicBeatSelect = React.useCallback(
+    async (beat) => {
+      if (!beat?.id) return;
+      setArrangementSelection(null);
+      setArrangementSelectionAnchor(null);
+      setArrangementBarSelection(null);
+      setArrangementBarSelectionAnchor(null);
+      setCurrentArrangementEditorBeatKey("");
+      await loadBeatIntoEditorRef.current?.("public", beat);
+    },
+    []
+  );
   const currentBeatLibraryBeats = React.useMemo(
     () =>
       filteredLocalBeats
@@ -12566,12 +12649,25 @@ useEffect(() => {
   ]);
   const saveArrangementSnapshot = React.useCallback(async (options = {}) => {
     const normalizedItems = normalizeArrangementItems(arrangementItems);
-    const { mode = "auto", nameOverride = "" } = options;
+    const {
+      mode = "auto",
+      nameOverride = "",
+      titleLine1Override = null,
+      titleLine2Override = null,
+      composerOverride = null,
+      excludeId = null,
+    } = options;
     const now = new Date().toISOString();
     const fallbackName = getNextNumberedArrangementName("Arrangement", savedArrangements);
+    const effectiveTitleLine1 =
+      titleLine1Override == null ? String(arrangementTitleLine1Draft || "") : String(titleLine1Override || "");
+    const effectiveTitleLine2 =
+      titleLine2Override == null ? String(arrangementTitleLine2Draft || "") : String(titleLine2Override || "");
+    const effectiveComposer =
+      composerOverride == null ? String(arrangementComposerDraft || "") : String(composerOverride || "");
     const derivedName = getArrangementNameFromTitles(
-      arrangementTitleLine1Draft,
-      arrangementTitleLine2Draft,
+      effectiveTitleLine1,
+      effectiveTitleLine2,
       fallbackName
     );
     const loadedEntry = loadedArrangementId
@@ -12590,24 +12686,25 @@ useEffect(() => {
       mode === "saveAs"
         ? getUniqueArrangementName(
             String(nameOverride || "").trim() || derivedName,
-            savedArrangements
+            savedArrangements,
+            excludeId || null
           )
         : getUniqueArrangementName(derivedName, savedArrangements, target?.id || null);
     const nextTitleLine1 =
       name !== derivedName
         ? name
-        : String(arrangementTitleLine1Draft || "");
+        : effectiveTitleLine1;
     const nextTitleLine2 =
       name !== derivedName
         ? ""
-        : String(arrangementTitleLine2Draft || "");
+        : effectiveTitleLine2;
     const nextId = target?.id || `arrlib-${Math.random().toString(36).slice(2, 10)}`;
     const nextEntry = {
       id: nextId,
       name,
       titleLine1: nextTitleLine1,
       titleLine2: nextTitleLine2,
-      composer: String(arrangementComposerDraft || ""),
+      composer: effectiveComposer,
       createdAt: target?.createdAt || now,
       updatedAt: now,
       items: normalizedItems,
@@ -14015,7 +14112,7 @@ useEffect(() => {
     const menuWidth = 224;
     const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
     const left = Math.max(8, Math.min(Number(clientX) - menuWidth / 2, viewportWidth - menuWidth - 8));
-    const top = Math.max(8, Number(clientY) + 140);
+    const top = Math.max(8, Number(clientY) + 8);
     setArrangementNotationRowMenuState({
       rowIndex,
       position: { top, left },
@@ -14157,6 +14254,75 @@ useEffect(() => {
       null
     );
   }, [arrangementPickerId, loadedArrangementId, sortedSavedArrangements]);
+  const canRenameCurrentArrangement = Boolean(loadedArrangementId);
+  const finalizeArrangementPickerRename = React.useCallback(() => {
+    setArrangementPickerRenameHoverAction(null);
+    setArrangementPickerRenameWidth(null);
+    setIsArrangementPickerRenaming(false);
+  }, []);
+  const beginArrangementPickerRename = React.useCallback(() => {
+    if (!canRenameCurrentArrangement) return;
+    const width =
+      arrangementPickerNameButtonRef.current instanceof HTMLElement
+        ? Math.ceil(arrangementPickerNameButtonRef.current.getBoundingClientRect().width)
+        : null;
+    setArrangementNameDraft(arrangementDisplayName || "Arrangement");
+    setArrangementPickerMenuOpen(false);
+    setArrangementPickerRenameHoverAction("rename");
+    setArrangementPickerRenameWidth(width && width > 0 ? width : null);
+    setIsArrangementPickerRenaming(true);
+  }, [arrangementDisplayName, canRenameCurrentArrangement]);
+  const cancelArrangementPickerRename = React.useCallback(() => {
+    setArrangementNameDraft(arrangementDisplayName || "Arrangement");
+    finalizeArrangementPickerRename();
+  }, [arrangementDisplayName, finalizeArrangementPickerRename]);
+  const commitArrangementPickerRename = React.useCallback(async () => {
+    if (!loadedArrangementId) {
+      finalizeArrangementPickerRename();
+      return;
+    }
+    const nextName = String(arrangementNameDraft || "").trim() || "Arrangement";
+    setArrangementNameDraft(nextName);
+    setArrangementTitleLine1Draft(nextName);
+    setArrangementTitleLine2Draft("");
+    arrangementNameDraftRef.current = nextName;
+    arrangementTitleLine1DraftRef.current = nextName;
+    arrangementTitleLine2DraftRef.current = "";
+    await saveArrangementSnapshot({
+      mode: "update",
+      nameOverride: nextName,
+      titleLine1Override: nextName,
+      titleLine2Override: "",
+    });
+    finalizeArrangementPickerRename();
+  }, [
+    arrangementNameDraft,
+    finalizeArrangementPickerRename,
+    loadedArrangementId,
+    saveArrangementSnapshot,
+  ]);
+  const saveArrangementPickerAsNew = React.useCallback(async () => {
+    const nextName = String(arrangementNameDraft || "").trim() || "Arrangement";
+    setArrangementNameDraft(nextName);
+    setArrangementTitleLine1Draft(nextName);
+    setArrangementTitleLine2Draft("");
+    arrangementNameDraftRef.current = nextName;
+    arrangementTitleLine1DraftRef.current = nextName;
+    arrangementTitleLine2DraftRef.current = "";
+    await saveArrangementSnapshot({
+      mode: "saveAs",
+      nameOverride: nextName,
+      titleLine1Override: nextName,
+      titleLine2Override: "",
+      excludeId: loadedArrangementId || null,
+    });
+    finalizeArrangementPickerRename();
+  }, [
+    arrangementNameDraft,
+    finalizeArrangementPickerRename,
+    loadedArrangementId,
+    saveArrangementSnapshot,
+  ]);
   useEffect(() => {
     const seen = new Map();
     const duplicates = [];
@@ -15650,28 +15816,39 @@ useEffect(() => {
     if (!isArrangementOpen || arrangementSourcesCollapsed) return;
     if (arrangementSourceTab !== "local") return;
     const wantedId = `local:${String(loadedLocalBeatId)}`;
-    const target = Array.from(
-      arrangementPanelRef.current?.querySelectorAll?.("[data-beat-row-id]") || []
-    ).find((node) => node instanceof HTMLElement && node.getAttribute("data-beat-row-id") === wantedId);
-    if (!(target instanceof HTMLElement)) return;
     window.requestAnimationFrame(() => {
-      const listEl =
-        target.closest(".dg-scroll-follow-list") ||
-        target.parentElement;
-      if (!(listEl instanceof HTMLElement)) {
-        target.scrollIntoView({ block: "nearest", behavior: "smooth" });
-        return;
+      const shouldAlignToFolderBottom =
+        pendingBeatLibraryScrollTargetIdRef.current === wantedId;
+      const candidateLists = [
+        arrangementSourceListRef.current,
+        dockedBeatLibrarySidebarRef.current?.querySelector?.(".dg-scroll-follow-list"),
+        arrangementPanelRef.current?.querySelector?.(".dg-scroll-follow-list"),
+      ].filter((node, index, arr) => node instanceof HTMLElement && arr.indexOf(node) === index);
+      let scrolledAny = false;
+      candidateLists.forEach((listNode) => {
+        if (!(listNode instanceof HTMLElement)) return;
+        const target = listNode.querySelector(
+          `[data-beat-row-id="${wantedId}"]`
+        );
+        if (!(target instanceof HTMLElement)) return;
+        scrolledAny = true;
+        const rowTop = target.offsetTop;
+        const rowHeight = target.offsetHeight;
+        const targetTop = shouldAlignToFolderBottom
+          ? Math.max(0, rowTop - (listNode.clientHeight - rowHeight))
+          : Math.max(
+              0,
+              rowTop - (listNode.clientHeight - rowHeight) * (2 / 3)
+            );
+        listNode.scrollTo({ top: targetTop, behavior: "smooth" });
+      });
+      if (scrolledAny && shouldAlignToFolderBottom) {
+        pendingBeatLibraryScrollTargetIdRef.current = "";
       }
-      const rowTop = target.offsetTop;
-      const rowHeight = target.offsetHeight;
-      const targetTop = Math.max(
-        0,
-        rowTop - (listEl.clientHeight - rowHeight) * (2 / 3)
-      );
-      listEl.scrollTo({ top: targetTop, behavior: "smooth" });
     });
   }, [
     loadedLocalBeatId,
+    localBeats,
     isArrangementOpen,
     arrangementSourcesCollapsed,
     arrangementSourceTab,
@@ -15709,29 +15886,26 @@ useEffect(() => {
   }, [dropDraggedBeatIntoArrangement]);
   useEffect(() => {
     if (!isArrangementOpen || arrangementSourcesCollapsed || !selectedArrangementSourceBeatKey) return;
-    const target = Array.from(
-      arrangementPanelRef.current?.querySelectorAll?.("[data-beat-row-id]") || []
-    ).find(
-      (node) =>
-        node instanceof HTMLElement &&
-        node.getAttribute("data-beat-row-id") === selectedArrangementSourceBeatKey
-    );
-    if (!(target instanceof HTMLElement)) return;
     window.requestAnimationFrame(() => {
-      const listEl =
-        target.closest(".dg-scroll-follow-list") ||
-        target.parentElement;
-      if (!(listEl instanceof HTMLElement)) {
-        target.scrollIntoView({ block: "nearest", behavior: "smooth" });
-        return;
-      }
-      const rowTop = target.offsetTop;
-      const rowHeight = target.offsetHeight;
-      const targetTop = Math.max(
-        0,
-        rowTop - (listEl.clientHeight - rowHeight) * (2 / 3)
-      );
-      listEl.scrollTo({ top: targetTop, behavior: "smooth" });
+      const candidateLists = [
+        arrangementSourceListRef.current,
+        dockedBeatLibrarySidebarRef.current?.querySelector?.(".dg-scroll-follow-list"),
+        arrangementPanelRef.current?.querySelector?.(".dg-scroll-follow-list"),
+      ].filter((node, index, arr) => node instanceof HTMLElement && arr.indexOf(node) === index);
+      candidateLists.forEach((listNode) => {
+        if (!(listNode instanceof HTMLElement)) return;
+        const target = listNode.querySelector(
+          `[data-beat-row-id="${selectedArrangementSourceBeatKey}"]`
+        );
+        if (!(target instanceof HTMLElement)) return;
+        const rowTop = target.offsetTop;
+        const rowHeight = target.offsetHeight;
+        const targetTop = Math.max(
+          0,
+          rowTop - (listNode.clientHeight - rowHeight) * (2 / 3)
+        );
+        listNode.scrollTo({ top: targetTop, behavior: "smooth" });
+      });
     });
   }, [
     selectedArrangementSourceBeatKey,
@@ -16369,8 +16543,8 @@ useEffect(() => {
       v: 1,
       name: String(beatNameDraft || "").trim(),
       composer: String(printComposer || "").trim(),
-      category: String(beatCategoryDraft || "").trim(),
-      style: String(beatStyleDraft || "").trim(),
+      category: beatCategoryDraft === "all" ? "Groove" : String(beatCategoryDraft || "").trim(),
+      style: beatStyleDraft === "all" ? "" : String(beatStyleDraft || "").trim(),
       kitInstrumentIds,
       bars,
       resolution,
@@ -17000,7 +17174,8 @@ useEffect(() => {
   }, [requestedSharedState, resolvedSharedState, routeOptions.shared, routeOptions.shareId, trackStatsEvent]);
   const saveCurrentBeatLocal = React.useCallback(async (options = {}) => {
     const shouldAutoRename = !(options && options.autoRename === false);
-    const name = getUniqueBeatName(beatNameDraft);
+    const excludeId = String(options?.excludeId || "").trim();
+    const name = getUniqueBeatName(beatNameDraft, excludeId ? { excludeId } : undefined);
     const now = new Date().toISOString();
     const selectedParentId = selectedBeatLibraryContainerId !== "all" ? selectedBeatLibraryContainerId : null;
     const nextManualOrder =
@@ -17059,6 +17234,7 @@ useEffect(() => {
       const nextItem = normalizeCloudBeatRow(data);
       if (!nextItem) return null;
       setLocalBeatsWithUndo((prev) => [nextItem, ...prev].slice(0, 500));
+      pendingBeatLibraryScrollTargetIdRef.current = `local:${String(nextItem.id)}`;
       setLoadedLocalBeatId(nextItem.id);
       setUnsavedBeatStripSnapshot(null);
       setBeatNameDraft(String(nextItem.name || ""));
@@ -17069,6 +17245,7 @@ useEffect(() => {
       return nextItem;
     }
     setLocalBeatsWithUndo((prev) => [item, ...prev].slice(0, 500));
+    pendingBeatLibraryScrollTargetIdRef.current = `local:${String(item.id)}`;
     setLoadedLocalBeatId(item.id);
     setUnsavedBeatStripSnapshot(null);
     setBeatNameDraft(String(item.name || ""));
@@ -17098,8 +17275,41 @@ useEffect(() => {
     setIsArrangementNotationOpen(true);
     setArrangementNotationRowMenuState(null);
   }, [arrangementAddBeat, saveCurrentBeatLocal]);
-  const updateCurrentLoadedBeatLocal = React.useCallback(async () => {
+  const canAddCurrentBeatToSheetDirectly = React.useMemo(
+    () =>
+      Boolean(loadedLocalBeatId) &&
+      !isLoadedLocalBeatNameChanged &&
+      !isLoadedLocalBeatCoreDirty &&
+      !isLoadedLocalBeatNotationSelectionDirty,
+    [
+      loadedLocalBeatId,
+      isLoadedLocalBeatNameChanged,
+      isLoadedLocalBeatCoreDirty,
+      isLoadedLocalBeatNotationSelectionDirty,
+    ]
+  );
+  const currentBeatAddToSheetUsesExistingBeat = React.useMemo(
+    () => Boolean(loadedLocalBeatId) && (canAddCurrentBeatToSheetDirectly || isCurrentBeatStripRenaming),
+    [loadedLocalBeatId, canAddCurrentBeatToSheetDirectly, isCurrentBeatStripRenaming]
+  );
+  const addCurrentBeatToSheet = React.useCallback(() => {
     if (!loadedLocalBeatId) return;
+    const currentBeat =
+      localBeatsRef.current.find((beat) => String(beat?.id || "") === String(loadedLocalBeatId)) ||
+      loadedLocalBeat ||
+      null;
+    arrangementAddBeat("local", loadedLocalBeatId, currentBeat);
+    setIsArrangementNotationOpen(true);
+    setArrangementNotationRowMenuState(null);
+  }, [arrangementAddBeat, loadedLocalBeatId, loadedLocalBeat]);
+  const finalizeCurrentBeatStripRename = React.useCallback(() => {
+    setCurrentBeatStripRenameHoverAction(null);
+    setPendingCurrentBeatStripAutoRename(false);
+    setCurrentBeatStripRenameWidth(null);
+    setIsCurrentBeatStripRenaming(false);
+  }, []);
+  const updateCurrentLoadedBeatLocal = React.useCallback(async () => {
+    if (!loadedLocalBeatId) return null;
     const name = beatNameDraft.trim() || String(loadedLocalBeat?.name || "Untitled Beat");
     const existingLibraryMeta = getBeatLibraryMeta(loadedLocalBeat);
     const payload = {
@@ -17130,32 +17340,36 @@ useEffect(() => {
         .single();
       if (error) {
         alert(error.message || "Failed to update beat");
-        return;
+        return null;
       }
       const nextItem = normalizeCloudBeatRow(data);
-      if (!nextItem) return;
+      if (!nextItem) return null;
       setLocalBeatsWithUndo((prev) =>
         prev.map((beat) => (String(beat?.id || "") === String(loadedLocalBeatId) ? nextItem : beat))
       );
-      return;
+      return nextItem;
     }
+    const nextBeat = {
+      ...(loadedLocalBeat || {}),
+      id: String(loadedLocalBeatId),
+      name,
+      category,
+      style,
+      timeSigCategory: `${timeSig.n}/${timeSig.d}`,
+      bpm,
+      payload,
+      notationStickingSelection: compactNotationStickingSelection,
+      libraryMeta: payload.libraryMeta,
+      source: loadedLocalBeat?.source || "local",
+    };
     setLocalBeatsWithUndo((prev) =>
       prev.map((beat) =>
         String(beat?.id || "") === String(loadedLocalBeatId)
-          ? {
-              ...beat,
-              name,
-              category,
-              style,
-              timeSigCategory: `${timeSig.n}/${timeSig.d}`,
-              bpm,
-              payload,
-              notationStickingSelection: compactNotationStickingSelection,
-              libraryMeta: payload.libraryMeta,
-            }
+          ? nextBeat
           : beat
       )
     );
+    return nextBeat;
   }, [
     authUser?.id,
     loadedLocalBeatId,
@@ -17168,6 +17382,31 @@ useEffect(() => {
     timeSig.n,
     timeSig.d,
     bpm,
+  ]);
+  const handleCurrentBeatAddToSheet = React.useCallback(async () => {
+    if (loadedLocalBeatId && isCurrentBeatStripRenaming) {
+      const updatedBeat = await updateCurrentLoadedBeatLocal();
+      finalizeCurrentBeatStripRename();
+      arrangementAddBeat("local", loadedLocalBeatId, updatedBeat || loadedLocalBeat || null);
+      setIsArrangementNotationOpen(true);
+      setArrangementNotationRowMenuState(null);
+      return;
+    }
+    if (canAddCurrentBeatToSheetDirectly) {
+      addCurrentBeatToSheet();
+      return;
+    }
+    await saveCurrentBeatAsNewAndAddToSheet();
+  }, [
+    loadedLocalBeatId,
+    isCurrentBeatStripRenaming,
+    updateCurrentLoadedBeatLocal,
+    finalizeCurrentBeatStripRename,
+    arrangementAddBeat,
+    loadedLocalBeat,
+    canAddCurrentBeatToSheetDirectly,
+    addCurrentBeatToSheet,
+    saveCurrentBeatAsNewAndAddToSheet,
   ]);
   const currentBeatStripName = React.useMemo(() => {
     const draft = String(beatNameDraft || "").trim();
@@ -17359,6 +17598,7 @@ useEffect(() => {
       currentBeatStripNameButtonRef.current instanceof HTMLElement
         ? Math.ceil(currentBeatStripNameButtonRef.current.getBoundingClientRect().width)
         : null;
+    setCurrentBeatStripRenameHoverAction(null);
     setCurrentBeatStripRenameWidth(width && width > 0 ? width : null);
     setIsCurrentBeatStripRenaming(true);
   }, [canRenameCurrentBeat]);
@@ -17414,22 +17654,19 @@ useEffect(() => {
     if (loadedLocalBeat) {
       setBeatNameDraft(String(loadedLocalBeat.name || ""));
     }
+    setCurrentBeatStripRenameHoverAction(null);
     setPendingCurrentBeatStripAutoRename(false);
     setCurrentBeatStripRenameWidth(null);
     setIsCurrentBeatStripRenaming(false);
   }, [loadedLocalBeat]);
   const commitCurrentBeatStripRename = React.useCallback(async () => {
     if (!loadedLocalBeatId) {
-      setPendingCurrentBeatStripAutoRename(false);
-      setCurrentBeatStripRenameWidth(null);
-      setIsCurrentBeatStripRenaming(false);
+      finalizeCurrentBeatStripRename();
       return;
     }
     await updateCurrentLoadedBeatLocal();
-    setPendingCurrentBeatStripAutoRename(false);
-    setCurrentBeatStripRenameWidth(null);
-    setIsCurrentBeatStripRenaming(false);
-  }, [loadedLocalBeatId, updateCurrentLoadedBeatLocal]);
+    finalizeCurrentBeatStripRename();
+  }, [loadedLocalBeatId, updateCurrentLoadedBeatLocal, finalizeCurrentBeatStripRename]);
   const toggleBeatLibraryPanel = React.useCallback(() => {
     setActiveTab("none");
     if (showDesktopSettingsSidebar) {
@@ -17480,6 +17717,77 @@ useEffect(() => {
     }
     setIsArrangementOpen(false);
   }, [beatLibraryDockedInSidebar]);
+  const handleHeaderLibraryButtonClick = React.useCallback((shiftKey = false) => {
+    setActiveTab("none");
+    if (beatLibraryDockedInSidebar) {
+      if (!hideFloatingArrangementWindow) {
+        closeFloatingArrangementWindow();
+        return;
+      }
+      setKeepBeatLibrarySidebarOpen(true);
+      setArrangementSourcesCollapsed(true);
+      setArrangementDetailsCollapsed(false);
+      setArrangementSourceTab("local");
+      setIsArrangementOpen(true);
+      return;
+    }
+    if (isMobileFloatingPanels) {
+      if (!isArrangementOpen) {
+        setArrangementSourcesCollapsed(false);
+        setArrangementDetailsCollapsed(true);
+        setArrangementSourceTab("local");
+        setIsArrangementOpen(true);
+        return;
+      }
+      if (!arrangementSourcesCollapsed && arrangementDetailsCollapsed) {
+        setIsArrangementOpen(false);
+        return;
+      }
+      setArrangementSourcesCollapsed(false);
+      setArrangementDetailsCollapsed(true);
+      setArrangementSourceTab("local");
+      return;
+    }
+    if (shiftKey) {
+      if (!isArrangementOpen) {
+        setArrangementSourcesCollapsed(false);
+        setArrangementDetailsCollapsed(true);
+        setArrangementSourceTab("local");
+        setIsArrangementOpen(true);
+        return;
+      }
+      if (!arrangementSourcesCollapsed && arrangementDetailsCollapsed) {
+        setIsArrangementOpen(false);
+        return;
+      }
+      setArrangementSourcesCollapsed(false);
+      setArrangementDetailsCollapsed(true);
+      setArrangementSourceTab("local");
+      return;
+    }
+    if (!isArrangementOpen) {
+      setArrangementSourcesCollapsed(false);
+      setArrangementDetailsCollapsed(false);
+      setArrangementSourceTab("local");
+      setIsArrangementOpen(true);
+      return;
+    }
+    if (!arrangementSourcesCollapsed && !arrangementDetailsCollapsed) {
+      setIsArrangementOpen(false);
+      return;
+    }
+    setArrangementSourcesCollapsed(false);
+    setArrangementDetailsCollapsed(false);
+    setArrangementSourceTab("local");
+  }, [
+    beatLibraryDockedInSidebar,
+    closeFloatingArrangementWindow,
+    arrangementDetailsCollapsed,
+    arrangementSourcesCollapsed,
+    hideFloatingArrangementWindow,
+    isMobileFloatingPanels,
+    isArrangementOpen,
+  ]);
   const settingsToolbarButton = (
           <div className="relative flex items-center gap-2">
             <button
@@ -18195,7 +18503,7 @@ useEffect(() => {
         {isCurrentBeatStripRenaming ? (
           <div className="flex min-w-0 items-center gap-2">
             <div
-              className="min-w-0 max-w-[16rem]"
+              className="relative min-w-0 max-w-[16rem]"
               style={currentBeatStripRenameWidth ? { width: `${currentBeatStripRenameWidth}px` } : undefined}
             >
               <input
@@ -18213,9 +18521,49 @@ useEffect(() => {
                     cancelCurrentBeatStripRename();
                   }
                 }}
-                className="block w-full min-w-0 border-0 bg-transparent p-0 text-base font-medium text-white outline-none ring-0 focus:outline-none focus:ring-0"
+                className="block w-full min-w-0 border-0 bg-transparent p-0 text-base font-medium leading-[1.2] text-white outline-none ring-0 focus:outline-none focus:ring-0"
                 aria-label="Current beat name"
               />
+              {loadedLocalBeatId ? (
+                <div className="absolute left-1/2 top-full z-20 mt-2 inline-flex -translate-x-1/2 items-center overflow-hidden whitespace-nowrap rounded border border-neutral-700 bg-neutral-900 shadow-[0_12px_28px_rgba(0,0,0,0.38)]">
+                  <button
+                    type="button"
+                    onMouseEnter={() => setCurrentBeatStripRenameHoverAction("rename")}
+                    onMouseLeave={() => setCurrentBeatStripRenameHoverAction(null)}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => commitCurrentBeatStripRename()}
+                    className={`px-3 py-1.5 text-xs transition-colors ${
+                      currentBeatStripRenameHoverAction === "save-as-new"
+                        ? "text-neutral-300 hover:text-white"
+                        : "bg-neutral-800 text-white hover:bg-neutral-700"
+                    } active:bg-neutral-700`}
+                    title="Rename current beat"
+                  >
+                    Rename
+                  </button>
+                  <button
+                    type="button"
+                    onMouseEnter={() => setCurrentBeatStripRenameHoverAction("save-as-new")}
+                    onMouseLeave={() => setCurrentBeatStripRenameHoverAction(null)}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      finalizeCurrentBeatStripRename();
+                      saveCurrentBeatLocal({
+                        autoRename: false,
+                        excludeId: loadedLocalBeatId,
+                      });
+                    }}
+                    className={`border-l border-neutral-700 px-3 py-1.5 text-xs transition-colors ${
+                      currentBeatStripRenameHoverAction === "save-as-new"
+                        ? "bg-neutral-800 text-white hover:bg-neutral-700"
+                        : "text-neutral-300 hover:bg-neutral-800 hover:text-white"
+                    } active:bg-neutral-700`}
+                    title="Save as new beat"
+                  >
+                    Save as new
+                  </button>
+                </div>
+              ) : null}
             </div>
             <button
               type="button"
@@ -18242,29 +18590,26 @@ useEffect(() => {
             <button
               type="button"
               onMouseDown={(e) => e.preventDefault()}
-              onClick={saveCurrentBeatAsNewAndAddToSheet}
+              onClick={handleCurrentBeatAddToSheet}
               className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-neutral-500 transition-colors hover:bg-neutral-900/70 hover:text-neutral-200"
-              title="Save as new beat and add to sheet"
-              aria-label="Save as new beat and add to sheet"
+              title={
+                currentBeatAddToSheetUsesExistingBeat
+                  ? "Add current beat to sheet"
+                  : "Save as new beat and add to sheet"
+              }
+              aria-label={
+                currentBeatAddToSheetUsesExistingBeat
+                  ? "Add current beat to sheet"
+                  : "Save as new beat and add to sheet"
+              }
             >
-              <AddToSheetIcon />
+              <AddToSheetIcon showPlus={!currentBeatAddToSheetUsesExistingBeat} />
             </button>
             {playabilityWarningsEnabled && playabilityWarningSteps.length > 0 ? (
               <span className="shrink-0 text-[11px] text-red-400/80">
                 {`${playabilityWarningSteps.length} playability warning${playabilityWarningSteps.length === 1 ? "" : "s"}`}
               </span>
             ) : null}
-            <button
-              type="button"
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => {
-                saveCurrentBeatLocal();
-              }}
-              className="shrink-0 rounded bg-neutral-900/60 px-2 py-1 text-xs text-neutral-300 hover:bg-neutral-800/60"
-              title="Save as new beat"
-            >
-              Save as
-            </button>
           </div>
         ) : (
           <div className="flex min-w-0 items-center gap-2">
@@ -18285,7 +18630,7 @@ useEffect(() => {
                   }
                 }}
                 disabled={!canRenameCurrentBeat && !canSaveCurrentBeatFromStrip}
-                className={`block w-full min-w-0 truncate bg-transparent p-0 text-left text-base font-medium transition-colors ${
+                className={`block w-full min-w-0 truncate bg-transparent p-0 text-left text-base font-medium leading-[1.2] transition-colors ${
                   canRenameCurrentBeat
                     ? "text-neutral-100 hover:text-white"
                     : canSaveCurrentBeatFromStrip
@@ -18326,12 +18671,20 @@ useEffect(() => {
             </button>
             <button
               type="button"
-              onClick={saveCurrentBeatAsNewAndAddToSheet}
+              onClick={handleCurrentBeatAddToSheet}
               className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-neutral-500 transition-colors hover:bg-neutral-900/70 hover:text-neutral-200"
-              title="Save as new beat and add to sheet"
-              aria-label="Save as new beat and add to sheet"
+              title={
+                currentBeatAddToSheetUsesExistingBeat
+                  ? "Add current beat to sheet"
+                  : "Save as new beat and add to sheet"
+              }
+              aria-label={
+                currentBeatAddToSheetUsesExistingBeat
+                  ? "Add current beat to sheet"
+                  : "Save as new beat and add to sheet"
+              }
             >
-              <AddToSheetIcon />
+              <AddToSheetIcon showPlus={!currentBeatAddToSheetUsesExistingBeat} />
             </button>
             {playabilityWarningsEnabled && playabilityWarningSteps.length > 0 ? (
               <span className="shrink-0 text-[11px] text-red-400/80">
@@ -18838,11 +19191,12 @@ useEffect(() => {
       if (!selectedPublicArrangementEntry) return;
       loadPublishedArrangement(selectedPublicArrangementEntry);
     }
+    positionArrangementNotationUnderHeaderButton(headerSheetButtonRef.current);
     setArrangementSourcesCollapsed(true);
     setArrangementDetailsCollapsed(false);
     setIsArrangementOpen(false);
     setIsArrangementNotationOpen(true);
-  }, [arrangementLibraryTab, loadPublishedArrangement, selectedPublicArrangementEntry]);
+  }, [arrangementLibraryTab, loadPublishedArrangement, positionArrangementNotationUnderHeaderButton, selectedPublicArrangementEntry]);
   useEffect(() => {
     if (!isArrangementOpen || arrangementDetailsCollapsed) return;
     refreshPublicArrangementLibrary();
@@ -20405,7 +20759,7 @@ useEffect(() => {
         )}
         {arrangementSourceTab === "local" ? (
           <div className="mt-3 flex min-h-0 flex-1 flex-col">
-            <div ref={arrangementSourceListRef} className="dg-slim-scrollbar max-h-[52vh] flex-1 overflow-auto pr-1">
+            <div ref={arrangementSourceListRef} className="dg-slim-scrollbar dg-scroll-follow-list max-h-[52vh] flex-1 overflow-auto pr-1">
               <DndContext
                 sensors={beatLibraryOrderSensors}
                 collisionDetection={detectBeatLibraryDropCollision}
@@ -20684,11 +21038,11 @@ useEffect(() => {
                     } catch (_) {}
                   }}
                   onDragEnd={clearArrangementBeatDrag}
-                  onClick={() => loadBeatIntoEditor("public", beat)}
+                  onClick={() => handlePublicBeatSelect(beat)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" || e.key === " ") {
                       e.preventDefault();
-                      loadBeatIntoEditor("public", beat);
+                      handlePublicBeatSelect(beat);
                     }
                   }}
                   className={`rounded border px-2 py-2 cursor-pointer outline-none focus:outline-none focus-visible:outline-none ${
@@ -21517,10 +21871,10 @@ useEffect(() => {
       )}
       <header className={`${isEmbedMode ? "hidden" : "flex flex-col gap-3"}`} data-loopui='1'>
         {showBraveAudioNotice && isBraveBrowser && playback.slowStartDetected && (
-          <div className="rounded-lg border border-amber-700/70 bg-amber-900/20 px-3 py-2 text-xs text-amber-100 flex items-start justify-between gap-3">
-            <div>
+          <div className="mb-2 flex flex-col gap-3 rounded-lg border border-amber-700/70 bg-black px-4 py-3 text-xs text-amber-100 md:flex-row md:items-start md:justify-between">
+            <div className="min-w-0">
               <div className="font-medium">Low Volume?</div>
-              <div className="mt-0.5 text-amber-100/90">
+              <div className="mt-1 leading-relaxed text-amber-100/90 break-words">
                 {`Detected delayed playback start (~${(Math.max(0, playback.startupLagMs || 0) / 1000).toFixed(1)}s). `}
                 Click the Brave lion icon in the address bar, then set
                 <span className="mx-1 font-medium">Fingerprinting</span>
@@ -21534,7 +21888,7 @@ useEffect(() => {
               onKeyDown={(e) => {
                 if (e.key === " " || e.key === "Spacebar") e.preventDefault();
               }}
-              className="px-2 py-0.5 rounded border border-amber-700/70 text-amber-100 hover:bg-amber-800/40"
+              className="self-start rounded border border-amber-700/70 px-2 py-0.5 text-amber-100 hover:bg-amber-950/60"
             >
               Close tip
             </button>
@@ -21618,10 +21972,16 @@ useEffect(() => {
             </button>
           </div>
           <button
+            ref={headerSheetButtonRef}
             type="button"
             onClick={() => {
               setArrangementNotationRowMenuState(null);
-              setIsArrangementNotationOpen((v) => !v);
+              setIsArrangementNotationOpen((prev) => {
+                if (!prev) {
+                  positionArrangementNotationUnderHeaderButton(headerSheetButtonRef.current);
+                }
+                return !prev;
+              });
             }}
             className={`touch-none select-none inline-flex h-[2.125rem] w-[2.125rem] items-center justify-center rounded border text-sm ${
               isArrangementNotationOpen
@@ -21633,83 +21993,6 @@ useEffect(() => {
           >
             <SheetIcon />
           </button>
-          {showDesktopSettingsSidebar ? (
-            <button
-              type="button"
-              onClick={(e) => {
-                setActiveTab("none");
-                if (beatLibraryDockedInSidebar) {
-                  if (!hideFloatingArrangementWindow) {
-                    closeFloatingArrangementWindow();
-                    return;
-                  }
-                  setKeepBeatLibrarySidebarOpen(true);
-                  setArrangementSourcesCollapsed(true);
-                  setArrangementDetailsCollapsed(false);
-                  setArrangementSourceTab("local");
-                  setIsArrangementOpen(true);
-                  return;
-                }
-                if (isMobileFloatingPanels) {
-                  if (!isArrangementOpen) {
-                    setArrangementSourcesCollapsed(false);
-                    setArrangementDetailsCollapsed(true);
-                    setArrangementSourceTab("local");
-                    setIsArrangementOpen(true);
-                    return;
-                  }
-                  if (!arrangementSourcesCollapsed && arrangementDetailsCollapsed) {
-                    setIsArrangementOpen(false);
-                    return;
-                  }
-                  setArrangementSourcesCollapsed(false);
-                  setArrangementDetailsCollapsed(true);
-                  setArrangementSourceTab("local");
-                  return;
-                }
-                if (e.shiftKey) {
-                  if (!isArrangementOpen) {
-                    setArrangementSourcesCollapsed(false);
-                    setArrangementDetailsCollapsed(true);
-                    setArrangementSourceTab("local");
-                    setIsArrangementOpen(true);
-                    return;
-                  }
-                  if (!arrangementSourcesCollapsed && arrangementDetailsCollapsed) {
-                    setIsArrangementOpen(false);
-                    return;
-                  }
-                  setArrangementSourcesCollapsed(false);
-                  setArrangementDetailsCollapsed(true);
-                  setArrangementSourceTab("local");
-                  return;
-                }
-                if (!isArrangementOpen) {
-                  setArrangementSourcesCollapsed(false);
-                  setArrangementDetailsCollapsed(false);
-                  setArrangementSourceTab("local");
-                  setIsArrangementOpen(true);
-                  return;
-                }
-                if (!arrangementSourcesCollapsed && !arrangementDetailsCollapsed) {
-                  setIsArrangementOpen(false);
-                  return;
-                }
-                setArrangementSourcesCollapsed(false);
-                setArrangementDetailsCollapsed(false);
-                setArrangementSourceTab("local");
-              }}
-              className={`touch-none select-none inline-flex h-[2.125rem] w-[2.125rem] items-center justify-center rounded border text-sm ${
-                !arrangementSourcesCollapsed && !arrangementDetailsCollapsed && isArrangementOpen
-                  ? "bg-neutral-800 border-neutral-600 text-white"
-                : "bg-black border-neutral-900 text-neutral-400 hover:bg-neutral-950/80 hover:text-neutral-300"
-              }`}
-              title="Open library"
-              aria-label="Open library"
-            >
-              <LibraryIcon />
-            </button>
-          ) : null}
 	          <div className="inline-flex shrink-0 items-center gap-2 whitespace-nowrap">
 	            <button
 	              ref={fileMenuButtonRef}
@@ -23120,7 +23403,7 @@ useEffect(() => {
                 {!arrangementSourcesCollapsed ? (
                   arrangementSourceTab === "local" ? (
                     <div className="mt-3 flex min-h-0 flex-1 flex-col">
-                        <div ref={arrangementSourceListRef} className="dg-slim-scrollbar max-h-[52vh] flex-1 overflow-auto pr-1">
+                        <div ref={arrangementSourceListRef} className="dg-slim-scrollbar dg-scroll-follow-list max-h-[52vh] flex-1 overflow-auto pr-1">
                           <DndContext
                             sensors={beatLibraryOrderSensors}
                             collisionDetection={detectBeatLibraryDropCollision}
@@ -23403,11 +23686,11 @@ useEffect(() => {
                               } catch (_) {}
                             }}
                             onDragEnd={clearArrangementBeatDrag}
-                            onClick={() => loadBeatIntoEditor("public", beat)}
+                            onClick={() => handlePublicBeatSelect(beat)}
                             onKeyDown={(e) => {
                               if (e.key === "Enter" || e.key === " ") {
                                 e.preventDefault();
-                                loadBeatIntoEditor("public", beat);
+                                handlePublicBeatSelect(beat);
                               }
                             }}
                             className={`rounded border px-2 py-2 cursor-pointer outline-none focus:outline-none focus-visible:outline-none ${
@@ -23737,8 +24020,8 @@ useEffect(() => {
                               idx <= normalizedArrangementSelection.end
                           )}
                           isPlaying={arrangementPlaybackEnabled && idx === activeArrangementPlayingRowIndex}
-                          onSelectRow={(rowIndex, e) => {
-                            handleArrangementRowSelect(rowIndex, !!e?.shiftKey);
+                          onSelectRow={(rowIndex, extend) => {
+                            handleArrangementRowSelect(rowIndex, extend);
                             if (row?.beat) {
                               loadBeatIntoEditorRef.current?.("shared", row.beat);
                             }
@@ -23966,40 +24249,154 @@ useEffect(() => {
                 <div className="mt-auto pt-3">
                   <div className="border-t border-neutral-800 pt-3">
                   <div className="flex items-center gap-2">
-                    <select
-                      ref={arrangementPickerSelectRef}
-                      value={arrangementPickerId || arrangementPickerEntry?.id || "__default__"}
-                      onPointerDown={() => {
+                    <div className="relative min-w-0 flex-1">
+                      {isArrangementPickerRenaming ? (
+                        <div className="relative min-w-0">
+                          <input
+                            ref={arrangementPickerNameInputRef}
+                            type="text"
+                            value={arrangementNameDraft}
+                            onChange={(e) => setArrangementNameDraft(e.target.value)}
+                            onBlur={() => commitArrangementPickerRename()}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                e.preventDefault();
+                                commitArrangementPickerRename();
+                              } else if (e.key === "Escape") {
+                                e.preventDefault();
+                                cancelArrangementPickerRename();
+                              }
+                            }}
+                            autoFocus
+                            className="block h-7 w-full min-w-0 border-0 bg-transparent px-0 text-sm text-neutral-300 outline-none ring-0 focus:outline-none focus:ring-0"
+                            style={arrangementPickerRenameWidth ? { width: `${arrangementPickerRenameWidth}px` } : undefined}
+                            aria-label="Current arrangement name"
+                          />
+                          <div className="absolute left-1/2 top-full z-20 mt-2 inline-flex -translate-x-1/2 items-center overflow-hidden whitespace-nowrap rounded border border-neutral-700 bg-neutral-900 shadow-[0_12px_28px_rgba(0,0,0,0.38)]">
+                            <button
+                              type="button"
+                              onMouseEnter={() => setArrangementPickerRenameHoverAction("rename")}
+                              onMouseLeave={() => setArrangementPickerRenameHoverAction(null)}
+                              onMouseDown={(e) => e.preventDefault()}
+                              onClick={() => commitArrangementPickerRename()}
+                              className={`px-3 py-1.5 text-xs transition-colors ${
+                                arrangementPickerRenameHoverAction === "save-as-new"
+                                  ? "text-neutral-300 hover:text-white"
+                                  : "bg-neutral-800 text-white hover:bg-neutral-700"
+                              } active:bg-neutral-700`}
+                              title="Rename current arrangement"
+                            >
+                              Rename
+                            </button>
+                            <button
+                              type="button"
+                              onMouseEnter={() => setArrangementPickerRenameHoverAction("save-as-new")}
+                              onMouseLeave={() => setArrangementPickerRenameHoverAction(null)}
+                              onMouseDown={(e) => e.preventDefault()}
+                              onClick={() => saveArrangementPickerAsNew()}
+                              className={`border-l border-neutral-700 px-3 py-1.5 text-xs transition-colors ${
+                                arrangementPickerRenameHoverAction === "save-as-new"
+                                  ? "bg-neutral-800 text-white hover:bg-neutral-700"
+                                  : "text-neutral-300 hover:bg-neutral-800 hover:text-white"
+                              } active:bg-neutral-700`}
+                              title="Save as new arrangement"
+                            >
+                              Save as new
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <button
+                          ref={arrangementPickerNameButtonRef}
+                          type="button"
+                          onClick={() => {
+                            if (!canRenameCurrentArrangement) return;
+                            beginArrangementPickerRename();
+                          }}
+                          disabled={!canRenameCurrentArrangement}
+                          className={`block h-7 w-full min-w-0 truncate bg-transparent p-0 text-left text-sm transition-colors ${
+                            canRenameCurrentArrangement
+                              ? "text-neutral-300 hover:text-white"
+                              : "text-neutral-500 cursor-default"
+                          }`}
+                          title={canRenameCurrentArrangement ? "Rename current arrangement" : arrangementDisplayName || "Arrangement"}
+                        >
+                          {arrangementDisplayName || "Arrangement"}
+                        </button>
+                      )}
+                      {arrangementPickerMenuOpen
+                        ? createPortal(
+                            <div
+                              ref={arrangementPickerMenuRef}
+                              className="fixed z-[140] overflow-auto rounded-lg border border-neutral-700 bg-neutral-900 p-2 shadow-xl"
+                              style={{
+                                top: `${arrangementPickerMenuPosition.top}px`,
+                                left: `${arrangementPickerMenuPosition.left}px`,
+                                width: `${arrangementPickerMenuPosition.width}px`,
+                                maxHeight: `${arrangementPickerMenuPosition.maxHeight || 320}px`,
+                              }}
+                              onClick={(e) => e.stopPropagation()}
+                              onMouseDown={(e) => e.stopPropagation()}
+                            >
+                              <div className="flex flex-col gap-1">
+                                {sortedSavedArrangements.length > 0 ? (
+                                  sortedSavedArrangements.map((entry) => {
+                                    const isActive = String(arrangementPickerEntry?.id || "") === String(entry.id || "");
+                                    return (
+                                      <button
+                                        key={`arr-save-opt-${entry.id}`}
+                                        type="button"
+                                        onClick={() => {
+                                          setArrangementPickerMenuOpen(false);
+                                          selectArrangementPickerId(entry.id || null);
+                                          loadSavedArrangement(entry);
+                                        }}
+                                        className={`w-full rounded px-3 py-2 text-left text-sm transition-colors ${
+                                          isActive
+                                            ? "bg-neutral-800 text-white"
+                                            : "text-neutral-300 hover:bg-neutral-800/60"
+                                        }`}
+                                        title={entry.name}
+                                      >
+                                        <span className="block truncate">{entry.name || "Untitled Arrangement"}</span>
+                                      </button>
+                                    );
+                                  })
+                                ) : (
+                                  <div className="px-3 py-2 text-sm text-neutral-500">No saved arrangements yet.</div>
+                                )}
+                              </div>
+                            </div>,
+                            document.body
+                          )
+                        : null}
+                    </div>
+                    <button
+                      ref={arrangementPickerButtonRef}
+                      type="button"
+                      onMouseDown={(e) => {
+                        if (isArrangementPickerRenaming) e.preventDefault();
+                      }}
+                      onClick={() => {
                         setArrangementSelection(null);
                         setArrangementSelectionAnchor(null);
                         setArrangementBarSelection(null);
                         setArrangementBarSelectionAnchor(null);
-                      }}
-                      onChange={(e) => {
-                        const nextId = e.target.value || "";
-                        if (nextId === "__default__") {
-                          selectArrangementPickerId(null);
-                          return;
+                        if (isArrangementPickerRenaming) {
+                          finalizeArrangementPickerRename();
                         }
-                        selectArrangementPickerId(nextId || null);
-                        const nextEntry = savedArrangements.find((entry) => entry.id === nextId) || null;
-                        if (!nextEntry) {
-                          return;
-                        }
-                        loadSavedArrangement(nextEntry);
+                        setArrangementPickerMenuOpen((v) => !v);
                       }}
-                      className="min-w-0 flex-1 h-7 bg-neutral-900/40 border border-neutral-800 rounded px-2 text-sm text-neutral-400"
+                      className={`inline-flex h-7 min-w-7 items-center justify-center rounded border px-2 text-sm leading-none ${
+                        arrangementPickerMenuOpen
+                          ? "border-neutral-600 text-white bg-neutral-800"
+                          : "border-neutral-800 text-neutral-400 bg-neutral-900/60 hover:bg-neutral-800/60"
+                      }`}
+                      title="Show saved arrangements"
+                      aria-label="Show saved arrangements"
                     >
-                      {sortedSavedArrangements.length === 0 ? (
-                        <option value="__default__">{arrangementDisplayName || "Arrangement"}</option>
-                      ) : (
-                        sortedSavedArrangements.map((entry) => (
-                          <option key={`arr-save-opt-${entry.id}`} value={entry.id}>
-                            {entry.name}
-                          </option>
-                        ))
-                      )}
-                    </select>
+                      ▾
+                    </button>
                     <button
                       ref={arrangementTitleMenuButtonRef}
                       type="button"
@@ -24021,14 +24418,6 @@ useEffect(() => {
                       title="Create a new empty arrangement"
                     >
                       New
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => saveArrangementSnapshot({ mode: "saveAs" })}
-                      className="h-7 rounded border border-neutral-800 bg-neutral-900/60 px-2.5 text-sm text-neutral-400 hover:bg-neutral-800/60"
-                      title="Save as new arrangement"
-                    >
-                      Save as new
                     </button>
                     {isAdminUser && (
                       <div className="relative">
@@ -24080,9 +24469,7 @@ useEffect(() => {
                           }
                           const selectedId =
                             arrangementPickerIdRef.current ||
-                            (arrangementPickerSelectRef.current instanceof HTMLSelectElement
-                              ? arrangementPickerSelectRef.current.value || ""
-                              : "") ||
+                            loadedArrangementIdRef.current ||
                             arrangementPickerEntry?.id ||
                             "";
                           const targetEntry =
@@ -24216,21 +24603,6 @@ useEffect(() => {
                   >
 	                    <h3 className="text-sm text-neutral-200">Sheet</h3>
 	                  </div>
-	                  {isMobileFloatingPanels && (
-	                    <button
-	                      type="button"
-	                      onClick={() => {
-	                        setIsArrangementNotationOpen(false);
-	                        setIsArrangementOpen(true);
-	                        setArrangementSourcesCollapsed(true);
-	                        setArrangementDetailsCollapsed(false);
-	                      }}
-	                      className="inline-flex h-[1.625rem] items-center justify-center rounded border border-neutral-800 bg-neutral-900/60 px-2 text-xs leading-none text-neutral-400 hover:bg-neutral-800/60"
-	                      title="Open arrangement"
-	                    >
-	                      Arrangement
-	                    </button>
-	                  )}
 	                  <button
 	                    type="button"
 	                    onPointerDown={(e) => {
@@ -24277,6 +24649,19 @@ useEffect(() => {
                   </button>
                 </div>
                 <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={(e) => handleHeaderLibraryButtonClick(!!e.shiftKey)}
+                    className={`inline-flex h-[1.625rem] w-[1.625rem] items-center justify-center rounded border text-xs leading-none ${
+                      !arrangementSourcesCollapsed && !arrangementDetailsCollapsed && isArrangementOpen
+                        ? "border-neutral-700 text-white bg-neutral-800"
+                        : "border-neutral-800 text-neutral-400 bg-neutral-900/60 hover:bg-neutral-800/60"
+                    }`}
+                    title="Open library"
+                    aria-label="Open library"
+                  >
+                    <LibraryIcon />
+                  </button>
                   <button
                     ref={arrangementNotationMoreMenuButtonRef}
                     type="button"
@@ -27722,7 +28107,7 @@ const SortableArrangementRow = React.memo(function SortableArrangementRow({
       data-arrangement-row-index={index}
       style={style}
       {...attributes}
-      onClick={(e) => onSelectRow?.(index, e)}
+      onClick={(e) => onSelectRow?.(index, !!e?.shiftKey, e)}
       onPointerDown={(e) => {
         if (e.pointerType === "mouse") {
           sortablePointerDown?.(e);
@@ -27814,11 +28199,11 @@ const ReadonlyArrangementRow = React.memo(function ReadonlyArrangementRow({
     <div
       role="button"
       tabIndex={0}
-      onClick={(e) => onSelectRow?.(index, e)}
+      onClick={(e) => onSelectRow?.(index, !!e?.shiftKey, e)}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
-          onSelectRow?.(index, e);
+          onSelectRow?.(index, !!e?.shiftKey, e);
         }
       }}
       className={`select-none rounded border px-2.5 py-2 outline-none focus:outline-none focus-visible:outline-none ${
@@ -27898,10 +28283,38 @@ function ArrangementRowNotationMenu({
   onSetNotationPrintSticking,
 }) {
   const menuRef = React.useRef(null);
+  const [menuStyle, setMenuStyle] = React.useState(() => ({
+    top: `${position.top}px`,
+    left: `${position.left}px`,
+  }));
   const [customTextDraft, setCustomTextDraft] = React.useState(String(row?.notationCustomText || ""));
   React.useEffect(() => {
     setCustomTextDraft(String(row?.notationCustomText || ""));
   }, [row?.notationCustomText]);
+  React.useLayoutEffect(() => {
+    const menu = menuRef.current;
+    if (!(menu instanceof HTMLElement) || typeof window === "undefined") {
+      setMenuStyle({
+        top: `${position.top}px`,
+        left: `${position.left}px`,
+      });
+      return;
+    }
+    const margin = 8;
+    const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+    const rect = menu.getBoundingClientRect();
+    const nextLeft = Math.max(margin, Math.min(position.left, viewportWidth - rect.width - margin));
+    const preferredBelowTop = position.top;
+    const fitsBelow = preferredBelowTop + rect.height <= viewportHeight - margin;
+    const nextTop = fitsBelow
+      ? Math.max(margin, preferredBelowTop)
+      : Math.max(margin, Math.min(position.top - rect.height - 16, viewportHeight - rect.height - margin));
+    setMenuStyle({
+      top: `${Math.round(nextTop)}px`,
+      left: `${Math.round(nextLeft)}px`,
+    });
+  }, [position.left, position.top, row?.id]);
   React.useEffect(() => {
     const handlePointerDown = (event) => {
       const target = event.target;
@@ -28007,8 +28420,8 @@ function ArrangementRowNotationMenu({
   return (
     <div
       ref={menuRef}
-      className="fixed z-[140] w-56 -translate-y-full rounded border border-neutral-700 bg-neutral-900 p-2 shadow-2xl"
-      style={{ top: `${position.top}px`, left: `${position.left}px` }}
+      className="fixed z-[140] w-56 rounded border border-neutral-700 bg-neutral-900 p-2 shadow-2xl"
+      style={menuStyle}
       onClick={(e) => e.stopPropagation()}
       onMouseDown={(e) => e.stopPropagation()}
     >
@@ -28915,12 +29328,16 @@ function Grid({
                   style={gridContentOffsetStyle}
                   onPointerDown={(e) => {
                     e.stopPropagation();
-                    if (e.button != null && e.button !== 0) return;
+                    if (e.button != null && e.button !== 0 && e.button !== 1) return;
+                    if (e.button === 1) {
+                      e.preventDefault();
+                    }
                     setCountRowPopupState(null);
                     const targetEl = e.currentTarget;
                     countRowPressRef.current.longPressed = false;
                     countRowPressRef.current.pointerId = e.pointerId;
                     clearCountRowLongPress();
+                    if (e.button === 1) return;
                     countRowPressRef.current.timer = window.setTimeout(() => {
                       countRowPressRef.current.longPressed = true;
                       openCountRowSubdivisionPopup(targetEl);
@@ -28933,7 +29350,7 @@ function Grid({
                     clearCountRowLongPress();
                     if (wasLongPressed) return;
                     const quarterIdx = t.stepMeta?.quarterIndex ?? 0;
-                    if (e.metaKey) {
+                    if (e.button === 1 || e.metaKey) {
                       resetTupletAt?.(t.bar, quarterIdx);
                       return;
                     }
@@ -28948,7 +29365,7 @@ function Grid({
                       clearCountRowLongPress();
                     }
                   }}
-                  title={`Click to cycle subdivision for bar ${t.bar + 1}, beat ${(t.stepMeta?.quarterIndex ?? 0) + 1}. Cmd-click resets to the global subdivision. Long press for subdivision options.`}
+                  title={`Click to cycle subdivision for bar ${t.bar + 1}, beat ${(t.stepMeta?.quarterIndex ?? 0) + 1}. Cmd-click or middle-click resets to the global subdivision. Long press for subdivision options.`}
                 >
                   {/* Playhead indicator: kept within header row to avoid clipping/overlap. */}
                   {playhead === t.stepIndex && (
